@@ -7,16 +7,8 @@ import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { centroid } from './placement.js';
 import { wallSegments } from './layout.js';
+import { levelVisible } from './bindings.js';
 import { buildManifest, threeAdapter } from './manifest.js';
-
-// Visibility of a model level for the selected floor ('all' or a floor id).
-export function levelVisible(assign, visibleFloor) {
-  if (!assign) return true;
-  if (assign.show === 'hidden') return false;
-  if (assign.show === 'always') return true;
-  if (assign.show === 'all-only') return visibleFloor === 'all';
-  return visibleFloor === 'all' || visibleFloor === assign.floor;
-}
 
 // Plan rectangle of a world-space box (used for rooms tagged without an outline).
 export function fallbackOutline(box) {
@@ -551,7 +543,7 @@ export class FloorplanView {
     if (this.trail) this.trail.visible = this._shows(this.trail.userData.floorId);
     if (this.model) {
       const assign = this.modelLevels || {};
-      for (const l of this.model.manifest.levels) l.node.visible = levelVisible(assign[l.id], this.visibleFloor);
+      for (const l of this.model.manifest.levels) l.node.visible = levelVisible(assign[l.id], this.visibleFloor, (id) => this.floors.find((f) => f.id === id)?.elevation);
       // everything above the cut-away height of the selected floor is clipped (roof, upper floors)
       const cut = this.visibleFloor === 'all' ? 1e6 : this.floorElevation(this.visibleFloor) + Math.max(this.wallHeight, 0.3);
       this.modelClip.constant = cut;

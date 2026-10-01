@@ -850,12 +850,12 @@ export class EditMode {
     if (manifest.levels.length) {
       const opts = (v) => [
         ['auto', 'auto'],
-        ...this.floors.map((f) => [`floor:${f.id}`, 'with ' + f.name]),
+        ...this.floors.flatMap((f) => [[`floor:${f.id}`, `with ${f.name} and floors above`], [`only:${f.id}`, `only on ${f.name}`]]),
         ['always', 'always shown'], ['all-only', 'only in "All"'], ['hidden', 'hidden'],
       ].map(([val, label]) => `<option value="${esc(val)}" ${val === v ? 'selected' : ''}>${esc(label)}</option>`).join('');
       out += '<div class="sub">Levels</div><table class="floors">' + manifest.levels.map((l) => {
         const a = levels[l.id];
-        const v = a.auto ? 'auto' : a.show === 'with' ? `floor:${a.floor}` : a.show;
+        const v = a.auto ? 'auto' : a.show === 'with' ? `floor:${a.floor}` : a.show === 'only' ? `only:${a.floor}` : a.show;
         return `<tr data-pick="level:${esc(l.id)}" class="${sel(['level'], l.id)}"><td title="${esc(l.role)}">${esc(l.label)}</td>
           <td><select data-field="md-level" data-id="${esc(l.id)}">${opts(v)}</select></td>
           <td class="dim">${a.stale ? '<span class="bad">floor deleted</span>' : a.auto ? 'auto' : ''}</td></tr>`;
@@ -1049,7 +1049,7 @@ export class EditMode {
       const m = this.layout.model || {};
       const levels = { ...(m.levels || {}) };
       if (v === 'auto') delete levels[el.dataset.id]; // back to automatic
-      else levels[el.dataset.id] = v.startsWith('floor:') ? { floor: v.slice(6) } : { show: v };
+      else levels[el.dataset.id] = v.startsWith('floor:') ? { floor: v.slice(6) } : v.startsWith('only:') ? { show: 'only', floor: v.slice(5) } : { show: v };
       this.setModelProps({ levels });
     } else if (f === 'md-room') {
       const m = this.layout.model || {};

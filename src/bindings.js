@@ -2,7 +2,7 @@
 // which HA area each room/zone is. Saved choices live in layout.model.levels / .rooms; anything
 // not saved is derived here, so re-exports and HA changes never need manual repair.
 
-const SHOW = ['with', 'always', 'hidden', 'all-only'];
+const SHOW = ['with', 'only', 'always', 'hidden', 'all-only'];
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && v.constructor === Object;
 
@@ -38,10 +38,10 @@ export function resolveLevels(levels, floors, saved = {}) {
   for (const l of levels) {
     const s = safeSaved[l.id];
     if (!isPlainObject(s)) continue;
-    if (s.show && SHOW.includes(s.show) && s.show !== 'with') {
+    if (s.show && SHOW.includes(s.show) && s.show !== 'with' && s.show !== 'only') {
       out[l.id] = { show: s.show, floor: ids.has(s.floor) ? s.floor : null, auto: false };
     } else if (ids.has(s.floor)) {
-      out[l.id] = { show: 'with', floor: s.floor, auto: false };
+      out[l.id] = { show: s.show === 'only' ? 'only' : 'with', floor: s.floor, auto: false };
     } else {
       stale.add(l.id); // saved floor was deleted in HA: fall back to the defaults below
     }
@@ -70,11 +70,25 @@ export function resolveLevels(levels, floors, saved = {}) {
   for (const l of levels) {
     if (out[l.id]) continue;
     if (l.role === 'roof') out[l.id] = { show: 'all-only', floor: null, auto: true };
-    else if (l.role === 'exterior') out[l.id] = groundFloor ? { show: 'with', floor: groundFloor, auto: true } : { show: 'always', floor: null, auto: true };
+    else if (l.role === 'exterior') out[l.id] = { show: 'always', floor: groundFloor, auto: true };
     else out[l.id] = { show: 'always', floor: null, auto: true };
   }
   for (const id of stale) out[id] = { ...out[id], stale: true };
   return out;
+}
+
+// Visibility of a model level for the selected floor ('all' or a floor id). `with` stacks:
+// shown on its floor and on every floor above it (by elevation).
+export function levelVisible(assign, visibleFloor, elevationOf) {
+  if (!assign) return true;
+  if (assign.show === 'hidden') return false;
+  if (assign.show === 'always') return true;
+  if (assign.show === 'all-only') return visibleFloor === 'all';
+  if (visibleFloor === 'all' || visibleFloor === assign.floor) return true;
+  if (assign.show === 'only') return false;
+  const a = elevationOf && elevationOf(assign.floor);
+  const v = elevationOf && elevationOf(visibleFloor);
+  return a !== undefined && a !== null && v !== undefined && v !== null && a < v;
 }
 
 export function resolveRoomAreas(rooms, areaIds, saved = {}) {
@@ -129,7 +143,7 @@ export function levelFloorOverrides(levels, levelAssign, { position = [0, 0, 0],
   const done = new Set();
   for (const l of levels) {
     const a = safeLevelAssign[l.id];
-    if (l.role === 'exterior' || l.role === 'roof' || !a || a.show !== 'with' || !a.floor || done.has(a.floor)) continue;
+    if (l.role === 'exterior' || l.role === 'roof' || !a || (a.show !== 'with' && a.show !== 'only') || !a.floor || done.has(a.floor)) continue;
     if (l.elevation === null || l.elevation === undefined) continue;
     done.add(a.floor);
     const o = { id: a.floor, elevation: Math.round((l.elevation * scale + (position[2] || 0)) * 1000) / 1000 };

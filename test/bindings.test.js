@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   levelsFromFloorMap, migrateModel, resolveLevels, resolveRoomAreas, transformPoint, modelRooms,
-  combineRooms, levelFloorOverrides, bindingDiff, snapshotDiff,
+  combineRooms, levelFloorOverrides, bindingDiff, snapshotDiff, levelVisible,
 } from '../src/bindings.js';
 
 const L = (id, role = 'storey', order = null, extra = {}) => ({ kind: 'level', id, role, order, elevation: null, height: null, ...extra });
@@ -35,7 +35,7 @@ describe('resolveLevels', () => {
     const r = resolveLevels([L('floor2'), L('ground', 'storey', 0), L('exterior', 'exterior'), L('roof', 'roof')], floors, {});
     expect(r.floor2).toMatchObject({ show: 'with', floor: 'floor2', auto: true });
     expect(r.ground).toMatchObject({ show: 'with', floor: 'floor1' });
-    expect(r.exterior).toMatchObject({ show: 'with', floor: 'floor1' });
+    expect(r.exterior).toMatchObject({ show: 'always', floor: 'floor1' });
     expect(r.roof).toMatchObject({ show: 'all-only', floor: null });
   });
 
@@ -50,6 +50,13 @@ describe('resolveLevels', () => {
       { ground: { floor: 'floor2' }, exterior: { show: 'hidden' } });
     expect(r.ground).toMatchObject({ show: 'with', floor: 'floor2', auto: false });
     expect(r.exterior).toMatchObject({ show: 'hidden', auto: false });
+  });
+
+  it('accepts a saved only binding and treats a deleted floor as stale', () => {
+    const r = resolveLevels([L('ground', 'storey', 0)], floors, { ground: { show: 'only', floor: 'floor2' } });
+    expect(r.ground).toMatchObject({ show: 'only', floor: 'floor2', auto: false });
+    const g = resolveLevels([L('ground', 'storey', 0)], floors, { ground: { show: 'only', floor: 'gone' } });
+    expect(g.ground).toMatchObject({ show: 'with', floor: 'floor1', auto: true, stale: true });
   });
 
   it('falls back to defaults when a saved floor no longer exists', () => {
@@ -161,6 +168,10 @@ describe('levelFloorOverrides', () => {
       { id: 'floor1', elevation: 0.1, height: 2.89 }, { id: 'floor2', elevation: 3.35, height: 2.5 },
     ]);
   });
+  it('treats only like with', () => {
+    const lv = [L('ground', 'storey', 0, { elevation: 0, height: 2.89 })];
+    expect(levelFloorOverrides(lv, { ground: { show: 'only', floor: 'floor1' } }, {})).toEqual([{ id: 'floor1', elevation: 0, height: 2.89 }]);
+  });
   it('treats null levelAssign as {} and returns empty', () => {
     const lv = [L('ground', 'storey', 0, { elevation: 0, height: 2.89 })];
     expect(levelFloorOverrides(lv, null, {})).toEqual([]);
@@ -202,5 +213,30 @@ describe('snapshotDiff', () => {
   it('is empty when nothing changed or no snapshot exists', () => {
     expect(snapshotDiff(man, { levels: ['a', 'b'], rooms: ['r1', 'r2'] })).toEqual({ levels: { added: [], missing: [] }, rooms: { added: [], missing: [] } });
     expect(snapshotDiff(man, null)).toEqual({ levels: { added: [], missing: [] }, rooms: { added: [], missing: [] } });
+  });
+});
+
+describe('levelVisible (stacking)', () => {
+  const elev = (id) => ({ basement: -3, ground: 0, first: 3 })[id];
+  const w = (floor) => ({ show: 'with', floor });
+  it('shows a storey on its floor and on floors above', () => {
+    expect(levelVisible(w('ground'), 'ground', elev)).toBe(true);
+    expect(levelVisible(w('ground'), 'first', elev)).toBe(true);
+    expect(levelVisible(w('first'), 'ground', elev)).toBe(false);
+    expect(levelVisible(w('basement'), 'ground', elev)).toBe(true);
+    expect(levelVisible(w('first'), 'all', elev)).toBe(true);
+  });
+  it('only / always / all-only / hidden / unknown', () => {
+    expect(levelVisible({ show: 'only', floor: 'ground' }, 'first', elev)).toBe(false);
+    expect(levelVisible({ show: 'only', floor: 'ground' }, 'ground', elev)).toBe(true);
+    expect(levelVisible({ show: 'always', floor: 'ground' }, 'basement', elev)).toBe(true);
+    expect(levelVisible({ show: 'all-only', floor: null }, 'first', elev)).toBe(false);
+    expect(levelVisible({ show: 'all-only', floor: null }, 'all', elev)).toBe(true);
+    expect(levelVisible({ show: 'hidden', floor: 'ground' }, 'all', elev)).toBe(false);
+    expect(levelVisible(undefined, 'ground', elev)).toBe(true);
+  });
+  it('falls back to equality when elevations are unknown', () => {
+    expect(levelVisible(w('x'), 'y', () => undefined)).toBe(false);
+    expect(levelVisible(w('x'), 'x', () => undefined)).toBe(true);
   });
 });
