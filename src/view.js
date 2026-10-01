@@ -203,6 +203,7 @@ export class FloorplanView {
         });
       }
       if (this.model && this.daylight) this._fitShadow();
+      this.renderer.shadowMap.needsUpdate = true;
       this._applyFloorVisibility();
       this.dirty = true;
     };
@@ -327,11 +328,13 @@ export class FloorplanView {
 
   // Renderer, light and shadow settings for model / no model and day / night.
   _applyLook() {
-    const r = this.renderer, day = this.daylight, sun = this.sun, hemi = this.hemi;
+    const r = this.renderer, day = this.model ? this.daylight : true, sun = this.sun, hemi = this.hemi;
     if (this.model) {
       r.toneMapping = THREE.ACESFilmicToneMapping;
       r.toneMappingExposure = 1.25;
       r.shadowMap.enabled = true;
+      r.shadowMap.autoUpdate = false; // re-rendered on demand (needsUpdate), not every frame
+      r.shadowMap.needsUpdate = true;
       r.shadowMap.type = THREE.PCFSoftShadowMap;
       hemi.color.setHex(day ? 0xcfdcff : 0x6f86c6);
       hemi.groundColor.setHex(day ? 0x7a6248 : 0x2a2622);
@@ -369,7 +372,14 @@ export class FloorplanView {
     if (!this.model) return;
     const sun = this.sun;
     this.modelGroup.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(this.modelGroup);
+    // ignore giant meshes (ground planes, roads): they would blow the shadow camera up
+    let box = new THREE.Box3();
+    this.model.root.traverse((o) => {
+      if (!o.isMesh) return;
+      const b = new THREE.Box3().setFromObject(o);
+      if (Math.max(b.max.x - b.min.x, b.max.z - b.min.z) <= MAX_FRAME_MESH_M) box.union(b);
+    });
+    if (box.isEmpty()) box = new THREE.Box3().setFromObject(this.modelGroup);
     if (box.isEmpty()) return;
     const centre = box.getCenter(new THREE.Vector3());
     const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 1);
@@ -382,6 +392,7 @@ export class FloorplanView {
     cam.far = radius * 5;
     cam.updateProjectionMatrix();
     sun.target.updateMatrixWorld();
+    this.renderer.shadowMap.needsUpdate = true;
     this.dirty = true;
   }
 
@@ -405,7 +416,7 @@ export class FloorplanView {
       return;
     }
     if (!this.mapPlane) {
-      const mat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide });
+      const mat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
       this.mapPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), mat);
       this.mapPlane.renderOrder = 1;
       this.mapPlane.visible = false; // until the first image arrives
@@ -489,6 +500,7 @@ export class FloorplanView {
   // floors: [{id, elevation, height}], rooms: [{room, floorId, label}]
   setStructure(floors, rooms, { wallHeight = 1.0, walls = true, fills = true, outlines = true, labels = true } = {}) {
     this.floors = floors;
+    this._rooms = rooms;
     this.wallHeight = wallHeight;
     this._clearGroup(this.staticGroup);
     this.cssObjects = this.cssObjects.filter((c) => c.kind !== 'label');
@@ -573,7 +585,7 @@ export class FloorplanView {
       let entry = this.glows.get(g.id);
       if (!entry) {
         const mat = new THREE.MeshBasicMaterial({
-          map: getGlowTexture(), transparent: true, depthWrite: false,
+          map: getGlowTexture(), transparent: true, depthWrite: false, toneMapped: false,
           blending: this.theme.dark ? THREE.AdditiveBlending : THREE.NormalBlending,
         });
         const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), mat);
@@ -630,10 +642,17 @@ export class FloorplanView {
       const cut = this.visibleFloor === 'all' || this.isTagged() ? 1e6 : this.floorElevation(this.visibleFloor) + Math.max(this.wallHeight, 0.3);
       this.modelClip.constant = cut;
       if (this.pickHelper) this.pickHelper.update();
+      this.renderer.shadowMap.needsUpdate = true;
     }
-    const top = this.floors.length ? this.floors.reduce((a, b) => (b.elevation > a.elevation ? b : a)).id : null;
+    // "top" = the highest floor that actually has markers (an empty attic must not fade everything)
+    let top = null, topElev = -Infinity;
     for (const c of this.cssObjects) {
-      if (c.kind === 'marker') c.obj.element.classList.toggle('fp-faded', this.visibleFloor === 'all' && c.floorId !== top);
+      if (c.kind !== 'marker') continue;
+      const e = this.floorElevation(c.floorId);
+      if (e > topElev) { topElev = e; top = c.floorId; }
+    }
+    for (const c of this.cssObjects) {
+      if (c.kind === 'marker') c.obj.element.classList.toggle('fp-faded', !!this.model && this.visibleFloor === 'all' && c.floorId !== top);
     }
     if (this.mapPlane && this.mapPlane.material.map) this.mapPlane.visible = this._shows(this.mapPlane.userData.floorId);
   }
@@ -649,7 +668,18 @@ export class FloorplanView {
   // Frame the rooms of the visible floor(s); the model when there are no rooms (or asked to).
   fit({ model = false, instant = false } = {}) {
     const box = new THREE.Box3();
-    if (!model) for (const g of this.staticGroup.children) if (g.visible) box.expandByObject(g);
+    if (!model) {
+      // rooms as data (independent of fills/outlines/walls flags), on the visible floors
+      for (const { room, floorId } of this._rooms || []) {
+        if (!this._shows(floorId) || !room.polygon || room.polygon.length < 3) continue;
+        const f = this.floors.find((x) => x.id === floorId);
+        const y0 = f ? f.elevation : 0, y1 = y0 + ((f && f.height) || 2.7);
+        for (const [x, y] of room.polygon) {
+          box.expandByPoint(new THREE.Vector3(x, y0, -y));
+          box.expandByPoint(new THREE.Vector3(x, y1, -y));
+        }
+      }
+    }
     if (box.isEmpty() && this.model) {
       // only the parts currently shown, and not above the cut
       this.modelGroup.updateMatrixWorld(true);

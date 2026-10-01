@@ -48,7 +48,8 @@ export function resolveLevels(levels, floors, saved = {}) {
   }
   for (const l of levels) if (!out[l.id] && ids.has(l.id)) out[l.id] = { show: 'with', floor: l.id, auto: true };
 
-  const used = new Set(Object.values(out).map((v) => v.floor).filter(Boolean));
+  // only with/only bindings reserve a floor; pinned always/hidden/all-only keep their floor for zones only
+  const used = new Set(Object.values(out).filter((v) => v.show === 'with' || v.show === 'only').map((v) => v.floor).filter(Boolean));
   const storeys = levels.filter((l) => !out[l.id] && (l.role === 'storey' || l.role === 'basement')).sort(byOrder);
   const free = floors.filter((f) => !used.has(f.id)).sort((a, b) => a.elevation - b.elevation);
   // align the model's order 0 with HA's floor at elevation 0 (a basement must not take the ground floor)

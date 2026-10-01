@@ -260,6 +260,7 @@ class Floorplan3dCard extends HTMLElement {
       if (!err && firstLoad && this._view.model && !this._allRooms().length) this._view.fit({ instant: true });
       this._stage.classList.toggle('has-model', !!this._view.model);
       if (this._view.model) this._view.setDaylight(this._daylight);
+      else { this._daylight = true; this._view.setDaylight(true); } // no model: the toggle is hidden, so always day
       this._syncToolbar();
       this._schedule(); // the manifest arrived: rebuild
       if (this._editing) this._edit.onModelLoaded();

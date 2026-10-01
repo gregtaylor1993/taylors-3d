@@ -67,7 +67,7 @@ try {
     labels: ${card}.shadowRoot.querySelectorAll('.fp-room-label').length, tagged: v.isTagged(),
     hasModel: ${card}._stage.classList.contains('has-model'), dayHidden: ${card}.shadowRoot.querySelector('button.daynight').hidden }; })()`);
   check('ACES tone mapping with a model', look.tm === 4, String(look.tm));
-  check('shadows on, shadow camera fitted to the model', look.sm === true && look.sr < 200, `${look.sm} ${look.sr}`);
+  check('shadows on, shadow camera fitted to the model', look.sm === true && look.sr < 200 && look.sr < 40, `${look.sm} ${look.sr}`);
   check('pixel ratio capped', look.pr <= 1.5, String(look.pr));
   check('no room fills and no labels outside edit mode', look.fills === 0 && look.labels === 0, JSON.stringify(look));
   check('stage has has-model, day/night button shown', look.hasModel && !look.dayHidden);
@@ -77,6 +77,19 @@ try {
   await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
   await sleep(400);
   check('leaving edit mode removes labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label').length`)) === 0);
+  // framing uses the room polygons even though no fills/outlines/walls are rendered with a model
+  await page.evaluate(`${card}._setFloor('ground'); ${card}._view.setMode('3d'); ${card}._view.fit({ instant: true })`);
+  await sleep(200);
+  const dist = () => page.evaluate(`(() => { const v = ${card}._view; return v.persp.position.distanceTo(v.controls.target); })()`);
+  const ext = await page.evaluate(`(() => { let a = 1e9, b = -1e9, c = 1e9, d = -1e9; for (const { room } of ${card}._view._rooms) for (const [x, y] of room.polygon) { a = Math.min(a, x); b = Math.max(b, x); c = Math.min(c, y); d = Math.max(d, y); } return Math.max(b - a, d - c); })()`);
+  const d0 = await dist();
+  check('model + rooms: camera frames the rooms', ext > 0 && d0 < 2.5 * ext, `dist ${d0.toFixed(1)} ext ${ext.toFixed(1)}`);
+  await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
+  await sleep(600);
+  await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
+  await sleep(900);
+  const d1 = await dist();
+  check('edit mode on/off keeps the camera distance within 5 %', Math.abs(d1 - d0) / d0 < 0.05, `${d0.toFixed(2)} -> ${d1.toFixed(2)}`);
 
   const lights = () => page.evaluate(`({ sun: ${card}._view.sun.intensity, hemi: ${card}._view.hemi.intensity, cast: ${card}._view.sun.castShadow })`);
   const day = await lights();
@@ -189,6 +202,10 @@ try {
   await sleep(300);
   check('exterior "always" keeps its zones', await page.evaluate(`${card}._modelRooms.some((r) => r.id === 'm:garden')`)
     && JSON.stringify(await page.evaluate(`${card}._layout.model.levels.exterior`)) === '{"show":"always","floor":"ground"}', JSON.stringify(await page.evaluate(`${card}._layout.model.levels.exterior`)));
+  check('exterior "always" does not remap storeys', (await lv()) === JSON.stringify({ exterior: 'always:ground', lvl_a0: 'with:ground', lvl_a1: 'with:first', roof: 'all-only:null' }), await lv());
+  await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-level][data-id=exterior]'); s.value = 'hidden'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await sleep(300);
+  check('exterior "hidden" does not remap storeys', (await lv()) === JSON.stringify({ exterior: 'hidden:ground', lvl_a0: 'with:ground', lvl_a1: 'with:first', roof: 'all-only:null' }), await lv());
   await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-level][data-id=exterior]'); s.value = 'auto'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   await sleep(200);
   check('mapped level visible on its floor', JSON.stringify(await vis()) === '[true,false]');
@@ -274,6 +291,8 @@ try {
   check('import keeps the uploaded model', await page.evaluate(`!!(${card}._layout.model && ${card}._view.model)`));
   check('import maps floor ids onto HA floors', (await page.evaluate(`${card}._layout.rooms[0].floor_id`)) === 'ground'
     && (await page.evaluate(`${panel('.msg')}.textContent`)).includes('level0 → Ground floor'));
+  await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').click()`); // night, then remove the model
+  await sleep(150);
   await clickText('Model');
   await sleep(150);
   await clickText('Remove model');
@@ -282,6 +301,8 @@ try {
   check('remove clears model', (await page.evaluate(`${card}._layout.model`)) === null && !(await page.evaluate(`${card}._view.model`)));
   check('removal resets the look', await page.evaluate(`(() => { const c = ${card}; return !c._stage.classList.contains('has-model')
     && c.shadowRoot.querySelector('button.daynight').hidden && c._view.renderer.toneMapping === 0 && c._view.renderer.shadowMap.enabled === false; })()`));
+  const dayLook = await page.evaluate(`(() => { const v = ${card}._view; return { hemi: v.hemi.intensity, sun: v.sun.intensity, tm: v.renderer.toneMapping, glyph: ${card}.shadowRoot.querySelector('button.daynight').textContent }; })()`);
+  check('removing the model at night restores the day look', dayLook.hemi === 2.2 && dayLook.sun === 1.4 && dayLook.tm === 0 && dayLook.glyph === '\u2600', JSON.stringify(dayLook));
   allErrors.push(...s.errors);
 } finally {
   await s.close();
@@ -295,6 +316,9 @@ try {
     labels: ${card}.shadowRoot.querySelectorAll('.fp-room-label').length, dayHidden: ${card}.shadowRoot.querySelector('button.daynight').hidden }; })()`);
   check('no model: NoToneMapping, no shadows', r.tm === 0 && r.sm === false, JSON.stringify(r));
   check('no model: room labels present, day/night hidden, pixel ratio capped', r.labels > 0 && r.dayHidden && r.pr <= 1.5, JSON.stringify(r));
+  await page.evaluate(`${card}._setFloor('all')`);
+  await sleep(300);
+  check('no model: "All" does not fade markers', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-marker.fp-faded').length`)) === 0);
   allErrors.push(...s.errors);
 } finally {
   await s.close();

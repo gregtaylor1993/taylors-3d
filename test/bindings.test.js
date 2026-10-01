@@ -45,6 +45,16 @@ describe('resolveLevels', () => {
     expect(r.basement).toMatchObject({ show: 'always', floor: null });
   });
 
+  it('a pinned exterior (always/hidden/all-only) does not reserve its floor for storey mapping', () => {
+    for (const show of ['always', 'hidden', 'all-only']) {
+      const r = resolveLevels([L('ground', 'storey', 0), L('first', 'storey', 1), L('exterior', 'exterior')], floors,
+        { exterior: { show, floor: 'floor1' } });
+      expect(r.ground).toMatchObject({ show: 'with', floor: 'floor1' });
+      expect(r.first).toMatchObject({ show: 'with', floor: 'floor2' });
+      expect(r.exterior).toMatchObject({ show, floor: 'floor1' });
+    }
+  });
+
   it('honours saved bindings and show modes', () => {
     const r = resolveLevels([L('ground', 'storey', 0), L('exterior', 'exterior')], floors,
       { ground: { floor: 'floor2' }, exterior: { show: 'hidden' } });
