@@ -16,7 +16,7 @@ position over its map.
 - Edit mode for admins: draw rooms, doors, floors, pin and hide devices, import/export
 - One layout shared by every user and device (stored by the companion integration)
 - Robot mower: live position, trail, map image or camera overlay, point calibration
-- Optional 3D model of the house (.glb) under the plan, cut away per floor
+- Optional 3D model of the house (.glb) under the plan: floors stack (upper floors hidden, lower ones shown), with a Day / Night button for lighting
 - Follows the HA theme, light and dark
 
 ## Install

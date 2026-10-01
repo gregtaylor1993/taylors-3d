@@ -132,7 +132,10 @@ const STYLE = `
   button.edit { font: inherit; font-size: 13px; line-height: 1; cursor: pointer; padding: 6px 10px; border-radius: 16px;
     border: 1px solid var(--divider-color, rgba(0,0,0,.12)); background: var(--card-background-color, #fff);
     color: var(--primary-text-color); display: flex; align-items: center; gap: 4px; --mdc-icon-size: 16px; }
-  button.edit[hidden] { display: none; }
+  button.edit[hidden], button.daynight[hidden] { display: none; }
+  button.daynight { font: inherit; font-size: 15px; line-height: 1; cursor: pointer; padding: 5px 10px; border-radius: 16px;
+    border: 1px solid var(--divider-color, rgba(0,0,0,.12)); background: var(--card-background-color, #fff);
+    color: var(--primary-text-color); }
   .editing button.edit { background: var(--primary-color); border-color: var(--primary-color); color: var(--text-primary-color, #fff); }
 
   .fp-handle { box-sizing: border-box; width: 13px; height: 13px; border-radius: 50%; pointer-events: auto; cursor: grab;
@@ -164,6 +167,9 @@ const STYLE = `
     color: var(--primary-text-color); min-width: 0; }
   .panel .row label { flex: 1; }
   .fp-marker.selected .fp-dot { outline: 3px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
+  .has-model .fp-dot { width: 22px; height: 22px; --mdc-icon-size: 14px;
+    background: color-mix(in srgb, var(--card-background-color, #fff) 85%, transparent); }
+  .fp-marker.fp-faded { opacity: .3; }
   .compact .fp-dot { width: 21px; height: 21px; --mdc-icon-size: 13px; border-width: 1px; }
   .compact .fp-val { font-size: 9.5px; padding: 0 4px; }
 `;
@@ -192,6 +198,7 @@ class Floorplan3dCard extends HTMLElement {
     this._markerEls = new Map();
     this._floor = null;
     this._mode = '3d';
+    this._daylight = true;
   }
 
   static getStubConfig() {
@@ -250,7 +257,9 @@ class Floorplan3dCard extends HTMLElement {
       this._notice.textContent = err || '';
       this._notice.hidden = !err;
       // nothing drawn yet: show the model instead of an empty plan
-      if (!err && firstLoad && this._view.model && !this._allRooms().length) this._view.fit();
+      if (!err && firstLoad && this._view.model && !this._allRooms().length) this._view.fit({ instant: true });
+      this._stage.classList.toggle('has-model', !!this._view.model);
+      this._syncToolbar();
       this._schedule(); // the manifest arrived: rebuild
       if (this._editing) this._edit.onModelLoaded();
     });
@@ -337,6 +346,7 @@ class Floorplan3dCard extends HTMLElement {
             <div class="toolbar">
               <div class="chips"></div>
               <div class="seg"><button data-mode="3d">3D</button><button data-mode="top">Top</button></div>
+              <button class="daynight" hidden title="Day / night">\u2600</button>
               <button class="edit" hidden title="Edit floorplan"><ha-icon icon="mdi:pencil"></ha-icon><span>Edit</span></button>
             </div>
             <div class="empty" hidden></div>
@@ -360,6 +370,12 @@ class Floorplan3dCard extends HTMLElement {
     });
     this._body = root.querySelector('.body');
     this._editBtn = root.querySelector('button.edit');
+    this._dayBtn = root.querySelector('button.daynight');
+    this._dayBtn.addEventListener('click', () => {
+      this._daylight = !this._daylight;
+      this._view.setDaylight(this._daylight);
+      this._dayBtn.textContent = this._daylight ? '\u2600' : '\u263e';
+    });
     this._editBtn.addEventListener('click', () => this._toggleEdit());
     this._view = new FloorplanView(this._stage);
     this._view.setMode(this._mode);
@@ -385,6 +401,8 @@ class Floorplan3dCard extends HTMLElement {
     } else {
       this._edit.exit();
     }
+    this._built.rooms = undefined; // model look: outlines and labels only while editing
+    this._schedule();
     this._syncToolbar();
     // the panel changes the canvas size: reframe once the layout has settled
     requestAnimationFrame(() => {
@@ -414,7 +432,7 @@ class Floorplan3dCard extends HTMLElement {
     this._view.resize(r.width, r.height);
     if (!this._fitted && this._built.rooms) {
       this._fitted = true;
-      this._view.fit();
+      this._view.fit({ instant: true });
     }
   }
 
@@ -595,7 +613,12 @@ class Floorplan3dCard extends HTMLElement {
       floorId: roomFloorId(room, h, this._floors),
       label: room.name || (room.area_id ? areaName(h, room.area_id) : room.label || ''),
     }));
-    this._view.setStructure(this._floors, rooms, { wallHeight: Number(this._config.wall_height) || 1.0, walls: !this._view.model });
+    const hasModel = !!this._view.model;
+    this._view.setStructure(this._floors, rooms, {
+      wallHeight: Number(this._config.wall_height) || 1.0,
+      walls: !hasModel, fills: !hasModel, outlines: !hasModel || !!this._editing, labels: !hasModel || !!this._editing,
+    });
+    this._stage.classList.toggle('has-model', hasModel);
 
     const withRooms = this._floors.filter((f) => rooms.some((r) => r.floorId === f.id));
     if (!this._floor || (this._floor !== 'all' && !this._floors.some((f) => f.id === this._floor))) {
@@ -610,7 +633,7 @@ class Floorplan3dCard extends HTMLElement {
     // frame once; later rebuilds (edits, registry changes) keep the user's camera
     if (!this._fitted && this._view.size.w > 1) {
       this._fitted = true;
-      this._view.fit();
+      this._view.fit({ instant: true });
     }
   }
 
@@ -752,6 +775,7 @@ class Floorplan3dCard extends HTMLElement {
       this._chips.innerHTML = '';
     }
     for (const btn of this.shadowRoot.querySelectorAll('.seg button')) btn.classList.toggle('on', btn.dataset.mode === this._mode);
+    this._dayBtn.hidden = !(this._view && this._view.model);
     this._editBtn.hidden = !(this._hass && this._hass.user && this._hass.user.is_admin);
     this._editBtn.querySelector('span').textContent = this._editing ? 'Done' : 'Edit';
     if (this._empty && this._editing) this._empty.hidden = true;

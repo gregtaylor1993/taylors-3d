@@ -1049,7 +1049,10 @@ export class EditMode {
       const m = this.layout.model || {};
       const levels = { ...(m.levels || {}) };
       if (v === 'auto') delete levels[el.dataset.id]; // back to automatic
-      else levels[el.dataset.id] = v.startsWith('floor:') ? { floor: v.slice(6) } : v.startsWith('only:') ? { show: 'only', floor: v.slice(5) } : { show: v };
+      else {
+        const keep = (this.card.modelBindings()?.levels[el.dataset.id] || {}).floor || undefined; // zones stay on their floor
+        levels[el.dataset.id] = v.startsWith('floor:') ? { floor: v.slice(6) } : v.startsWith('only:') ? { show: 'only', floor: v.slice(5) } : { show: v, floor: keep };
+      }
       this.setModelProps({ levels });
     } else if (f === 'md-room') {
       const m = this.layout.model || {};

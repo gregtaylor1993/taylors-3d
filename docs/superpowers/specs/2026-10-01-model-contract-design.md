@@ -135,9 +135,12 @@ survives a re-export only while the path is unchanged.
 ```
 
 - `levels[id]`: `{ floor }` puts the level on an HA floor (shown when that floor is
-  selected). `show` refines it: `with` (default) \| `always` \| `hidden` \| `all-only` (only in
-  "All"). Default when unbound: exact id match with an HA floor, else storeys by `order` onto HA
-  floors by level; `exterior` shows with the lowest storey's floor; `roof` is `all-only`.
+  selected). `show` refines it: `with` (default: shown when the selected floor is the level's
+  floor or any floor above it, so floors stack) \| `only` (only on its own floor) \| `always` \|
+  `hidden` \| `all-only` (only in "All"). In "All" every non-hidden level shows. Default when
+  unbound: exact id match with an HA floor, else storeys by `order` onto HA floors by level;
+  `exterior` is `always` (it keeps the lowest storey's floor for its zones); `roof` is
+  `all-only`. Tagged models are never cut; legacy models keep the cut at wall height.
 - `rooms[id].area`: HA area. Default when unbound: `suggest.area` if that area exists, else an
   area whose id equals the room id, else unassigned.
 - `objects[id]`: any field present overrides the model's tag. Default `entity` when unbound:

@@ -33,25 +33,62 @@ try {
   const { page } = s;
   await page.waitForFunction(`!!${card}._view.model`, { timeout: 10000 });
   await sleep(300);
-  const st = () => page.evaluate(`(() => { const v = ${card}._view; return {
-    ground: v.modelManifest().levels.find((l) => l.id === 'level0')?.node.visible,
-    first: v.modelManifest().levels.find((l) => l.id === 'level1')?.node.visible,
+  const st = () => page.evaluate(`(() => { const v = ${card}._view; const vis = (id) => v.modelManifest().levels.find((l) => l.id === id)?.node.visible; return {
+    level0: vis('level0'), level1: vis('level1'), exterior: vis('exterior'), roof: vis('roof'),
     cut: v.modelClip.constant, floors: v.modelManifest().levels.map((l) => l.id) }; })()`);
+  const sh = (name) => page.screenshot({ path: path.join(root, 'screenshots', name) });
+  fs.mkdirSync(path.join(root, 'screenshots'), { recursive: true });
   let v = await st();
   check('model loaded with level groups', JSON.stringify(v.floors) === '["level0","level1","exterior","roof"]', JSON.stringify(v.floors));
-  check('ground floor shown, first hidden, cut at wall height', v.ground === true && v.first === false && Math.abs(v.cut - 1) < 1e-6, JSON.stringify(v));
-  fs.mkdirSync(path.join(root, 'screenshots'), { recursive: true });
-  await page.screenshot({ path: path.join(root, 'screenshots/model-ground.png') });
+  check('ground: level0 + exterior shown, level1 + roof hidden, tagged model not cut',
+    v.level0 === true && v.level1 === false && v.exterior === true && v.roof === false && v.cut > 1000, JSON.stringify(v));
+  await sleep(500);
+  await sh('look-day.png');
+  await sh('model-ground.png');
   await page.evaluate(`${card}._setFloor('first')`);
   await sleep(300);
   v = await st();
-  check('first floor chip shows first floor group, cut above it', v.first === true && v.ground === false && Math.abs(v.cut - 4) < 1e-6, JSON.stringify(v));
-  await page.screenshot({ path: path.join(root, 'screenshots/model-first.png') });
+  check('first: both storeys stack, exterior shown, roof hidden', v.level0 && v.level1 && v.exterior && !v.roof, JSON.stringify(v));
+  await sh('model-first.png');
   await page.evaluate(`${card}._setFloor('all')`);
   await sleep(300);
   v = await st();
-  check('"All" shows everything uncut', v.first && v.ground && v.cut > 1000);
+  check('"All" shows everything uncut', v.level0 && v.level1 && v.exterior && v.roof && v.cut > 1000, JSON.stringify(v));
+  const faded = () => page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-marker.fp-faded').length`);
+  check('"All": markers below the top floor are faded', (await faded()) > 0);
+  await page.evaluate(`${card}._setFloor('ground')`);
+  await sleep(300);
+  check('single floor: no faded markers', (await faded()) === 0);
   check('no notice', await page.evaluate(`${card}.shadowRoot.querySelector('.notice').hidden`));
+
+  const look = await page.evaluate(`(() => { const v = ${card}._view; return { tm: v.renderer.toneMapping, sm: v.renderer.shadowMap.enabled,
+    sr: v.sun.shadow.camera.right, pr: v.renderer.getPixelRatio(),
+    fills: (() => { let n = 0; v.staticGroup.traverse((o) => { if (o.isMesh && o.userData.roomId) n++; }); return n; })(),
+    labels: ${card}.shadowRoot.querySelectorAll('.fp-room-label').length, tagged: v.isTagged(),
+    hasModel: ${card}._stage.classList.contains('has-model'), dayHidden: ${card}.shadowRoot.querySelector('button.daynight').hidden }; })()`);
+  check('ACES tone mapping with a model', look.tm === 4, String(look.tm));
+  check('shadows on, shadow camera fitted to the model', look.sm === true && look.sr < 200, `${look.sm} ${look.sr}`);
+  check('pixel ratio capped', look.pr <= 1.5, String(look.pr));
+  check('no room fills and no labels outside edit mode', look.fills === 0 && look.labels === 0, JSON.stringify(look));
+  check('stage has has-model, day/night button shown', look.hasModel && !look.dayHidden);
+  await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
+  await sleep(400);
+  check('edit mode shows room labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label').length`)) > 0);
+  await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
+  await sleep(400);
+  check('leaving edit mode removes labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label').length`)) === 0);
+
+  const lights = () => page.evaluate(`({ sun: ${card}._view.sun.intensity, hemi: ${card}._view.hemi.intensity })`);
+  const day = await lights();
+  await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').click()`);
+  await sleep(300);
+  const night = await lights();
+  check('night: sun off, hemisphere dim', night.sun === 0 && night.hemi < 0.2, JSON.stringify(night));
+  check('button shows the moon at night', (await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').textContent`)) === '☾');
+  await sh('look-night.png');
+  await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').click()`);
+  await sleep(300);
+  check('day again restores the light', JSON.stringify(await lights()) === JSON.stringify(day) && day.sun > 0, JSON.stringify(day));
   allErrors.push(...s.errors);
 } finally {
   await s.close();
@@ -103,7 +140,7 @@ try {
   check('model loaded with level groups', JSON.stringify(await page.evaluate(`${card}._view.modelManifest().levels.map((l) => l.id)`)) === '["level0","level1","exterior","roof"]');
   const lv = () => page.evaluate(`JSON.stringify(Object.fromEntries(Object.entries(${card}.modelBindings().levels).map(([k, v]) => [k, v.show + ':' + v.floor])))`);
   check('levels map by order, exterior with ground, roof all-only',
-    (await lv()) === JSON.stringify({ level0: 'with:ground', level1: 'with:first', exterior: 'with:ground', roof: 'all-only:null' }), await lv());
+    (await lv()) === JSON.stringify({ level0: 'with:ground', level1: 'with:first', exterior: 'always:ground', roof: 'all-only:null' }), await lv());
   check('rooms come from the model', await page.evaluate(`${card}._modelRooms.some((r) => r.id === 'm:kitchen' && r.floor_id === 'ground')`));
   check('model room replaces the drawn kitchen', await page.evaluate(`${card}._allRooms().filter((r) => r.area_id === 'kitchen').length === 1`));
   await page.evaluate(`(() => { const s = ${panel('[data-field=md-rotation]')}; s.value = "90"; s.dispatchEvent(new Event("input", { bubbles: true })); })()`);
@@ -145,8 +182,15 @@ try {
   await page.waitForFunction(`${card}._view.modelManifest()?.levels.some((l) => l.id === 'lvl_a0')`, { timeout: 10000 });
   await sleep(300);
   fs.unlinkSync(renamed);
-  check('renamed levels still map by order', (await lv()) === JSON.stringify({ lvl_a0: 'with:ground', lvl_a1: 'with:first', exterior: 'with:ground', roof: 'all-only:null' }), await lv());
+  check('renamed levels still map by order', (await lv()) === JSON.stringify({ lvl_a0: 'with:ground', lvl_a1: 'with:first', exterior: 'always:ground', roof: 'all-only:null' }), await lv());
   const vis = () => page.evaluate(`(() => { const l = ${card}._view.modelManifest().levels; return [l[0].node.visible, l[1].node.visible]; })()`);
+  check('ground shows its own storey only', JSON.stringify(await vis()) === '[true,false]');
+  await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-level][data-id=exterior]'); s.value = 'always'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await sleep(300);
+  check('exterior "always" keeps its zones', await page.evaluate(`${card}._modelRooms.some((r) => r.id === 'm:garden')`)
+    && JSON.stringify(await page.evaluate(`${card}._layout.model.levels.exterior`)) === '{"show":"always","floor":"ground"}', JSON.stringify(await page.evaluate(`${card}._layout.model.levels.exterior`)));
+  await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-level][data-id=exterior]'); s.value = 'auto'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await sleep(200);
   check('mapped level visible on its floor', JSON.stringify(await vis()) === '[true,false]');
   check('level rows marked auto', (await page.evaluate(`${panel('table.floors')}.textContent`)).includes('auto'));
   await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-level][data-id=lvl_a1]'); s.value = 'always'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
@@ -195,14 +239,15 @@ try {
   fs.unlinkSync(legacy);
   check('legacy names read as levels', (await page.evaluate(`${card}._view.modelManifest().levels.map((l) => l.id).join()`)) === 'ground,first,site,roof',
     await page.evaluate(`${card}._view.modelManifest().levels.map((l) => l.id).join()`));
-  check('legacy levels map automatically', (await lv()) === JSON.stringify({ ground: 'with:ground', first: 'with:first', site: 'with:ground', roof: 'all-only:null' }), await lv());
+  check('legacy levels map automatically', (await lv()) === JSON.stringify({ ground: 'with:ground', first: 'with:first', site: 'always:ground', roof: 'all-only:null' }), await lv());
   const legacyVis = () => page.evaluate(`(() => { const l = ${card}._view.modelManifest().levels; return [l[0].node.visible, l[1].node.visible]; })()`);
   await page.evaluate(`${card}._setFloor('ground')`);
   await sleep(300);
   check('legacy: ground chip shows ground only', JSON.stringify(await legacyVis()) === '[true,false]');
+  check('legacy: cut at ground elevation + wall height', Math.abs((await page.evaluate(`${card}._view.modelClip.constant`)) - 1) < 1e-6, String(await page.evaluate(`${card}._view.modelClip.constant`)));
   await page.evaluate(`${card}._setFloor('first')`);
   await sleep(300);
-  check('legacy: first chip shows first only', JSON.stringify(await legacyVis()) === '[false,true]');
+  check('legacy: first chip stacks the storeys', JSON.stringify(await legacyVis()) === '[true,true]');
   await clickText('Data');
   await clickText('Model');
   await sleep(200);
@@ -231,6 +276,19 @@ try {
   await s.close();
 }
 
+// 2c. no model: today's look
+s = await openDemo({ view: '3d' });
+try {
+  const { page } = s;
+  const r = await page.evaluate(`(() => { const v = ${card}._view; return { tm: v.renderer.toneMapping, sm: v.renderer.shadowMap.enabled, pr: v.renderer.getPixelRatio(),
+    labels: ${card}.shadowRoot.querySelectorAll('.fp-room-label').length, dayHidden: ${card}.shadowRoot.querySelector('button.daynight').hidden }; })()`);
+  check('no model: NoToneMapping, no shadows', r.tm === 0 && r.sm === false, JSON.stringify(r));
+  check('no model: room labels present, day/night hidden, pixel ratio capped', r.labels > 0 && r.dayHidden && r.pr <= 1.5, JSON.stringify(r));
+  allErrors.push(...s.errors);
+} finally {
+  await s.close();
+}
+
 // 3. export snippet round trip
 s = await openDemo({});
 try {
@@ -252,6 +310,41 @@ try {
   allErrors.push(...errors.filter((e) => !e.includes('GPU stall')));
 } finally {
   await s.close();
+}
+
+// 4. optional: a real model, screenshots only (REAL_MODEL=/path/to/house.glb)
+if (process.env.REAL_MODEL) {
+  s = await openDemo({ view: '3d', height: '700px' }, { width: 1500, height: 820 });
+  try {
+    const { page } = s;
+    await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
+    await sleep(200);
+    await page.evaluate(() => {
+      const b = [...document.querySelector('floorplan3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === 'Model');
+      if (b) b.click();
+    });
+    await sleep(150);
+    const input = await page.evaluateHandle(`${card}.shadowRoot.querySelector('.panel [data-field=model-file]')`);
+    await input.uploadFile(process.env.REAL_MODEL);
+    await page.waitForFunction(`!!${card}._view.model`, { timeout: 60000 });
+    await sleep(500);
+    await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`); // leave edit mode
+    await sleep(800);
+    const ids = await page.evaluate(`${card}._floors.map((f) => f.id).concat('all')`);
+    for (const id of ids) {
+      await page.evaluate(`${card}._setFloor(${JSON.stringify(id)})`);
+      await sleep(1200);
+      await page.screenshot({ path: path.join(root, 'screenshots', `real-${id}-day.png`) });
+      console.log('screenshot', `screenshots/real-${id}-day.png`);
+    }
+    await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').click()`);
+    await sleep(800);
+    await page.screenshot({ path: path.join(root, 'screenshots', `real-${ids[ids.length - 1]}-night.png`) });
+    console.log('screenshot', `screenshots/real-${ids[ids.length - 1]}-night.png`);
+    allErrors.push(...s.errors);
+  } finally {
+    await s.close();
+  }
 }
 
 if (allErrors.length) console.error('page errors:\n' + allErrors.join('\n'));

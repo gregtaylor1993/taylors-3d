@@ -84,7 +84,8 @@ Rules:
    terrain go in `exterior` (or leave a world ground plane out entirely; the card has its own
    background).
 7. Walls, windows, stairs, slabs can be untagged scenery of their level.
-8. No lights, cameras, helpers, grids or text in the export. Lamps are objects (below), not
+8. Walls stay at full storey height; each storey's ceiling/slab belongs to the storey above, so hiding the upper level opens the view into the rooms.
+9. No lights, cameras, helpers, grids or text in the export. Lamps are objects (below), not
    three.js lights.
 
 ## Objects
