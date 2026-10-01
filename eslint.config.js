@@ -8,5 +8,5 @@ export default [
     languageOptions: { ecmaVersion: 2022, sourceType: 'module', globals: { ...globals.browser } },
     rules: { 'no-unused-vars': ['error', { argsIgnorePattern: '^_', caughtErrors: 'none' }] },
   },
-  { files: ['scripts/**', 'test/**', '*.config.js'], languageOptions: { globals: { ...globals.node } } },
+  { files: ['scripts/**', 'test/**', 'tools/*.mjs', '*.config.js'], languageOptions: { globals: { ...globals.node } } },
 ];
