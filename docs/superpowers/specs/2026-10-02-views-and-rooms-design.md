@@ -1,0 +1,171 @@
+# Views and rooms: choose what each floor shows, frame the house, pick rooms from the model
+
+Status: design approved in chat, spec awaiting review
+Date: 2026-10-02
+Builds on: `2026-10-01-model-contract-design.md` (levels, rooms, bindings) and the model look work (v0.2.x).
+
+## Goal
+
+Make every floor view look the way the user wants without typing metres:
+- The floor buttons stay **one per HA floor plus "All"**. Each floor's view is **expanded with element
+  choices**: any part of the model (levels, rooms, zones, objects, layers, or plain model groups on
+  untagged models) can be shown or hidden on that floor, by clicking it in a tree or in the 3D view.
+- **No metres or elevations to type.** Floor heights come from the model.
+- Each floor opens with the **house framed**, and the user can **save the current camera** as that
+  floor's default.
+- Rooms can be **picked from the model** (click a room's floor) instead of drawn.
+- Everything set in the UI is shared (layout); YAML can override per card.
+
+Success looks like: on the user's current untagged model, they hide the ceiling slab and the ground
+plane on Floor1 with two clicks, save a nice camera, pick the kitchen floor to create the Kitchen room,
+and never see an elevation field; after a re-export with `fp` tags the same views keep working.
+
+## Non-goals
+
+- Lamp lights, object behaviour, popups, light chains (next step, "objects and light").
+- Custom views that are not HA floors.
+- Editing model geometry.
+
+## 1. Views
+
+- Views = HA floors (in HA's level order) + `all`. Ids are HA floor ids and `all`.
+- "All" label: `layout.views.all.name` (UI) or card YAML `views.all.name`; default "All".
+- Layout-only floors (from the Rooms tab "Add floor" or an import) remain views as today.
+
+## 2. Visibility model
+
+### Selectors
+| selector | matches |
+|---|---|
+| `all` | the whole model |
+| `level:<id>` | a level node (manifest level) |
+| `role:<storey\|basement\|exterior\|roof>` | every level with that role |
+| `room:<id>` / `zone:<id>` | a room or zone node |
+| `object:<id>` | an object node |
+| `type:<type>` | every object of a type |
+| `group:<name>` | every object with that `group` |
+| `layer:<name>` | every node whose `fp.layer` is (or contains) the name |
+| `node:<path>` | a node by path (names from the model root, `/`-separated; `*` matches within one segment, `**` across segments) |
+
+Unknown or non-matching selectors are ignored (listed as "not in this model" in the UI).
+
+### Resolution (per floor view)
+1. **Default** visibility per level from the existing rules (`levelVisible`: storeys stack, exterior
+   always, roof only in All, plus the level → floor mapping), and today's cut for untagged models when
+   the floor's "cut at wall height" is on (default: on for untagged models, off for tagged).
+2. **Rules**: the floor's rules in order — layout rules first, then card-YAML rules — each
+   `{ show: selector }` or `{ hide: selector }`. For every node, the **last rule that matches the node
+   itself** decides; a node with no matching rule inherits its parent's resolved value; level nodes
+   with no matching rule use step 1.
+3. **Applying to three.js** (rules only re-run when the view, rules or model change): a node's `visible` = its resolved value OR any descendant resolved
+   visible (so `hide level:ground` + `show room:kitchen` shows only the kitchen inside the ground
+   level; siblings without their own rule stay hidden because they inherit the hidden value).
+
+Markers and glows follow the floor exactly as today (they belong to HA floors, not model nodes).
+Picking ignores hidden nodes (already the case).
+
+### Storage
+```json
+"views": {
+  "floor1": {
+    "rules": [{ "hide": "layer:ceiling" }, { "hide": "node:floor:ground/mesh_177" }],
+    "camera": { "position": [4.1, 18.3, 21.0], "target": [5.2, 0.9, -8.0] },
+    "cut": false
+  },
+  "all": { "name": "Exterior", "rules": [] }
+}
+```
+`layout.views[viewId]`: `name` (all only), `rules`, `camera` (world coordinates), `cut`.
+Card YAML `views:` uses the same keys per view id; its `rules` are appended after the layout's, its
+`camera`, `cut` and `name` replace the layout's for that card only.
+
+### Migration
+The level dropdown's show modes (`layout.model.levels[id].show`) become view rules on load:
+`hidden` → `hide level:<id>` on every view; `always` → `show level:<id>` on every view; `all-only` →
+`hide level:<id>` on every floor view; `only` → `hide level:<id>` on floor views above its floor.
+The binding keeps only the floor (`{ floor }` or auto). The Model tab's level dropdown becomes
+"belongs to floor: auto | <floor>".
+
+## 3. Edit → Views tab (new; the Model tab keeps upload, alignment, level→floor, rooms, report)
+
+- Floor picker (defaults to the selected floor chip; switching it switches the chip).
+- **Element tree** of the loaded model: levels → rooms/zones → objects; a "Layers" section listing the
+  model's `fp.layer` names; for untagged parts the model's own groups two levels deep. Each row has a
+  three-state eye: default (inherits), shown, hidden. Rows show the resolved state.
+- **Click in 3D** (Views tab open): the picked part is highlighted and a small menu offers
+  "Hide on this floor", "Show on this floor", "Hide on all floors", "Reveal in tree". Picks walk up to
+  the nearest tagged node; untagged meshes pick the deepest named group (not single meshes) so a click
+  hides a meaningful part.
+- **Camera**: "Save current view as this floor's start" and "Reset camera".
+- **Cut at wall height** checkbox (shown only for untagged models).
+- **Reset this floor** (removes its rules and camera).
+- "All" view: a name field.
+
+## 4. No metres
+
+- Floor elevation and height for a floor bound to a model level: from the level's `fp` (tagged) or,
+  for untagged levels, measured: elevation = max(0, level minY) rounded to 0.05 for the lowest storey
+  bound to a floor at/above ground, other storeys' elevation = their minY rounded to 0.05;
+  height = (next storey's elevation − this elevation) or 2.7 when it is the top storey.
+- The Rooms tab's elevation/height inputs move into a collapsed "Advanced (no model)" section, shown
+  only when no model is loaded. Stored overrides still apply when present (existing layouts).
+
+## 5. Camera
+
+- Default framing per floor view: the house — union of rooms on visible floors excluding outdoor
+  zones; without rooms, the bounding box of visible storey levels' meshes (≤ 60 m each). "All" frames
+  the visible model (meshes ≤ 60 m).
+- A saved `camera` replaces the default for that view (3D mode; top view keeps fit-to-house).
+- Switching floors tweens to the next view's camera (existing 400 ms tween).
+
+## 6. Pick a room from the model
+
+- Rooms tab: each missing area gets "Pick" next to "Draw". Pick mode: crosshair; click a floor surface
+  in the model.
+- If the hit belongs to a tagged room/zone → that model room is bound to the area (Model tab binding);
+  no drawn room is created.
+- Otherwise the outline is computed from the hit mesh: take its triangles with a world normal within
+  25° of up whose centroid height is within 0.05 m of the hit point's height; boundary edges = edges
+  used by exactly one of those triangles; chain them into closed loops; choose the loop containing the
+  hit point; simplify collinear points (tolerance 0.02 m); snap to 0.05 m. If that fails (no loop,
+  fewer than 3 points), fall back to the mesh's plan bounding rectangle and say so.
+- The polygon is in plan coordinates of the current alignment (inverse of the model alignment is not
+  needed: rooms are stored in plan space). The room is created on the selected floor, selected, and can
+  be reshaped like a drawn room.
+
+## 7. Room labels with size
+
+Room labels (edit mode with a model; always without a model) show the name and the plan size:
+"Kitchen · 2.7 × 3.8 m" (bounding size, 0.1 m precision) or the area for non-rectangles
+("Hallway · 14.2 m²"). Card option `room_labels: name | size | none` (default `size`).
+
+## 8. Model builder guide additions
+
+- `fp.layer` on any node (string or array): `furniture`, `fence`, `terrain`, `ceiling`, `roof`,
+  `facade`, `decoration`, `glass`, `stairs` (others allowed).
+- Ceilings/slabs between storeys belong to the storey above.
+- Each room's floor slab is its own mesh inside its room group. Merge geometry per room or per layer,
+  never across rooms or storeys.
+- No world ground plane inside a storey (exterior `layer: terrain` instead).
+- Optional `fp.label`, `fp.area_m2` on rooms (display only).
+- Concrete look values (renderer, sun, materials, lamps, cameras, labels) come from the prototype's
+  source, summarised in `docs/prototype-findings.md`; they feed the objects-and-light step.
+
+## 9. Error handling
+
+- Selectors that match nothing: kept, shown greyed in the tree with "not in this model".
+- Picking with no model loaded / no hit: message "Click on a room's floor".
+- Outline extraction failure: bounding-rectangle fallback with a notice.
+- YAML `views` with unknown view ids: ignored with a console warning.
+
+## 10. Testing
+
+- Unit (pure, on generic node trees): selector parsing and matching (incl. `*`/`**`), rule resolution
+  (last match wins, inheritance, ancestor-visible-for-shown-descendant), migration of level show modes,
+  YAML merge, measured elevations, outline extraction from triangle lists (rectangle, L-shape, hole-free
+  with extra faces, failure → null), label formatting.
+- Headless: Views tab tree toggles hide/show a level and a layer on the demo model; click-in-3D
+  "Hide on this floor" hides the clicked group only on that floor; saved camera restores after
+  switching floors and on reload; pick a room on the demo model creates a polygon matching the room's
+  outline within 0.1 m; untagged demo copy: no elevation inputs visible, elevation derived; legacy
+  `floor:` model: cut checkbox present and default on.
