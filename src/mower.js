@@ -114,3 +114,25 @@ export function overlayUrl(hass, entityId, bust) {
   if (!bust) return url;
   return url + (url.includes('?') ? '&' : '?') + '_t=' + bust;
 }
+
+// Root mean square distance (metres) between calibration plan points and where the fitted
+// transform puts their readings. 0 for 1-2 points (they fit exactly).
+export function calibrationError(points, sourceKind) {
+  const f = fitTransform(points, sourceKind);
+  if (!f || points.length < 3) return 0;
+  let sum = 0;
+  for (const p of points) {
+    const q = f(sourceKind === 'xy' ? { u: p.src[0], v: p.src[1] } : { lat: p.src[0], lon: p.src[1] });
+    sum += (q[0] - p.plan[0]) ** 2 + (q[1] - p.plan[1]) ** 2;
+  }
+  return Math.sqrt(sum / points.length);
+}
+
+// Position on the plan for the current reading, or null. Without calibration, xy readings are
+// taken as plan metres; gps needs at least one calibration point.
+export function mowerTransform(cfg) {
+  const kind = cfg.source === 'xy' ? 'xy' : 'gps';
+  const pts = cfg.calibration || [];
+  if (pts.length) return fitTransform(pts, kind);
+  return kind === 'xy' ? (r) => (r ? [r.u, r.v] : null) : null;
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readSource, toPlanar, fitTransform, overlayUrl } from '../src/mower.js';
+import { readSource, toPlanar, fitTransform, overlayUrl, calibrationError, mowerTransform } from '../src/mower.js';
 
 const close = (a, b, digits = 6) => {
   expect(a[0]).toBeCloseTo(b[0], digits);
@@ -140,5 +140,31 @@ describe('overlayUrl', () => {
     expect(overlayUrl(hass, 'image.none')).toBeNull();
     expect(overlayUrl(hass, 'image.missing')).toBeNull();
     expect(overlayUrl(null, 'image.map')).toBeNull();
+  });
+});
+
+describe('calibrationError', () => {
+  it('is 0 for exact fits and small samples', () => {
+    const g = ([u, v]) => [2 * u + 1, v - 3];
+    const pts = [[0, 0], [5, 0], [0, 5], [3, 3]].map((s) => ({ src: s, plan: g(s) }));
+    expect(calibrationError(pts, 'xy')).toBeCloseTo(0);
+    expect(calibrationError(pts.slice(0, 2), 'xy')).toBe(0);
+  });
+
+  it('reports the residual of a noisy fit', () => {
+    const pts = [[0, 0], [10, 0], [10, 10], [0, 10]].map((s, i) => ({ src: s, plan: [s[0] + (i % 2 ? 0.5 : -0.5), s[1]] }));
+    expect(calibrationError(pts, 'xy')).toBeGreaterThan(0.3);
+  });
+});
+
+describe('mowerTransform', () => {
+  it('treats uncalibrated xy as plan metres', () => {
+    expect(mowerTransform({ source: 'xy' })({ u: 2, v: 3 })).toEqual([2, 3]);
+  });
+
+  it('needs calibration for gps', () => {
+    expect(mowerTransform({ source: 'gps' })).toBeNull();
+    const f = mowerTransform({ calibration: [{ src: [45, 10], plan: [1, 2] }] });
+    expect(f({ lat: 45, lon: 10 })).toEqual([1, 2]);
   });
 });

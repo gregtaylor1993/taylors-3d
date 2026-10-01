@@ -6,7 +6,7 @@ import puppeteer from 'puppeteer-core';
 
 export const root = path.resolve(import.meta.dirname, '../..');
 
-const types = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.glb': 'model/gltf-binary' };
+const types = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.glb': 'model/gltf-binary', '.svg': 'image/svg+xml', '.png': 'image/png' };
 
 function findChrome() {
   const chrome = process.env.CHROME_PATH || [
@@ -35,7 +35,7 @@ export async function openDemo(query = {}, viewport = { width: 1400, height: 560
     const page = await browser.newPage();
     page.on('pageerror', (e) => errors.push(e.message));
     page.on('console', (m) => {
-      if ((m.type() === 'error' || m.type() === 'warning') && !m.location().url?.endsWith('favicon.ico')) errors.push(m.type() + ': ' + m.text());
+      if (['error', 'warn', 'warning'].includes(m.type()) && !m.location().url?.endsWith('favicon.ico') && !m.text().includes('GL Driver Message')) errors.push(m.type() + ': ' + m.text());
     });
     await page.setViewport({ deviceScaleFactor: 1, ...viewport });
     const q = new URLSearchParams(Object.entries(query).filter(([, v]) => v !== undefined));

@@ -5,6 +5,7 @@ import * as E from './editor.js';
 import { roomFloorId } from './layout.js';
 import { pointInPolygon, signedArea } from './placement.js';
 import { buildMarkers, areaName } from './registry.js';
+import { readSource, calibrationError } from './mower.js';
 
 const CLICK_SLOP_PX = 5;
 const SNAP_PX = 10; // snap radius never smaller than this many screen pixels
@@ -20,6 +21,8 @@ export class EditMode {
     this.selectedMarker = null;
     this.drawing = null; // { areaId, floorId, points, cursor }
     this.doorMode = false;
+    this.calibrating = null; // { src } waiting for a click on the plan
+    this.overlayMove = false;
     this.drag = null;
     this.confirmDelete = false;
     this.saveState = '';
@@ -28,6 +31,7 @@ export class EditMode {
     this.panel.className = 'panel';
     this.panel.addEventListener('click', (e) => this._onPanelClick(e));
     this.panel.addEventListener('change', (e) => this._onPanelChange(e));
+    this.panel.addEventListener('input', (e) => this._onPanelInput(e));
     this._onKey = (e) => this._onKeyDown(e);
     this._onWinMove = (e) => this._dragMove(e);
     this._onWinUp = (e) => this._dragEnd(e);
@@ -67,6 +71,8 @@ export class EditMode {
     this._endWindowDrag();
     this.drawing = null;
     this.doorMode = false;
+    this.calibrating = null;
+    this.overlayMove = false;
     this.selectedRoom = null;
     this.selectedMarker = null;
     this.view.setOverlay({});
@@ -118,6 +124,15 @@ export class EditMode {
   }
 
   _click(e) {
+    if (this.calibrating) {
+      const p = this._planPoint(e, this.card._mowerFloor());
+      if (!p) return;
+      const plan = E.snapPoint(p, { radius: 0 }).point;
+      const { src } = this.calibrating;
+      this.calibrating = null;
+      this.setMower({ calibration: [...(this.mower().calibration || []), { src, plan }] });
+      return;
+    }
     const fid = this.drawing ? this.drawing.floorId : this.activeFloor();
     const p = this._planPoint(e, fid);
     if (!p) return;
@@ -247,7 +262,60 @@ export class EditMode {
   }
 
   _syncStageClasses() {
-    this.card._stage.classList.toggle('drawing', !!this.drawing || this.doorMode);
+    this.card._stage.classList.toggle('drawing', !!this.drawing || this.doorMode || !!this.calibrating);
+    this.card._stage.classList.toggle('moving', this.overlayMove);
+  }
+
+  // Overlay move tool: grab the pointer before OrbitControls sees it (capture phase on the stage).
+  canvasDownCapture(e) {
+    const o = this.mower().overlay;
+    if (!this.overlayMove || !o || e.button !== 0) return;
+    e.stopPropagation();
+    const fid = this.card._mowerFloor();
+    const start = this._planPoint(e, fid);
+    if (!start) return;
+    this._startWindowDrag({ kind: 'overlay', start: [e.clientX, e.clientY], plan: start, origin: [o.x || 0, o.y || 0], floorId: fid, moved: false });
+  }
+
+  // ---------- mower ----------
+  mower() {
+    return this.layout.mower || {};
+  }
+
+  setMower(patch) {
+    const cur = this.layout.mower || { entity: '', source: 'gps', x_attr: 'x', y_attr: 'y', floor_id: this.floors[0].id, calibration: [], overlay: null, trail: true };
+    this.commit({ ...this.layout, mower: { ...cur, ...patch } });
+    this.render();
+  }
+
+  setOverlay(patch, rerender = true) {
+    const m = this.mower();
+    const cur = m.overlay || { entity: '', x: 0, y: 0, rotation: 0, width: 20, opacity: 0.6, refresh: 10 };
+    const overlay = { ...cur, ...patch };
+    this.card._commit({ ...this.layout, mower: { ...m, overlay } });
+    if (rerender) this.render();
+  }
+
+  // live values in the Mower tab, without re-rendering the panel
+  onStates() {
+    if (this.tab !== 'mower') return;
+    const el = this.panel.querySelector('.mower-live');
+    if (el) el.innerHTML = this._mowerLiveHtml();
+  }
+
+  _mowerLiveHtml() {
+    const m = this.mower();
+    const st = m.entity && this.hass.states[m.entity];
+    if (!m.entity) return 'Pick the entity that reports the mower position.';
+    if (!st) return `Entity <b>${esc(m.entity)}</b> not found.`;
+    const r = readSource(st, m);
+    if (!r) return m.source === 'xy'
+      ? `No numeric <b>${esc(m.x_attr || 'x')}</b> / <b>${esc(m.y_attr || 'y')}</b> attributes on ${esc(m.entity)}.`
+      : `No latitude/longitude on ${esc(m.entity)} (state: ${esc(st.state)}).`;
+    const live = this.card._mowerLive;
+    const raw = r.raw.map((v) => (m.source === 'xy' ? fmt(v) : v.toFixed(6))).join(', ');
+    const plan = live && live.floorId ? `on plan (${fmt(live.x)}, ${fmt(live.y)})` : 'not on the plan yet: add a calibration point';
+    return `Reading ${raw}<br>${plan}`;
   }
 
   // ---------- overlay ----------
@@ -346,7 +414,11 @@ export class EditMode {
   markerDown(m, e) {
     if (e.button !== 0) return;
     e.stopPropagation();
-    if (this.drawing || this.doorMode) return;
+    if (this.drawing || this.doorMode || this.calibrating) return;
+    if (m.id === this.card._mowerMarkerId) {
+      this.selectMarker(m.id); // positioned live, nothing to drag
+      return;
+    }
     const pos = this.card._positions && this.card._positions.get(m.id);
     this.selectMarker(m.id);
     if (!pos) return;
@@ -358,6 +430,13 @@ export class EditMode {
     if (!d) return;
     if (!d.moved && Math.hypot(e.clientX - d.start[0], e.clientY - d.start[1]) < CLICK_SLOP_PX) return;
     d.moved = true;
+    if (d.kind === 'overlay') {
+      const p = this._planPoint(e, d.floorId);
+      if (!p) return;
+      const r = (v) => Math.round(v * 100) / 100;
+      this.setOverlay({ x: r(d.origin[0] + p[0] - d.plan[0]), y: r(d.origin[1] + p[1] - d.plan[1]) }, false);
+      return;
+    }
     if (d.kind === 'marker') {
       const p = this._planPoint(e, d.pos.floorId, d.pos.z);
       if (!p) return;
@@ -394,7 +473,9 @@ export class EditMode {
       if (d && d.kind !== 'marker') this.refreshOverlay();
       return;
     }
-    if (d.kind === 'marker') {
+    if (d.kind === 'overlay') {
+      this.render();
+    } else if (d.kind === 'marker') {
       this.commit(E.setPin(this.layout, d.id, { x: d.pos.x, y: d.pos.y, z: d.pos.z, floor_id: d.pos.floorId }));
     } else if (d.preview) {
       this.commit(E.upsertRoom(this.layout, d.preview));
@@ -514,6 +595,11 @@ export class EditMode {
     if (m) {
       const pos = this.card._positions && this.card._positions.get(m.id);
       const pinned = !!(this.layout.pins || {})[m.id];
+      if (m.id === this.card._mowerMarkerId) {
+        return out + `<section class="box"><h3>${esc(m.name)}</h3><p class="dim">${esc(m.entityId)}</p>
+          <p>Follows the live mower position. Set it up in the Mower tab.</p>
+          <div class="row"><button data-act="deselect-marker">Done</button></div></section>`;
+      }
       out += `<section class="box"><h3>${esc(m.name)}</h3>
         <p class="dim">${esc(m.entityId)}${m.areaId ? ' · ' + esc(areaName(this.hass, m.areaId)) : ''}</p>
         <p>${pinned ? 'Pinned' : 'Auto placed'}</p>
@@ -550,7 +636,60 @@ export class EditMode {
   }
 
   _mowerTab() {
-    return '<p class="hint">Robot mower position, calibration and map overlay are not available in this version yet.</p>';
+    const m = this.mower();
+    const states = this.hass.states;
+    const ids = Object.keys(states).sort();
+    const posIds = ids.filter((id) => /^(device_tracker|sensor|lawn_mower|vacuum)\./.test(id));
+    const picIds = ids.filter((id) => /^(image|camera)\./.test(id));
+    const datalist = (id, list) => `<datalist id="${id}">${list.map((x) => `<option value="${esc(x)}">`).join('')}</datalist>`;
+    const floorOpts = this.floors.map((f) => `<option value="${esc(f.id)}" ${f.id === this.card._mowerFloor() ? 'selected' : ''}>${esc(f.name)}</option>`).join('');
+    const cal = m.calibration || [];
+    const err = calibrationError(cal, m.source === 'xy' ? 'xy' : 'gps');
+    const fitName = ['', 'shift only', 'shift, rotate, scale', 'affine (least squares)'][Math.min(cal.length, 3)];
+    let out = `<div class="sub">Position</div>
+      <label>Entity <input list="fp-pos-ents" data-field="mower-entity" value="${esc(m.entity || '')}" placeholder="device_tracker.mower_position"></label>
+      ${datalist('fp-pos-ents', posIds)}
+      <label>Source <select data-field="mower-source">
+        <option value="gps" ${m.source !== 'xy' ? 'selected' : ''}>GPS (latitude / longitude)</option>
+        <option value="xy" ${m.source === 'xy' ? 'selected' : ''}>Map x / y attributes</option></select></label>
+      ${m.source === 'xy' ? `<div class="row"><label>x attribute <input data-field="mower-xattr" value="${esc(m.x_attr || 'x')}"></label>
+        <label>y attribute <input data-field="mower-yattr" value="${esc(m.y_attr || 'y')}"></label></div>` : ''}
+      <label>Floor <select data-field="mower-floor">${floorOpts}</select></label>
+      <label class="check"><input type="checkbox" data-field="mower-trail" ${m.trail !== false ? 'checked' : ''}> Show trail (this session)</label>
+      <p class="hint mower-live">${this._mowerLiveHtml()}</p>`;
+    if (!m.entity) return out;
+
+    out += `<div class="sub">Calibration (${cal.length} point${cal.length === 1 ? '' : 's'}${cal.length ? ': ' + fitName : ''})</div>`;
+    if (this.calibrating) {
+      out += `<section class="box"><p>Click on the plan where the mower is right now.</p>
+        <div class="row"><button data-act="cal-cancel">Cancel</button></div></section>`;
+    }
+    out += '<ul class="plain">' + cal.map((c, i) => `<li>${i + 1}. (${c.src.map((v) => (m.source === 'xy' ? fmt(v) : v.toFixed(6))).join(', ')}) → (${fmt(c.plan[0])}, ${fmt(c.plan[1])})
+      <button class="link" data-act="cal-del" data-i="${i}">Remove</button></li>`).join('') + '</ul>';
+    if (cal.length >= 3) out += `<p class="dim">Fit error ${fmt(err)} m</p>`;
+    out += `<div class="row"><button data-act="cal-add" class="${this.calibrating ? '' : 'primary'}" ${this.calibrating ? 'disabled' : ''}>Add point</button>
+      ${this.card._trail && this.card._trail.length ? '<button data-act="trail-clear">Clear trail</button>' : ''}</div>
+      <p class="hint">"Add point" takes the current reading, then you click where the mower really is. One point aligns
+      a GPS track north-up, two fix rotation and scale, three or more also correct skew. Spread points far apart.</p>`;
+
+    const o = m.overlay;
+    out += `<div class="sub">Map overlay</div>
+      <label>Image or camera entity <input list="fp-pic-ents" data-field="ov-entity" value="${esc((o && o.entity) || '')}" placeholder="image.mower_map"></label>
+      ${datalist('fp-pic-ents', picIds)}`;
+    if (o && o.entity) {
+      const slider = (f, label, min, max, step, v) => `<label>${label} <span class="val" data-val="${f}">${fmt(v)}</span>
+        <input type="range" data-field="ov-${f}" min="${min}" max="${max}" step="${step}" value="${v}"></label>`;
+      out += slider('x', 'x (m)', -100, 100, 0.05, o.x ?? 0)
+        + slider('y', 'y (m)', -100, 100, 0.05, o.y ?? 0)
+        + slider('rotation', 'Rotation (°)', -180, 180, 0.5, o.rotation ?? 0)
+        + slider('width', 'Width (m)', 1, 200, 0.1, o.width ?? 20)
+        + slider('opacity', 'Opacity', 0, 1, 0.05, o.opacity ?? 0.6)
+        + (o.entity.startsWith('camera.') ? slider('refresh', 'Refresh every (s)', 1, 120, 1, o.refresh ?? 10) : '');
+      out += `<div class="row"><button data-act="ov-move" class="${this.overlayMove ? 'primary' : ''}">${this.overlayMove ? 'Drag the map on the plan…' : 'Move with mouse'}</button>
+        <button data-act="ov-remove">Remove overlay</button></div>`;
+    }
+    out += '<div class="row"><button data-act="mower-remove" class="danger">Remove mower</button></div>';
+    return out;
   }
 
   _dataTab() {
@@ -619,6 +758,21 @@ export class EditMode {
         return;
       }
       case 'export': this._export(); return;
+      case 'cal-add': {
+        const m = this.mower();
+        const r = readSource(this.hass.states[m.entity], m);
+        if (!r) { this.message = { text: 'No position reading from the mower entity right now.', error: true }; break; }
+        this.calibrating = { src: r.raw };
+        this.overlayMove = false;
+        if (this.card._floor !== this.card._mowerFloor()) this.card._setFloor(this.card._mowerFloor());
+        break;
+      }
+      case 'cal-cancel': this.calibrating = null; break;
+      case 'cal-del': this.setMower({ calibration: (this.mower().calibration || []).filter((_, i) => i !== Number(btn.dataset.i)) }); return;
+      case 'trail-clear': this.card.clearTrail(); break;
+      case 'ov-move': this.overlayMove = !this.overlayMove; this.calibrating = null; break;
+      case 'ov-remove': this.overlayMove = false; this.setMower({ overlay: null }); return;
+      case 'mower-remove': this.calibrating = null; this.overlayMove = false; this.commit({ ...this.layout, mower: null }); this.render(); return;
       default: return;
     }
     this._syncStageClasses();
@@ -650,11 +804,44 @@ export class EditMode {
       const pos = this.card._positions.get(this.selectedMarker);
       if (!Number.isFinite(v) || !pos) return;
       this.commit(E.setPin(this.layout, this.selectedMarker, { x: pos.x, y: pos.y, z: v, floor_id: pos.floorId }));
+    } else if (f === 'mower-entity') {
+      this.setMower({ entity: el.value.trim() });
+    } else if (f === 'mower-source') {
+      // readings of the other kind cannot be mixed into the same calibration
+      this.setMower({ source: el.value, calibration: [] });
+    } else if (f === 'mower-xattr' || f === 'mower-yattr') {
+      this.setMower({ [f === 'mower-xattr' ? 'x_attr' : 'y_attr']: el.value.trim() || (f === 'mower-xattr' ? 'x' : 'y') });
+    } else if (f === 'mower-floor') {
+      this.card._setFloor(el.value);
+      this.setMower({ floor_id: el.value });
+    } else if (f === 'mower-trail') {
+      this.setMower({ trail: el.checked });
+    } else if (f === 'ov-entity') {
+      const v = el.value.trim();
+      if (!v) this.setMower({ overlay: null });
+      else {
+        // first time: centre the map on the current view
+        const t = this.view.controls.target;
+        const first = !this.mower().overlay;
+        this.setOverlay(first ? { entity: v, x: Math.round(t.x * 10) / 10, y: Math.round(-t.z * 10) / 10 } : { entity: v });
+      }
     } else if (f === 'import') {
       const file = el.files && el.files[0];
       el.value = ''; // picking the same file again must fire change again
       if (file) file.text().then((text) => this._import(text));
     }
+  }
+
+  // sliders update the overlay live, without re-rendering the panel under the pointer
+  _onPanelInput(e) {
+    const el = e.target;
+    const f = el.dataset.field;
+    if (!f || !f.startsWith('ov-') || el.type !== 'range') return;
+    const key = f.slice(3);
+    const v = Number(el.value);
+    const label = this.panel.querySelector(`[data-val="${key}"]`);
+    if (label) label.textContent = fmt(v);
+    this.setOverlay({ [key]: v }, false);
   }
 
   _import(text) {

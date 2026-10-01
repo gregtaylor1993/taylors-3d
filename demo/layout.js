@@ -25,5 +25,16 @@ export const DEMO_LAYOUT = {
     'device:floor_lamp': { x: 0.6, y: 4.3, z: 1.5, floor_id: 'ground' },
   },
   hidden: [],
-  mower: null,
+  mower: {
+    entity: 'device_tracker.sunseeker_position',
+    source: 'gps',
+    floor_id: 'ground',
+    // garden centre (16.5, 1.5); second point 4 m north of it
+    calibration: [
+      { src: [45.0, 10.0], plan: [16.5, 1.5] },
+      { src: [45.0 + 4 / 111320, 10.0], plan: [16.5, 5.5] },
+    ],
+    overlay: { entity: 'image.sunseeker_map', x: 16.5, y: 1.5, rotation: 0, width: 9, opacity: 0.55, refresh: 10 },
+    trail: true,
+  },
 };

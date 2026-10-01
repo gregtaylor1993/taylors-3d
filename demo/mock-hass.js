@@ -67,6 +67,7 @@ device('mower', 'Sunseeker', 'garden', [
   ['device_tracker.sunseeker_position', 'not_home', { latitude: 45.0, longitude: 10.0 }],
 ]);
 device('garden_cam', 'Garden camera', 'garden', [['camera.garden', 'idle']]);
+device('mower_map', 'Sunseeker map', 'garden', [['image.sunseeker_map', '2026-01-01T00:00:00+00:00', { entity_picture: '/demo/mower-map.svg' }]]);
 device('garage_door', 'Garage door', 'garage', [['cover.garage', 'closed']]); // no room drawn: not shown
 
 device('kids_light', 'Kids light', 'kids_room', [light('light.kids', true, 90, [255, 120, 200])]);
@@ -115,12 +116,12 @@ export function createMockHass({ onChange }) {
   // mower drives a circle in the garden (~4 m radius)
   let t = 0;
   setInterval(() => {
-    t += 0.08;
+    t += 0.06;
     const lat = 45.0 + (Math.sin(t) * 4) / 111320;
     const lon = 10.0 + (Math.cos(t) * 4) / (111320 * Math.cos((45.0 * Math.PI) / 180));
     const s = current.states['device_tracker.sunseeker_position'];
     update({ 'device_tracker.sunseeker_position': { ...s, attributes: { ...s.attributes, latitude: lat, longitude: lon } } });
-  }, 1000);
+  }, 500);
 
   return current;
 }

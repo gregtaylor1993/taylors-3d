@@ -59,7 +59,10 @@ export class FloorplanView {
     this.markerGroup = new THREE.Group();
     this.glowGroup = new THREE.Group();
     this.overlayGroup = new THREE.Group(); // editor graphics, drawn on top
-    this.scene.add(this.staticGroup, this.glowGroup, this.markerGroup, this.overlayGroup);
+    this.mowerGroup = new THREE.Group(); // map image + trail
+    this.scene.add(this.staticGroup, this.mowerGroup, this.glowGroup, this.markerGroup, this.overlayGroup);
+    this.mapPlane = null;
+    this.trail = null;
     this.raycaster = new THREE.Raycaster();
 
     this.floors = [];
@@ -149,6 +152,76 @@ export class FloorplanView {
       this.cssObjects.push({ obj, floorId: h.floorId, kind: 'handle' });
     }
     this._applyFloorVisibility();
+    this.dirty = true;
+  }
+
+  // Mower map image laid on the floor. o: {url, x, y, rotation, width, opacity, floorId} or null.
+  // x, y = image centre in plan metres, rotation in degrees counter-clockwise, top of image = north.
+  setMapOverlay(o) {
+    if (!o || !o.url) {
+      if (this.mapPlane) {
+        this.mowerGroup.remove(this.mapPlane);
+        this.mapPlane.geometry.dispose();
+        if (this.mapPlane.material.map) this.mapPlane.material.map.dispose();
+        this.mapPlane.material.dispose();
+        this.mapPlane = null;
+        this.dirty = true;
+      }
+      return;
+    }
+    if (!this.mapPlane) {
+      const mat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide });
+      this.mapPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), mat);
+      this.mapPlane.renderOrder = 1;
+      this.mapPlane.visible = false; // until the first image arrives
+      this.mowerGroup.add(this.mapPlane);
+    }
+    const plane = this.mapPlane;
+    plane.userData.floorId = o.floorId;
+    plane.position.copy(planToWorld(o.x || 0, o.y || 0, 0.015, this.floorElevation(o.floorId)));
+    plane.rotation.y = ((o.rotation || 0) * Math.PI) / 180;
+    plane.material.opacity = o.opacity ?? 0.6;
+    const aspect = plane.userData.aspect || 1;
+    const w = o.width || 20;
+    plane.scale.set(w, 1, w * aspect);
+    if (plane.userData.url !== o.url) {
+      plane.userData.url = o.url;
+      // swap textures only once the new image has loaded, so camera refreshes don't flicker
+      new THREE.TextureLoader().load(o.url, (tex) => {
+        if (plane.userData.url !== o.url || this.mapPlane !== plane) { tex.dispose(); return; }
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const old = plane.material.map;
+        plane.material.map = tex;
+        plane.material.needsUpdate = true;
+        if (old) old.dispose();
+        plane.userData.aspect = tex.image.height / tex.image.width;
+        plane.scale.set(w, 1, w * plane.userData.aspect);
+        plane.visible = this._shows(o.floorId);
+        this.dirty = true;
+      }, undefined, () => console.warn('floorplan3d: could not load mower map', o.url));
+    }
+    if (plane.material.map) plane.visible = this._shows(o.floorId);
+    this.dirty = true;
+  }
+
+  // Mower trail: plan points [[x, y], ...] on one floor, or null.
+  setTrail(points, floorId) {
+    if (this.trail) {
+      this.mowerGroup.remove(this.trail);
+      this.trail.geometry.dispose();
+      this.trail.material.dispose();
+      this.trail = null;
+    }
+    if (points && points.length > 1) {
+      const geo = new THREE.BufferGeometry().setFromPoints(points.map(([x, y]) => new THREE.Vector3(x, 0, -y)));
+      const color = this.theme.primary || 0x03a9f4;
+      this.trail = new THREE.Line(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.8, depthTest: false }));
+      this.trail.position.y = this.floorElevation(floorId) + 0.04;
+      this.trail.renderOrder = 3;
+      this.trail.userData.floorId = floorId;
+      this.trail.visible = this._shows(floorId);
+      this.mowerGroup.add(this.trail);
+    }
     this.dirty = true;
   }
 
@@ -308,6 +381,8 @@ export class FloorplanView {
     for (const c of this.cssObjects) c.obj.visible = this._shows(c.floorId);
     for (const g of this.glows.values()) g.mesh.visible = this._shows(g.floorId);
     for (const o of this.overlayGroup.children) if (!o.isCSS2DObject) o.visible = this._shows(o.userData.floorId);
+    if (this.trail) this.trail.visible = this._shows(this.trail.userData.floorId);
+    if (this.mapPlane && this.mapPlane.material.map) this.mapPlane.visible = this._shows(this.mapPlane.userData.floorId);
   }
 
   setMode(mode) {
@@ -432,6 +507,8 @@ export class FloorplanView {
     this._clearGroup(this.markerGroup);
     this._clearGroup(this.glowGroup);
     this._clearGroup(this.overlayGroup);
+    this.setMapOverlay(null);
+    this.setTrail(null);
     this.markerObjects.clear();
     this.glows.clear();
     this.cssObjects = [];

@@ -58,6 +58,7 @@ const drag = async (from, to) => {
 };
 
 try {
+  await ev(`window.__demoMower = ${card}._layout.mower`);
   // enter edit mode
   await ev(`${card}.shadowRoot.querySelector("button.edit").click()`);
   await sleep(300);
@@ -165,6 +166,33 @@ try {
   await page.keyboard.press('Escape');
   await sleep(100);
   check('Esc cancels drawing', (await ev(`${card}._edit.drawing`)) === null && (await layout()).rooms.length === 1);
+
+  // mower: start from the demo layout again (the import above replaced it)
+  await ev(`${card}._edit.commit(${card}._edit.layout.mower ? ${card}._edit.layout : { ...${card}._layout, mower: window.__demoMower })`);
+  await panelClick('Mower');
+  await sleep(1200);
+  const live = await ev(`${card}.shadowRoot.querySelector(".mower-live").textContent`);
+  check('mower tab shows live reading on plan', /Reading 45\.\d+, 10\.\d+/.test(live) && live.includes('on plan'), live.trim());
+  check('mower marker follows live position', await ev(`(() => { const c = ${card}; const p = c._positions.get(c._mowerMarkerId); return !!p && p.live && Math.hypot(p.x - 16.5, p.y - 1.5) < 4.5; })()`));
+  check('trail drawn', await ev(`!!${card}._view.trail && ${card}._trail.length > 1`));
+  check('map overlay loaded', await ev(`!!${card}._view.mapPlane && !!${card}._view.mapPlane.material.map`));
+  const cal0 = (await layout()).mower.calibration.length;
+  check('add calibration point', await panelClick('Add point'));
+  check('calibrating', !!(await ev(`${card}._edit.calibrating`)));
+  await click(17.0, 2.0);
+  l = await layout();
+  check('calibration point stored', l.mower.calibration.length === cal0 + 1 && JSON.stringify(l.mower.calibration[cal0].plan) === '[17,2]', JSON.stringify(l.mower.calibration[cal0]));
+  await ev(`(() => { const s = ${card}.shadowRoot.querySelector("[data-field=ov-rotation]"); s.value = "30"; s.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+  await sleep(150);
+  check('overlay slider updates live', (await layout()).mower.overlay.rotation === 30 && (await ev(`Math.round(${card}._view.mapPlane.rotation.y * 180 / Math.PI)`)) === 30);
+  check('slider kept in DOM (no re-render)', await ev(`${card}.shadowRoot.querySelector("[data-field=ov-rotation]").value === "30"`));
+  await panelClick('Move with mouse');
+  const ov0 = (await layout()).mower.overlay;
+  await drag(await at(16.5, 1.5), await at(18.5, 0.5));
+  const ov1 = (await layout()).mower.overlay;
+  check('overlay drag moves map', Math.abs(ov1.x - ov0.x - 2) < 0.15 && Math.abs(ov1.y - ov0.y + 1) < 0.15, `${ov0.x},${ov0.y} -> ${ov1.x},${ov1.y}`);
+  await panelClick('Drag the map on the plan…');
+  await page.screenshot({ path: path.join(shots, 'edit-mower.png') });
 
   // leave edit mode: markers behave as in view mode again
   await ev(`${card}.shadowRoot.querySelector("button.edit").click()`);

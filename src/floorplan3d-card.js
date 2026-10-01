@@ -6,11 +6,15 @@ import { EditMode } from './edit-mode.js';
 import { LayoutStore } from './storage.js';
 import { buildMarkers, registrySignature, iconFor, isActive, displayValue, areaName } from './registry.js';
 import { mergeFloors, roomFloorId, markerPositions, lightGlow } from './layout.js';
+import { readSource, mowerTransform, overlayUrl } from './mower.js';
 
 const VERSION = '0.1.0';
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LONG_PRESS_MS = 500;
 const CLICK_SLOP_PX = 5;
+const TRAIL_STEP_M = 0.15;
+const TRAIL_MAX = 3000;
+const MOWER_Z = 0.15;
 
 const STYLE = `
   :host { display: block; }
@@ -130,6 +134,14 @@ const STYLE = `
   .stage.drawing { cursor: crosshair; }
   .stage.drawing .fp-marker { pointer-events: none; opacity: .4; }
   .stage.drawing .fp-handle { pointer-events: none; }
+  .stage.moving { cursor: move; }
+  .stage.moving .fp-marker, .stage.moving .fp-handle { pointer-events: none; }
+  .panel input[type=range] { width: 100%; margin: 0; accent-color: var(--primary-color); }
+  .panel label .val { float: right; color: var(--primary-text-color); }
+  .panel input:not([type]), .panel input[list] { font: inherit; padding: 5px 6px; border-radius: 6px;
+    border: 1px solid var(--divider-color, rgba(0,0,0,.2)); background: var(--card-background-color, #fff);
+    color: var(--primary-text-color); min-width: 0; }
+  .panel .row label { flex: 1; }
   .fp-marker.selected .fp-dot { outline: 3px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
   .compact .fp-dot { width: 21px; height: 21px; --mdc-icon-size: 13px; border-width: 1px; }
   .compact .fp-val { font-size: 9.5px; padding: 0 4px; }
@@ -202,6 +214,7 @@ class Floorplan3dCard extends HTMLElement {
   disconnectedCallback() {
     if (this._view) this._view.stop();
     if (this._ro) this._ro.disconnect();
+    this._setCameraTimer(0);
   }
 
   async _load() {
@@ -250,6 +263,9 @@ class Floorplan3dCard extends HTMLElement {
     this._edit = new EditMode(this);
     this._body.append(this._edit.panel);
     const canvas = this._view.renderer.domElement;
+    this._stage.addEventListener('pointerdown', (e) => {
+      if (this._editing && e.target === canvas) this._edit.canvasDownCapture(e);
+    }, true);
     canvas.addEventListener('pointerdown', (e) => this._editing && this._edit.canvasDown(e));
     canvas.addEventListener('pointermove', (e) => this._editing && this._edit.canvasMove(e));
     canvas.addEventListener('pointerup', (e) => this._editing && this._edit.canvasUp(e));
@@ -292,7 +308,7 @@ class Floorplan3dCard extends HTMLElement {
     const r = this._stage.getBoundingClientRect();
     if (!r.width || !r.height) return;
     this._view.resize(r.width, r.height);
-    if (!this._fitted && this._built.layout) {
+    if (!this._fitted && this._built.rooms) {
       this._fitted = true;
       this._view.fit();
     }
@@ -307,31 +323,129 @@ class Floorplan3dCard extends HTMLElement {
     });
   }
 
+  // Rebuild only what changed. Edits replace just the layout parts they touch, so identity
+  // comparisons per part keep e.g. overlay slider changes from rebuilding the whole scene.
   _update() {
     const h = this._hass;
     const b = this._built;
-    let structure = false, markers = false;
+    const l = this._layout;
+    let structure = false, markers = false, mower = false;
 
     if (h.themes !== b.themes || !b.theme) {
       b.themes = h.themes;
       this._applyTheme();
       structure = true;
     }
-    if (structure || this._layout !== b.layout || h.floors !== b.floors || h.areas !== b.areas) {
+    if (structure || l.rooms !== b.rooms || l.floors !== b.lfloors || h.floors !== b.floors || h.areas !== b.areas) {
       this._buildStructure();
       markers = true;
     }
     const sig = registrySignature(h);
-    if (markers || !b.sig || sig.some((x, i) => x !== b.sig[i])) {
+    const m = l.mower || null;
+    const mowerKey = m ? `${m.entity}|${m.floor_id}` : '';
+    if (markers || !b.sig || sig.some((x, i) => x !== b.sig[i]) || l.pins !== b.pins || l.hidden !== b.hidden || mowerKey !== b.mowerKey) {
       b.sig = sig;
+      b.pins = l.pins;
+      b.hidden = l.hidden;
+      b.mowerKey = mowerKey;
       this._buildMarkers();
       markers = true;
     }
-    if (h.states !== b.states || markers) {
+    if (m !== b.mower) {
+      b.mower = m;
+      this._mowerFn = m && m.entity ? mowerTransform(m) : null;
+      mower = true;
+    }
+    if (h.states !== b.states || markers || mower) {
       b.states = h.states;
       this._refreshStates();
+      this._refreshMower(mower);
     }
     if (markers && this._editing) this._edit.afterUpdate();
+    else if (this._editing) this._edit.onStates();
+  }
+
+  _mowerFloor() {
+    const m = this._layout.mower;
+    return m && this._floors.some((f) => f.id === m.floor_id) ? m.floor_id : this._floors[0].id;
+  }
+
+  // Live mower: move its marker, extend the trail, refresh the map overlay.
+  _refreshMower(configChanged) {
+    const cfg = this._layout.mower;
+    if (!cfg || !cfg.entity) {
+      this._trail = [];
+      this._mowerLive = null;
+      this._view.setTrail(null);
+      this._view.setMapOverlay(null);
+      this._setCameraTimer(0);
+      return;
+    }
+    const floorId = this._mowerFloor();
+    const reading = readSource(this._hass.states[cfg.entity], cfg);
+    const p = reading && this._mowerFn ? this._mowerFn(reading) : null;
+    this._mowerLive = p ? { x: p[0], y: p[1], floorId, reading } : (reading ? { reading } : null);
+    const id = this._mowerMarkerId;
+    if (p && id) {
+      const pos = { x: p[0], y: p[1], z: MOWER_Z, floorId, auto: false, live: true };
+      this._positions.set(id, pos);
+      if (!this._view.markerObjects.has(id)) {
+        this._buildMarkers();
+        this._refreshStates();
+      } else {
+        this._view.moveMarker(id, pos.x, pos.y, pos.z, floorId);
+      }
+    }
+    if (configChanged) this._trail = [];
+    if (cfg.trail !== false) {
+      const t = (this._trail = this._trail || []);
+      const last = t[t.length - 1];
+      if (p && (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) >= TRAIL_STEP_M)) {
+        t.push(p);
+        if (t.length > TRAIL_MAX) t.splice(0, t.length - TRAIL_MAX);
+        this._view.setTrail(t, floorId);
+      } else if (configChanged) {
+        this._view.setTrail(t, floorId);
+      }
+    } else {
+      this._view.setTrail(null);
+    }
+    this._refreshMapOverlay();
+  }
+
+  clearTrail() {
+    this._trail = [];
+    this._view.setTrail(null);
+  }
+
+  _refreshMapOverlay() {
+    const cfg = this._layout.mower;
+    const o = cfg && cfg.overlay;
+    const st = o && o.entity && this._hass.states[o.entity];
+    if (!st) {
+      this._view.setMapOverlay(null);
+      this._setCameraTimer(0);
+      return;
+    }
+    const camera = o.entity.startsWith('camera.');
+    this._setCameraTimer(camera ? Math.max(1, Number(o.refresh) || 10) : 0);
+    // image entities change their state when the picture changes; cameras are polled
+    const bust = camera ? this._cameraTick || 1 : st.last_updated || st.state;
+    this._view.setMapOverlay({
+      url: overlayUrl(this._hass, o.entity, bust),
+      x: o.x, y: o.y, rotation: o.rotation, width: o.width, opacity: o.opacity,
+      floorId: this._mowerFloor(),
+    });
+  }
+
+  _setCameraTimer(seconds) {
+    if (this._cameraTimerSec === seconds) return;
+    clearInterval(this._cameraTimer);
+    this._cameraTimerSec = seconds;
+    this._cameraTimer = seconds && this.isConnected ? setInterval(() => {
+      this._cameraTick = Date.now();
+      this._refreshMapOverlay();
+    }, seconds * 1000) : null;
   }
 
   _applyTheme() {
@@ -353,7 +467,8 @@ class Floorplan3dCard extends HTMLElement {
 
   _buildStructure() {
     const h = this._hass, b = this._built;
-    b.layout = this._layout;
+    b.rooms = this._layout.rooms;
+    b.lfloors = this._layout.floors;
     b.floors = h.floors;
     b.areas = h.areas;
     this._floors = mergeFloors(h, this._layout);
@@ -385,6 +500,26 @@ class Floorplan3dCard extends HTMLElement {
     const h = this._hass;
     this._markers = buildMarkers(h, this._layout, { group_by: this._config.group_by });
     this._positions = markerPositions(this._markers, this._layout, h, this._floors);
+
+    // the mower's device marker follows the live position instead of being auto placed
+    const cfg = this._layout.mower;
+    this._mowerMarkerId = null;
+    if (cfg && cfg.entity) {
+      const reg = h.entities && h.entities[cfg.entity];
+      const devId = reg && reg.device_id;
+      let mm = this._markers.find((m) => (devId ? m.deviceId === devId : m.entityId === cfg.entity));
+      if (!mm) {
+        const st = h.states[cfg.entity];
+        mm = { id: 'mower:' + cfg.entity, entityId: cfg.entity, domain: cfg.entity.split('.')[0],
+          name: (st && st.attributes.friendly_name) || cfg.entity, entities: [], secondaryId: null };
+        this._markers.push(mm);
+      }
+      this._mowerMarkerId = mm.id;
+      const live = this._mowerLive;
+      if (live && live.floorId) this._positions.set(mm.id, { x: live.x, y: live.y, z: MOWER_Z, floorId: live.floorId, auto: false, live: true });
+      else this._positions.delete(mm.id);
+    }
+
     this._markerEls.clear();
     const list = [];
     for (const m of this._markers) {
@@ -440,7 +575,7 @@ class Floorplan3dCard extends HTMLElement {
       el.classList.toggle('active', isActive(st));
       el.classList.toggle('unavailable', !st || st.state === 'unavailable');
       const icon = el.querySelector('ha-icon');
-      const ic = iconFor(h, m.entityId);
+      const ic = m.id === this._mowerMarkerId ? 'mdi:robot-mower' : iconFor(h, m.entityId);
       if (icon.getAttribute('icon') !== ic) icon.setAttribute('icon', ic);
       const own = displayValue(h, m.entityId);
       el.querySelector('.fp-val').textContent = own || (m.secondaryId ? displayValue(h, m.secondaryId) : '');
