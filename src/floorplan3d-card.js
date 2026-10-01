@@ -259,6 +259,7 @@ class Floorplan3dCard extends HTMLElement {
       // nothing drawn yet: show the model instead of an empty plan
       if (!err && firstLoad && this._view.model && !this._allRooms().length) this._view.fit({ instant: true });
       this._stage.classList.toggle('has-model', !!this._view.model);
+      if (this._view.model) this._view.setDaylight(this._daylight);
       this._syncToolbar();
       this._schedule(); // the manifest arrived: rebuild
       if (this._editing) this._edit.onModelLoaded();
@@ -776,6 +777,7 @@ class Floorplan3dCard extends HTMLElement {
     }
     for (const btn of this.shadowRoot.querySelectorAll('.seg button')) btn.classList.toggle('on', btn.dataset.mode === this._mode);
     this._dayBtn.hidden = !(this._view && this._view.model);
+    this._dayBtn.textContent = this._daylight ? '\u2600' : '\u263e';
     this._editBtn.hidden = !(this._hass && this._hass.user && this._hass.user.is_admin);
     this._editBtn.querySelector('span').textContent = this._editing ? 'Done' : 'Edit';
     if (this._empty && this._editing) this._empty.hidden = true;

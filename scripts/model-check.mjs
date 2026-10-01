@@ -83,7 +83,7 @@ try {
   await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').click()`);
   await sleep(300);
   const night = await lights();
-  check('night: sun off, hemisphere dim', night.sun === 0 && night.hemi < 0.2, JSON.stringify(night));
+  check('night: sun off, hemisphere dim', night.sun === 0 && night.hemi <= 0.4, JSON.stringify(night));
   check('button shows the moon at night', (await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').textContent`)) === '☾');
   await sh('look-night.png');
   await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').click()`);
@@ -225,6 +225,15 @@ try {
   await clickText('Frame model');
   await sleep(200);
   check('frame model moves the camera', (await page.evaluate(`${card}._view.camera.position.toArray().join()`)) !== cam0);
+  // day/night survives a model reload
+  const dn = `${card}.shadowRoot.querySelector('button.daynight')`;
+  await page.evaluate(`${dn}.click()`);
+  await upload(path.join(root, 'demo', 'house.glb'));
+  await sleep(1500);
+  check('night kept after re-upload', (await page.evaluate(`${dn}.textContent`)) === '\u263e' && (await page.evaluate(`${card}._view.sun.intensity`)) === 0);
+  await page.evaluate(`${dn}.click()`);
+  await sleep(200);
+  check('back to day', (await page.evaluate(`${dn}.textContent`)) === '\u2600' && (await page.evaluate(`${card}._view.sun.intensity`)) > 0);
 
   // legacy model (no fp tags, floor:<id> / site / roof names): auto mapping, per-chip visibility, no regeneration notice
   const legacy = path.join(root, 'screenshots', 'legacy.glb');
@@ -271,6 +280,8 @@ try {
   await clickText('Really remove?');
   await sleep(300);
   check('remove clears model', (await page.evaluate(`${card}._layout.model`)) === null && !(await page.evaluate(`${card}._view.model`)));
+  check('removal resets the look', await page.evaluate(`(() => { const c = ${card}; return !c._stage.classList.contains('has-model')
+    && c.shadowRoot.querySelector('button.daynight').hidden && c._view.renderer.toneMapping === 0 && c._view.renderer.shadowMap.enabled === false; })()`));
   allErrors.push(...s.errors);
 } finally {
   await s.close();

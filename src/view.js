@@ -333,9 +333,9 @@ export class FloorplanView {
       r.toneMappingExposure = 1.25;
       r.shadowMap.enabled = true;
       r.shadowMap.type = THREE.PCFSoftShadowMap;
-      hemi.color.setHex(0xcfdcff);
-      hemi.groundColor.setHex(0x7a6248);
-      hemi.intensity = day ? 1.1 : 0.12;
+      hemi.color.setHex(day ? 0xcfdcff : 0x8fa3d6);
+      hemi.groundColor.setHex(day ? 0x7a6248 : 0x2a2622);
+      hemi.intensity = day ? 1.1 : 0.4;
       sun.intensity = day ? 2.6 : 0;
       sun.castShadow = day;
       sun.shadow.mapSize.set(2048, 2048);
