@@ -2,7 +2,7 @@
 // plan (drawing rooms, dragging corners, adding doors, dragging markers to pin them).
 
 import * as E from './editor.js';
-import { roomFloorId } from './layout.js';
+import { roomFloorId, LEVEL_SPACING } from './layout.js';
 import { pointInPolygon, signedArea } from './placement.js';
 import { buildMarkers, areaName } from './registry.js';
 import { readSource, calibrationError } from './mower.js';
@@ -492,7 +492,7 @@ export class EditMode {
   render() {
     const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ['mower', 'Mower'], ['model', 'Model'], ['data', 'Data']];
     const body = { rooms: () => this._roomsTab(), devices: () => this._devicesTab(), mower: () => this._mowerTab(), model: () => this._modelTab(), data: () => this._dataTab() }[this.tab]();
-    const msg = this.message ? `<div class="msg ${this.message.error ? 'error' : ''}">${esc(this.message.text)}</div>` : '';
+    const msg = this.message ? `<div class="msg ${this.message.error ? 'error' : this.message.warn ? 'warn' : ''}">${esc(this.message.text)}</div>` : '';
     this.panel.innerHTML = `
       <div class="tabs">${tabs.map(([id, label]) => `<button data-act="tab" data-id="${id}" class="${this.tab === id ? 'on' : ''}">${label}</button>`).join('')}</div>
       <div class="tab-body">${msg}${body}</div>
@@ -990,10 +990,26 @@ export class EditMode {
 
   _import(text) {
     try {
-      const l = E.parseImport(text);
+      const raw = JSON.parse(text);
+      const parsed = E.parseImport(text);
+      const haFloors = Object.values(this.hass.floors || {}).map((f) => ({ id: f.floor_id, elevation: (f.level ?? 0) * LEVEL_SPACING }));
+      const { layout: l, floorMap, unknownAreas } = E.fitImport(parsed, haFloors, Object.keys(this.hass.areas || {}));
+      // the uploaded model and the mower setup are not part of a plan export: keep ours
+      if (!('model' in raw)) l.model = this.layout.model || null;
+      if (!('mower' in raw) || raw.mower === null) l.mower = this.layout.mower || null;
       this.selectedRoom = null;
       this.selectedMarker = null;
-      this.message = { text: `Imported ${l.rooms.length} rooms, ${Object.keys(l.pins).length} pins.` };
+      const parts = [`Imported ${l.rooms.length} rooms, ${Object.keys(l.pins).length} pins.`];
+      const mapped = Object.entries(floorMap);
+      if (mapped.length) {
+        const name = (id) => (this.hass.floors[id] && this.hass.floors[id].name) || id;
+        parts.push('Floors mapped to Home Assistant: ' + mapped.map(([a, b]) => `${a} → ${name(b)}`).join(', ') + '.');
+      }
+      if (unknownAreas.length) {
+        parts.push(`${unknownAreas.length} area id${unknownAreas.length === 1 ? ' is' : 's are'} not in Home Assistant (${unknownAreas.join(', ')}): ` +
+          'pick the area for those rooms under Rooms → "Rooms without an HA area", or create the areas.');
+      }
+      this.message = { text: parts.join(' '), error: false, warn: unknownAreas.length > 0 };
       this.commit(l);
     } catch (err) {
       this.message = { text: err.message, error: true };

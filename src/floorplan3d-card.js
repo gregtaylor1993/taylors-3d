@@ -9,7 +9,7 @@ import { buildMarkers, registrySignature, iconFor, isActive, displayValue, areaN
 import { mergeFloors, roomFloorId, markerPositions, lightGlow, modelFloorMap } from './layout.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 
-const VERSION = '0.1.4';
+const VERSION = '0.1.5';
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LONG_PRESS_MS = 500;
 const CLICK_SLOP_PX = 5;
@@ -120,6 +120,7 @@ const STYLE = `
   .panel .note.ok { background: rgba(76,175,80,.12); }
   .panel .note.warn { background: rgba(255,152,0,.14); }
   .panel .msg { margin: 8px 0; padding: 6px 10px; border-radius: 6px; background: rgba(76,175,80,.12); font-size: 12px; }
+  .panel .msg.warn { background: rgba(255,152,0,.14); }
   .panel .msg.error { background: rgba(219,68,55,.14); color: var(--error-color, #db4437); }
   button.edit { font: inherit; font-size: 13px; line-height: 1; cursor: pointer; padding: 6px 10px; border-radius: 16px;
     border: 1px solid var(--divider-color, rgba(0,0,0,.12)); background: var(--card-background-color, #fff);

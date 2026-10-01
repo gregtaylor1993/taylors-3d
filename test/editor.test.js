@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   snapPoint, floorVertices, nearestEdge, newRoomId, upsertRoom, deleteRoom, moveVertex, insertVertex,
   removeVertex, addDoor, removeDoor, cleanPolygon, setPin, clearPin, hide, unhide, upsertFloor, deleteFloor,
-  newFloorId, parseImport,
+  newFloorId, parseImport, fitImport,
 } from '../src/editor.js';
 
 const square = { id: 'r1', polygon: [[0, 0], [4, 0], [4, 3], [0, 3]] };
@@ -131,5 +131,37 @@ describe('parseImport', () => {
     expect(() => parseImport(JSON.stringify({ rooms: [{ id: 'a', polygon: [[0, 0], [1, 1]] }] }))).toThrow(/Room a/);
     expect(() => parseImport(JSON.stringify({ rooms: [{ ...square, doors: [[1, 'x']] }] }))).toThrow(/doors/);
     expect(() => parseImport(JSON.stringify({ floors: [{ name: 'x' }] }))).toThrow(/floor needs an id/);
+  });
+});
+
+describe('fitImport', () => {
+  const layout = {
+    floors: [{ id: 'ground', name: 'Ground floor', elevation: 0, height: 2.89 }, { id: 'attic', name: 'Attic', elevation: 3.25, height: 2.5 }],
+    rooms: [
+      { id: 'a', area_id: 'kitchen', floor_id: 'ground', polygon: [[0, 0], [1, 0], [1, 1]] },
+      { id: 'b', area_id: 'attic', floor_id: 'attic', polygon: [[0, 0], [1, 0], [1, 1]] },
+    ],
+    pins: { 'device:x': { x: 1, y: 1, z: 1, floor_id: 'ground' } },
+  };
+
+  it('maps unknown floors bottom-up onto HA floors and keeps the rest', () => {
+    const { layout: l, floorMap, unknownAreas } = fitImport(layout, [{ id: 'floor1', elevation: 0 }], ['kitchen']);
+    expect(floorMap).toEqual({ ground: 'floor1' });
+    expect(l.rooms.map((r) => r.floor_id)).toEqual(['floor1', 'attic']);
+    expect(l.pins['device:x'].floor_id).toBe('floor1');
+    expect(l.floors).toEqual([{ id: 'floor1', elevation: 0, height: 2.89 }, layout.floors[1]]);
+    expect(unknownAreas).toEqual(['attic']);
+  });
+
+  it('leaves matching floors alone', () => {
+    const { floorMap, layout: l } = fitImport(layout, [{ id: 'ground', elevation: 0 }, { id: 'up', elevation: 3 }], ['kitchen', 'attic']);
+    expect(floorMap).toEqual({ attic: 'up' });
+    expect(l.rooms.map((r) => r.floor_id)).toEqual(['ground', 'up']);
+  });
+
+  it('does nothing without HA floors', () => {
+    const { floorMap, layout: l } = fitImport(layout, [], []);
+    expect(floorMap).toEqual({});
+    expect(l.rooms).toEqual(layout.rooms);
   });
 });
