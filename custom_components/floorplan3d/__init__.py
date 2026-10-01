@@ -33,6 +33,7 @@ from .const import (
     STORAGE_KEY,
     STORAGE_VERSION,
 )
+from .model import ModelView
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     websocket_api.async_register_command(hass, ws_get_layout)
     websocket_api.async_register_command(hass, ws_set_layout)
+    hass.http.register_view(ModelView(hass))
 
     await _async_register_card(hass)
     return True

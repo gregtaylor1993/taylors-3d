@@ -490,8 +490,8 @@ export class EditMode {
   }
 
   render() {
-    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ['mower', 'Mower'], ['data', 'Data']];
-    const body = { rooms: () => this._roomsTab(), devices: () => this._devicesTab(), mower: () => this._mowerTab(), data: () => this._dataTab() }[this.tab]();
+    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ['mower', 'Mower'], ['model', 'Model'], ['data', 'Data']];
+    const body = { rooms: () => this._roomsTab(), devices: () => this._devicesTab(), mower: () => this._mowerTab(), model: () => this._modelTab(), data: () => this._dataTab() }[this.tab]();
     const msg = this.message ? `<div class="msg ${this.message.error ? 'error' : ''}">${esc(this.message.text)}</div>` : '';
     this.panel.innerHTML = `
       <div class="tabs">${tabs.map(([id, label]) => `<button data-act="tab" data-id="${id}" class="${this.tab === id ? 'on' : ''}">${label}</button>`).join('')}</div>
@@ -677,7 +677,7 @@ export class EditMode {
       <label>Image or camera entity <input list="fp-pic-ents" data-field="ov-entity" value="${esc((o && o.entity) || '')}" placeholder="image.mower_map"></label>
       ${datalist('fp-pic-ents', picIds)}`;
     if (o && o.entity) {
-      const slider = (f, label, min, max, step, v) => `<label>${label} <span class="val" data-val="${f}">${fmt(v)}</span>
+      const slider = (f, label, min, max, step, v) => `<label><span class="lab">${label}<span class="val" data-val="${f}">${fmt(v)}</span></span>
         <input type="range" data-field="ov-${f}" min="${min}" max="${max}" step="${step}" value="${v}"></label>`;
       out += slider('x', 'x (m)', -100, 100, 0.05, o.x ?? 0)
         + slider('y', 'y (m)', -100, 100, 0.05, o.y ?? 0)
@@ -689,6 +689,106 @@ export class EditMode {
         <button data-act="ov-remove">Remove overlay</button></div>`;
     }
     out += '<div class="row"><button data-act="mower-remove" class="danger">Remove mower</button></div>';
+    return out;
+  }
+
+  // ---------- model ----------
+  onModelLoaded() {
+    if (this.tab === 'model') this.render();
+  }
+
+  setModelProps(patch, rerender = true) {
+    const cur = this.layout.model;
+    if (!cur) return;
+    this.card._commit({ ...this.layout, model: { ...cur, ...patch } });
+    if (rerender) this.render();
+  }
+
+  _modelApi() {
+    return `/api/floorplan3d/model/${encodeURIComponent(this.card._config.layout_key)}`;
+  }
+
+  async _uploadModel(file) {
+    if (!/\.glb$/i.test(file.name)) {
+      this.message = { text: 'Choose a .glb file (binary glTF). Export one with tools/export-glb.js.', error: true };
+      this.render();
+      return;
+    }
+    this.uploading = file.name;
+    this.message = null;
+    this.render();
+    try {
+      const body = new FormData();
+      body.append('file', file, file.name);
+      const r = await this.hass.fetchWithAuth(this._modelApi(), { method: 'POST', body });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.message || 'Upload failed (HTTP ' + r.status + ')');
+      const cur = this.layout.model || { position: [0, 0, 0], rotation: 0, scale: 1, opacity: 1 };
+      this.message = { text: `Uploaded ${j.name} (${(j.size / 1048576).toFixed(1)} MB).` };
+      this.commit({ ...this.layout, model: { ...cur, version: j.version, name: j.name, size: j.size, uploaded: new Date().toISOString() } });
+    } catch (err) {
+      this.message = { text: err.message, error: true };
+    } finally {
+      this.uploading = null;
+      this.render();
+    }
+  }
+
+  async _removeModel() {
+    try {
+      const r = await this.hass.fetchWithAuth(this._modelApi(), { method: 'DELETE' });
+      if (!r.ok && r.status !== 404) throw new Error('Delete failed (HTTP ' + r.status + ')');
+      this.confirmModelDelete = false;
+      this.commit({ ...this.layout, model: null });
+    } catch (err) {
+      this.message = { text: err.message, error: true };
+    }
+    this.render();
+  }
+
+  _modelTab() {
+    const c = this.card._config;
+    if (c.model) {
+      return `<p class="note warn">This card shows <b>${esc(c.model)}</b> from its YAML (<code>model:</code>).
+        Remove <code>model</code> and the <code>model_*</code> options from the card YAML to upload and align the model here.</p>`;
+    }
+    if (this.card._store.backend !== 'shared') {
+      return `<p class="note warn">Uploading a model needs the Floorplan 3D integration (Settings → Devices &amp; services → Add integration).
+        Without it, put a .glb in /config/www and set <code>model: /local/house.glb</code> in the card YAML.</p>`;
+    }
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(c.layout_key)) {
+      return `<p class="note warn">layout_key "${esc(c.layout_key)}" can only contain letters, digits, - and _ for model uploads.</p>`;
+    }
+    const m = this.layout.model;
+    let out = `<p class="hint">A 3D model of the house (.glb) shown under the plan. Groups named <code>floor:&lt;floor id&gt;</code>
+      show per floor; everything is cut at the selected floor's wall height. It is stored in Home Assistant and only shown to logged-in users.</p>
+      <div class="row"><label class="button ${this.uploading ? 'disabled' : 'primary'}">${this.uploading ? 'Uploading ' + esc(this.uploading) + '…' : (m ? 'Replace model' : 'Upload .glb')}
+      <input type="file" accept=".glb,model/gltf-binary" data-field="model-file" hidden ${this.uploading ? 'disabled' : ''}></label></div>`;
+    if (!m) return out;
+
+    const floors = this.view.modelFloors();
+    const known = new Set(this.floors.map((f) => f.id));
+    let floorInfo;
+    if (!floors) floorInfo = '<span class="dim">Loading…</span>';
+    else if (!floors.length) floorInfo = 'No <code>floor:&lt;id&gt;</code> groups: the whole model is shown, cut at the selected floor.';
+    else {
+      floorInfo = 'Floor groups: ' + floors.map((f) => known.has(f) ? `${esc(f)} ✓` : `<span class="bad">${esc(f)} (no such floor)</span>`).join(', ');
+    }
+    const [x, y, z] = m.position || [0, 0, 0];
+    const slider = (f, label, min, max, step, v) => `<label><span class="lab">${label}<span class="val" data-val="${f}">${fmt(v)}</span></span>
+      <input type="range" data-field="md-${f}" min="${min}" max="${max}" step="${step}" value="${v}"></label>`;
+    out += `<section class="box"><h3>${esc(m.name || 'house.glb')}</h3>
+      <p class="dim">${m.size ? (m.size / 1048576).toFixed(1) + ' MB' : ''}${m.uploaded ? ' · ' + esc(new Date(m.uploaded).toLocaleString()) : ''}</p>
+      <p class="hint">${floorInfo}</p></section>
+      <div class="sub">Alignment</div>`
+      + slider('x', 'East (m)', -50, 50, 0.05, x)
+      + slider('y', 'North (m)', -50, 50, 0.05, y)
+      + slider('z', 'Up (m)', -5, 5, 0.05, z)
+      + slider('rotation', 'Rotation (°)', -180, 180, 0.5, m.rotation || 0)
+      + slider('opacity', 'Opacity', 0.1, 1, 0.05, m.opacity ?? 1)
+      + `<label>Scale <input type="number" step="any" min="0.0001" data-field="md-scale" value="${m.scale || 1}"></label>
+      <p class="hint">Scale 0.01 for a model made in centimetres, 0.001 for millimetres.</p>
+      <div class="row"><button data-act="model-delete" class="danger">${this.confirmModelDelete ? 'Really remove?' : 'Remove model'}</button></div>`;
     return out;
   }
 
@@ -772,6 +872,10 @@ export class EditMode {
       case 'trail-clear': this.card.clearTrail(); break;
       case 'ov-move': this.overlayMove = !this.overlayMove; this.calibrating = null; break;
       case 'ov-remove': this.overlayMove = false; this.setMower({ overlay: null }); return;
+      case 'model-delete':
+        if (!this.confirmModelDelete) { this.confirmModelDelete = true; break; }
+        this._removeModel();
+        return;
       case 'mower-remove': this.calibrating = null; this.overlayMove = false; this.commit({ ...this.layout, mower: null }); this.render(); return;
       default: return;
     }
@@ -825,6 +929,13 @@ export class EditMode {
         const first = !this.mower().overlay;
         this.setOverlay(first ? { entity: v, x: Math.round(t.x * 10) / 10, y: Math.round(-t.z * 10) / 10 } : { entity: v });
       }
+    } else if (f === 'model-file') {
+      const file = el.files && el.files[0];
+      el.value = '';
+      if (file) this._uploadModel(file);
+    } else if (f === 'md-scale') {
+      const v = Number(el.value);
+      if (Number.isFinite(v) && v > 0) this.setModelProps({ scale: v }, false);
     } else if (f === 'import') {
       const file = el.files && el.files[0];
       el.value = ''; // picking the same file again must fire change again
@@ -836,6 +947,20 @@ export class EditMode {
   _onPanelInput(e) {
     const el = e.target;
     const f = el.dataset.field;
+    if (f && f.startsWith('md-') && el.type === 'range') {
+      const key = f.slice(3);
+      const v = Number(el.value);
+      const label = this.panel.querySelector(`[data-val="${key}"]`);
+      if (label) label.textContent = fmt(v);
+      const m = this.layout.model;
+      if (!m) return;
+      if (key === 'x' || key === 'y' || key === 'z') {
+        const pos = [...(m.position || [0, 0, 0])];
+        pos['xyz'.indexOf(key)] = v;
+        this.setModelProps({ position: pos }, false);
+      } else this.setModelProps({ [key]: v }, false);
+      return;
+    }
     if (!f || !f.startsWith('ov-') || el.type !== 'range') return;
     const key = f.slice(3);
     const v = Number(el.value);

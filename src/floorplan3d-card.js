@@ -3,18 +3,20 @@
 import { Color } from 'three';
 import { FloorplanView } from './view.js';
 import { EditMode } from './edit-mode.js';
+import './card-editor.js';
 import { LayoutStore } from './storage.js';
 import { buildMarkers, registrySignature, iconFor, isActive, displayValue, areaName } from './registry.js';
 import { mergeFloors, roomFloorId, markerPositions, lightGlow } from './layout.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LONG_PRESS_MS = 500;
 const CLICK_SLOP_PX = 5;
 const TRAIL_STEP_M = 0.15;
 const TRAIL_MAX = 3000;
 const MOWER_Z = 0.15;
+const MODEL_API = '/api/floorplan3d/model';
 
 const STYLE = `
   :host { display: block; }
@@ -140,7 +142,13 @@ const STYLE = `
   .stage.moving { cursor: move; }
   .stage.moving .fp-marker, .stage.moving .fp-handle { pointer-events: none; }
   .panel input[type=range] { width: 100%; margin: 0; accent-color: var(--primary-color); }
-  .panel label .val { float: right; color: var(--primary-text-color); }
+  .panel label .lab { display: flex; justify-content: space-between; }
+  .panel label .val { color: var(--primary-text-color); }
+  .panel label.button.primary { background: var(--primary-color); border-color: var(--primary-color); color: var(--text-primary-color, #fff); }
+  .panel label.button.disabled { opacity: .6; pointer-events: none; }
+  .panel .bad { color: var(--error-color, #db4437); }
+  .panel code { font-size: 11px; }
+  .panel .tabs button { padding: 10px 2px; font-size: 12.5px; }
   .panel input:not([type]), .panel input[list] { font: inherit; padding: 5px 6px; border-radius: 6px;
     border: 1px solid var(--divider-color, rgba(0,0,0,.2)); background: var(--card-background-color, #fff);
     color: var(--primary-text-color); min-width: 0; }
@@ -177,7 +185,11 @@ class Floorplan3dCard extends HTMLElement {
   }
 
   static getStubConfig() {
-    return { layout_key: 'default', height: '520px' };
+    return {};
+  }
+
+  static getConfigElement() {
+    return document.createElement('floorplan3d-card-editor');
   }
 
   setConfig(config) {
@@ -192,16 +204,36 @@ class Floorplan3dCard extends HTMLElement {
     else if (this._view) this._loadModel();
   }
 
+  // model: from YAML (model: url) if set, else the one uploaded to the integration (layout.model)
   _loadModel() {
     const c = this._config;
-    const url = c.model ? String(c.model) : null;
-    const position = Array.isArray(c.model_position) ? c.model_position.map(Number) : [0, 0, 0];
-    this._view.setModel(url && {
-      url, position, rotation: Number(c.model_rotation) || 0, scale: Number(c.model_scale) || 1,
-      opacity: c.model_opacity === undefined ? 1 : Number(c.model_opacity),
-    }).then((err) => {
+    let opts = null;
+    if (c.model) {
+      opts = {
+        url: String(c.model),
+        position: Array.isArray(c.model_position) ? c.model_position.map(Number) : [0, 0, 0],
+        rotation: Number(c.model_rotation) || 0, scale: Number(c.model_scale) || 1,
+        opacity: c.model_opacity === undefined ? 1 : Number(c.model_opacity),
+      };
+    } else {
+      const m = this._layout && this._layout.model;
+      if (m && m.version && this._hass && this._hass.fetchWithAuth) {
+        const url = `${MODEL_API}/${encodeURIComponent(c.layout_key)}?v=${m.version}`;
+        opts = {
+          id: m.version, name: m.name,
+          data: async () => {
+            const r = await this._hass.fetchWithAuth(url);
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.arrayBuffer();
+          },
+          position: m.position || [0, 0, 0], rotation: m.rotation || 0, scale: m.scale || 1, opacity: m.opacity ?? 1,
+        };
+      }
+    }
+    this._view.setModel(opts).then((err) => {
       this._notice.textContent = err || '';
       this._notice.hidden = !err;
+      if (this._editing) this._edit.onModelLoaded();
     });
   }
 
@@ -370,6 +402,10 @@ class Floorplan3dCard extends HTMLElement {
       b.mowerKey = mowerKey;
       this._buildMarkers();
       markers = true;
+    }
+    if (l.model !== b.model) {
+      b.model = l.model;
+      this._loadModel();
     }
     if (m !== b.mower) {
       b.mower = m;
@@ -667,6 +703,7 @@ if (!customElements.get('floorplan3d-card')) {
     type: 'floorplan3d-card',
     name: 'Floorplan 3D',
     description: '3D floorplan with automatically placed devices',
+    preview: false,
   });
   console.info(`%c floorplan3d-card ${VERSION} `, 'background:#03a9f4;color:#fff;border-radius:3px');
 }

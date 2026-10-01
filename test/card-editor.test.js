@@ -1,0 +1,35 @@
+// @vitest-environment jsdom
+import { describe, it, expect, beforeAll } from 'vitest';
+
+// stand-in for HA's ha-form
+class FakeForm extends HTMLElement {}
+
+describe('card editor', () => {
+  let mod;
+  beforeAll(async () => {
+    customElements.define('ha-form', FakeForm);
+    mod = await import('../src/card-editor.js');
+  });
+
+  it('drops empty values and defaults', () => {
+    expect(mod.cleanConfig({ type: 'custom:floorplan3d-card', height: '520px', view: 'top', model: '', floor: undefined, wall_height: 1.2 }))
+      .toEqual({ type: 'custom:floorplan3d-card', view: 'top', wall_height: 1.2 });
+  });
+
+  it('renders ha-form with defaults and emits cleaned config', () => {
+    const el = document.createElement('floorplan3d-card-editor');
+    document.body.append(el);
+    el.setConfig({ type: 'custom:floorplan3d-card', view: 'top' });
+    el.hass = { states: {} };
+    const form = el.querySelector('ha-form');
+    expect(form.data).toMatchObject({ view: 'top', height: '520px', layout_key: 'default' });
+    expect(form.schema).toBe(mod.SCHEMA);
+    expect(form.hass).toEqual({ states: {} });
+    expect(form.computeLabel({ name: 'wall_height' })).toBe('Cut-away wall height');
+
+    let got;
+    el.addEventListener('config-changed', (e) => { got = e.detail.config; });
+    form.dispatchEvent(new CustomEvent('value-changed', { detail: { value: { ...form.data, height: '600px', view: '3d' } } }));
+    expect(got).toEqual({ type: 'custom:floorplan3d-card', height: '600px' });
+  });
+});

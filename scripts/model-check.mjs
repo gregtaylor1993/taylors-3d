@@ -56,6 +56,57 @@ try {
   await s.close();
 }
 
+// 2b. upload a model in edit mode (Model tab), align it, remove it
+s = await openDemo({ view: '3d', height: '560px' }, { width: 1500, height: 680 });
+try {
+  const { page } = s;
+  const panel = (sel) => `${card}.shadowRoot.querySelector(".panel ${sel}")`;
+  const clickText = (t) => page.evaluate((t) => {
+    const b = [...document.querySelector('floorplan3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === t);
+    if (b) b.click();
+    return !!b;
+  }, t);
+  await page.evaluate(`${card}.shadowRoot.querySelector("button.edit").click()`);
+  await sleep(200);
+  await clickText('Model');
+  await sleep(150);
+  check('model tab offers upload', (await page.evaluate(`${panel('label.button')}?.textContent || ''`)).includes('Upload .glb'));
+  const upload = async (file) => {
+    const input = await page.evaluateHandle(panel('[data-field=model-file]'));
+    await input.uploadFile(file);
+  };
+  const bad = path.join(root, 'screenshots', 'not-a-model.glb');
+  fs.writeFileSync(bad, 'hello');
+  await upload(bad);
+  await page.waitForFunction(`!!${panel('.msg.error')}`, { timeout: 5000 });
+  check('non-glb rejected with message', (await page.evaluate(`${panel('.msg.error')}.textContent`)).includes('glTF'));
+  fs.unlinkSync(bad);
+
+  await upload(path.join(root, 'demo', 'house.glb'));
+  await page.waitForFunction(`!!${card}._view.model`, { timeout: 10000 });
+  await sleep(300);
+  const lm = await page.evaluate(`${card}._layout.model`);
+  check('upload stored in layout', lm && lm.name === 'house.glb' && lm.version && lm.size > 1000, JSON.stringify(lm));
+  check('model loaded with floor groups', JSON.stringify(await page.evaluate(`${card}._view.modelFloors()`)) === '["ground","first"]');
+  check('floor groups listed as known', (await page.evaluate(`${panel('.box')}.textContent`)).includes('ground ✓'));
+  await page.evaluate(`(() => { const s = ${panel('[data-field=md-rotation]')}; s.value = "90"; s.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+  await page.evaluate(`(() => { const s = ${panel('[data-field=md-opacity]')}; s.value = "0.5"; s.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+  await sleep(150);
+  check('rotation slider turns the model', Math.round(await page.evaluate(`${card}._view.modelGroup.rotation.y * 180 / Math.PI`)) === 90);
+  check('opacity applied', await page.evaluate(`(() => { let o; ${card}._view.model.root.traverse((m) => { if (m.isMesh && o === undefined) o = m.material.opacity; }); return o === 0.5; })()`));
+  check('slider kept (no re-render)', await page.evaluate(`${panel('[data-field=md-rotation]')}.value === "90"`));
+  await page.evaluate(`(() => { const s = ${panel('[data-field=md-rotation]')}; s.value = "0"; s.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+  await sleep(200);
+  await page.screenshot({ path: path.join(root, 'screenshots/model-upload.png') });
+  await clickText('Remove model');
+  await clickText('Really remove?');
+  await sleep(300);
+  check('remove clears model', (await page.evaluate(`${card}._layout.model`)) === null && !(await page.evaluate(`${card}._view.model`)));
+  allErrors.push(...s.errors);
+} finally {
+  await s.close();
+}
+
 // 3. export snippet round trip
 s = await openDemo({});
 try {
