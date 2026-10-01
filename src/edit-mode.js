@@ -64,6 +64,7 @@ export class EditMode {
     window.addEventListener('keydown', this._onKey);
     this.render();
     this.refreshOverlay();
+    this._syncStageClasses();
   }
 
   exit() {
@@ -275,7 +276,7 @@ export class EditMode {
   _syncStageClasses() {
     this.card._stage.classList.toggle('drawing', !!this.drawing || this.doorMode || !!this.calibrating);
     this.card._stage.classList.toggle('moving', this.overlayMove);
-    this.card._stage.classList.toggle('picking', this.tab === 'model' && !!this.view.model);
+    this.card._stage.classList.toggle('picking', !!this.card._editing && this.tab === 'model' && !!this.view.model);
   }
 
   // Overlay move tool: grab the pointer before OrbitControls sees it (capture phase on the stage).
