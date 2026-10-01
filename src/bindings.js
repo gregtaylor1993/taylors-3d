@@ -4,27 +4,38 @@
 
 const SHOW = ['with', 'always', 'hidden', 'all-only'];
 
+const isPlainObject = (v) => v !== null && typeof v === 'object' && v.constructor === Object;
+
 export function levelsFromFloorMap(map) {
+  if (!isPlainObject(map)) return {};
   const out = {};
-  for (const [id, v] of Object.entries(map || {})) out[id] = v === 'always' || v === 'hidden' ? { show: v } : { floor: v };
+  for (const [id, v] of Object.entries(map)) {
+    if (typeof v !== 'string') continue;
+    out[id] = v === 'always' || v === 'hidden' ? { show: v } : { floor: v };
+  }
   return out;
 }
 
 export function migrateModel(model) {
-  if (!model || !model.floor_map) return model;
+  if (!isPlainObject(model) || !('floor_map' in model)) return model;
   const { floor_map: fm, ...rest } = model;
   return { ...rest, levels: { ...levelsFromFloorMap(fm), ...(model.levels || {}) } };
 }
 
-const byOrder = (a, b) => (a.order ?? 0) - (b.order ?? 0);
+const byOrder = (a, b) => {
+  const aOrd = a.order ?? (a.role === 'basement' ? -1 : 0);
+  const bOrd = b.order ?? (b.role === 'basement' ? -1 : 0);
+  return aOrd - bOrd;
+};
 
 export function resolveLevels(levels, floors, saved = {}) {
+  const safeSaved = isPlainObject(saved) ? saved : {};
   const ids = new Set(floors.map((f) => f.id));
   const out = {};
   const stale = new Set();
   for (const l of levels) {
-    const s = saved[l.id];
-    if (!s) continue;
+    const s = safeSaved[l.id];
+    if (!isPlainObject(s)) continue;
     if (s.show && SHOW.includes(s.show) && s.show !== 'with') {
       out[l.id] = { show: s.show, floor: ids.has(s.floor) ? s.floor : null, auto: false };
     } else if (ids.has(s.floor)) {
@@ -65,14 +76,15 @@ export function resolveLevels(levels, floors, saved = {}) {
 }
 
 export function resolveRoomAreas(rooms, areaIds, saved = {}) {
+  const safeSaved = isPlainObject(saved) ? saved : {};
   const areas = new Set(areaIds);
   const out = {};
   for (const r of rooms) {
-    const s = saved[r.id];
-    if (s && 'area' in s && (s.area === null || areas.has(s.area))) { out[r.id] = { area: s.area, auto: false }; continue; }
+    const s = safeSaved[r.id];
+    if (isPlainObject(s) && 'area' in s && (s.area === null || areas.has(s.area))) { out[r.id] = { area: s.area, auto: false }; continue; }
     const sug = r.suggest && r.suggest.area;
     const area = sug && areas.has(sug) ? sug : areas.has(r.id) ? r.id : null;
-    out[r.id] = s && 'area' in s ? { area, auto: true, stale: true } : { area, auto: true };
+    out[r.id] = isPlainObject(s) && 'area' in s ? { area, auto: true, stale: true } : { area, auto: true };
   }
   return out;
 }
@@ -85,13 +97,15 @@ export function transformPoint([x, y], { position = [0, 0, 0], rotation = 0, sca
 }
 
 export function modelRooms(rooms, levelAssign, roomAreas, align) {
+  const safeLevelAssign = isPlainObject(levelAssign) ? levelAssign : {};
+  const safeRoomAreas = isPlainObject(roomAreas) ? roomAreas : {};
   const out = [];
   for (const r of rooms) {
-    const lv = levelAssign[r.level];
-    if (!r.outline || !lv || !lv.floor) continue; // levels without an HA floor carry no rooms
+    const lv = safeLevelAssign[r.level];
+    if (!r.outline || !lv || !lv.floor || lv.show === 'hidden') continue; // levels without an HA floor or hidden carry no rooms
     out.push({
       id: 'm:' + r.id, modelId: r.id, label: r.label,
-      area_id: roomAreas[r.id] ? roomAreas[r.id].area : null,
+      area_id: safeRoomAreas[r.id] ? safeRoomAreas[r.id].area : null,
       floor_id: lv.floor,
       polygon: r.outline.map((p) => transformPoint(p, align)),
       doors: (r.doors || []).map((p) => transformPoint(p, align)),
@@ -108,10 +122,11 @@ export function combineRooms(drawn, fromModel) {
 }
 
 export function levelFloorOverrides(levels, levelAssign, { position = [0, 0, 0], scale = 1 } = {}) {
+  const safeLevelAssign = isPlainObject(levelAssign) ? levelAssign : {};
   const out = [];
   const done = new Set();
   for (const l of levels) {
-    const a = levelAssign[l.id];
+    const a = safeLevelAssign[l.id];
     if (l.role === 'exterior' || l.role === 'roof' || !a || a.show !== 'with' || !a.floor || done.has(a.floor)) continue;
     if (l.elevation === null || l.elevation === undefined) continue;
     done.add(a.floor);
@@ -124,13 +139,14 @@ export function levelFloorOverrides(levels, levelAssign, { position = [0, 0, 0],
 
 export function bindingDiff(manifest, model) {
   const one = (entries, saved) => {
-    const ids = new Set(entries.map((e) => e.id));
-    const keys = Object.keys(saved || {});
+    const ids = new Set((Array.isArray(entries) ? entries : []).map((e) => e.id));
+    const keys = Object.keys(isPlainObject(saved) ? saved : {});
     return {
       kept: [...ids].filter((id) => keys.includes(id)),
       added: [...ids].filter((id) => !keys.includes(id)),
       missing: keys.filter((id) => !ids.has(id)),
     };
   };
-  return { levels: one(manifest.levels, model && model.levels), rooms: one(manifest.rooms, model && model.rooms) };
+  const safeManifest = isPlainObject(manifest) ? manifest : {};
+  return { levels: one(safeManifest.levels, model && model.levels), rooms: one(safeManifest.rooms, model && model.rooms) };
 }

@@ -19,6 +19,15 @@ describe('legacy bindings', () => {
     expect(migrateModel(m)).toBe(m);
     expect(migrateModel(null)).toBeNull();
   });
+  it('levelsFromFloorMap ignores non-string values and non-object input', () => {
+    expect(levelsFromFloorMap('abc')).toEqual({});
+    expect(levelsFromFloorMap({ good: 'floor1', bad: 123, ugly: ['array'] })).toEqual({ good: { floor: 'floor1' } });
+    expect(levelsFromFloorMap(null)).toEqual({});
+  });
+  it('migrateModel ignores non-plain-object floor_map', () => {
+    expect(migrateModel({ version: 'v', floor_map: 'x' }).levels).toEqual({});
+    expect(migrateModel({ version: 'v', floor_map: { x: 123 } }).levels).toEqual({});
+  });
 });
 
 describe('resolveLevels', () => {
@@ -52,6 +61,21 @@ describe('resolveLevels', () => {
     const r = resolveLevels([L('a', 'storey', 0), L('b', 'storey', 1), L('c', 'storey', 2)], floors, {});
     expect([r.a.floor, r.b.floor, r.c.show]).toEqual(['floor1', 'floor2', 'always']);
   });
+  it('treats null/non-object saved as {} and ignores non-object entries', () => {
+    const r1 = resolveLevels([L('ground', 'storey', 0)], floors, null);
+    expect(r1.ground.floor).toBe('floor1');
+    const r2 = resolveLevels([L('ground', 'storey', 0)], floors, { ground: 'string-not-object' });
+    expect(r2.ground.floor).toBe('floor1');
+  });
+  it('basement with null order gets order -1; storey null gets 0; aligns correctly on 2-floor HA', () => {
+    const r = resolveLevels(
+      [L('basement', 'basement', null), L('ground', 'storey', null)],
+      [{ id: 'floor1', elevation: -3 }, { id: 'floor2', elevation: 0 }],
+      {}
+    );
+    expect(r.basement.floor).toBe('floor1');
+    expect(r.ground.floor).toBe('floor2');
+  });
 });
 
 describe('resolveRoomAreas', () => {
@@ -68,6 +92,12 @@ describe('resolveRoomAreas', () => {
   it('explicit "no area" sticks; a deleted area is stale', () => {
     expect(resolveRoomAreas(rooms.slice(0, 1), ['kitchen'], { kitchen: { area: null } }).kitchen).toEqual({ area: null, auto: false });
     expect(resolveRoomAreas(rooms.slice(0, 1), ['kitchen'], { kitchen: { area: 'gone' } }).kitchen).toEqual({ area: 'kitchen', auto: true, stale: true });
+  });
+  it('treats null/non-object saved as {} and ignores non-object entries', () => {
+    const r1 = resolveRoomAreas([{ id: 'x', suggest: {} }], ['x'], null);
+    expect(r1.x).toEqual({ area: 'x', auto: true });
+    const r2 = resolveRoomAreas([{ id: 'x', suggest: {} }], ['x'], { x: 'string-not-object' });
+    expect(r2.x).toEqual({ area: 'x', auto: true });
   });
 });
 
@@ -104,6 +134,23 @@ describe('modelRooms / combineRooms', () => {
     const fromModel = [{ id: 'm:kitchen', area_id: 'kitchen' }, { id: 'm:garden', area_id: null }];
     expect(combineRooms(drawn, fromModel).map((r) => r.id)).toEqual(['m:kitchen', 'm:garden', 'r2']);
   });
+
+  it('treats null levelAssign/roomAreas as {} and returns empty', () => {
+    const testRooms = [{ kind: 'room', id: 'kitchen', label: 'Kitchen', level: 'ground', outline: [[0, 0], [4, 0], [4, 3]], doors: [] }];
+    expect(modelRooms(testRooms, null, {}, {})).toEqual([]);
+    expect(modelRooms(testRooms, {}, null, {})).toEqual([]);
+  });
+
+  it('skips rooms on levels with show=hidden even if they have a floor', () => {
+    const testRooms = [
+      { kind: 'room', id: 'visible', label: 'V', level: 'ground', outline: [[0, 0], [1, 0], [1, 1]], doors: [] },
+      { kind: 'room', id: 'hidden', label: 'H', level: 'attic', outline: [[0, 0], [1, 0], [1, 1]], doors: [] },
+    ];
+    const assign = { ground: { show: 'with', floor: 'floor1' }, attic: { show: 'hidden', floor: 'floor1' } };
+    const areas = { visible: { area: 'living' }, hidden: { area: 'storage' } };
+    const out = modelRooms(testRooms, assign, areas, {});
+    expect(out.map((r) => r.id)).toEqual(['m:visible']);
+  });
 });
 
 describe('levelFloorOverrides', () => {
@@ -113,6 +160,10 @@ describe('levelFloorOverrides', () => {
     expect(levelFloorOverrides(lv, as, { position: [0, 0, 0.1], scale: 1 })).toEqual([
       { id: 'floor1', elevation: 0.1, height: 2.89 }, { id: 'floor2', elevation: 3.35, height: 2.5 },
     ]);
+  });
+  it('treats null levelAssign as {} and returns empty', () => {
+    const lv = [L('ground', 'storey', 0, { elevation: 0, height: 2.89 })];
+    expect(levelFloorOverrides(lv, null, {})).toEqual([]);
   });
 });
 
@@ -124,5 +175,10 @@ describe('bindingDiff', () => {
       levels: { kept: ['ground'], added: ['attic'], missing: ['old'] },
       rooms: { kept: ['kitchen'], added: [], missing: ['gone'] },
     });
+  });
+  it('treats null manifest and missing arrays as empty', () => {
+    expect(bindingDiff(null, null)).toEqual({ levels: { kept: [], added: [], missing: [] }, rooms: { kept: [], added: [], missing: [] } });
+    expect(bindingDiff({ levels: [], rooms: [] }, { levels: {}, rooms: {} })).toEqual({ levels: { kept: [], added: [], missing: [] }, rooms: { kept: [], added: [], missing: [] } });
+    expect(bindingDiff({ levels: [{ id: 'x' }], rooms: [] }, null)).toEqual({ levels: { kept: [], added: ['x'], missing: [] }, rooms: { kept: [], added: [], missing: [] } });
   });
 });
