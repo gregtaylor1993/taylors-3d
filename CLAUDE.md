@@ -99,10 +99,11 @@ iiseppi/sunseeker_local_control (MQTT).
 `floorplan3d/layout/set` {key, layout} (set requires admin).
 
 ## Repo / delivery
-- GitLab is the main remote. HACS only installs from GitHub, so either mirror to GitHub or
-  install manually: copy `dist/floorplan3d-card.js` to `/config/www/`, add resource
-  `/local/floorplan3d-card.js` (module); copy `custom_components/floorplan3d/` to `/config/`.
-- Add `.gitlab-ci.yml`: npm ci, test, build, attach dist as artifact.
+- GitHub (`origin`) is the main remote; HACS installs it as an Integration from release
+  `floorplan3d.zip` (integration with the card bundled; it registers the card via
+  add_extra_js_url). Manual: copy `custom_components/floorplan3d/` after `npm run build`.
+- CI: `.github/workflows/ci.yml` (lint, vitest, build, headless checks, pytest);
+  `release.yml` on `v*` tags builds the zip and creates the release.
 - Add `npm run deploy` that scp's dist + integration to the HA host (host from .env, not committed).
 - `demo/index.html` with a mock `hass` object (few areas, floors, lights, sensors, a fake mower
   moving in a circle) for testing without HA. Verify with a headless browser screenshot.
