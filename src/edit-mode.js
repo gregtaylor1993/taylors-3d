@@ -32,6 +32,16 @@ export class EditMode {
     this.panel.addEventListener('click', (e) => this._onPanelClick(e));
     this.panel.addEventListener('change', (e) => this._onPanelChange(e));
     this.panel.addEventListener('input', (e) => this._onPanelInput(e));
+    // rebuilding the panel under a dragged slider would drop the drag: hold renders until release
+    this.panel.addEventListener('pointerdown', (e) => { if (e.target.type === 'range') this._sliding = true; });
+    const release = () => {
+      if (!this._sliding) return;
+      this._sliding = false;
+      if (this._renderHeld) { this._renderHeld = false; this.render(); }
+    };
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+    this.panel.addEventListener('change', (e) => { if (e.target.type === 'range') release(); });
     this._onKey = (e) => this._onKeyDown(e);
     this._onWinMove = (e) => this._dragMove(e);
     this._onWinUp = (e) => this._dragEnd(e);
@@ -88,7 +98,8 @@ export class EditMode {
     if (this.selectedRoom && !this.room(this.selectedRoom)) this.selectedRoom = null;
     this.card._applyMarkerSelection(this.selectedMarker);
     this.refreshOverlay();
-    this.render();
+    if (this._sliding) this._renderHeld = true;
+    else this.render();
   }
 
   commit(layout) {
@@ -503,6 +514,12 @@ export class EditMode {
   }
 
   render() {
+    // a rebuild must not move the panel under the user: keep scroll position and the focused control
+    const oldBody = this.panel.querySelector('.tab-body');
+    const scroll = oldBody && this._renderedTab === this.tab ? oldBody.scrollTop : 0;
+    const active = this.panel.contains(this.panel.getRootNode().activeElement) ? this.panel.getRootNode().activeElement : null;
+    const focusKey = active && active.dataset && active.dataset.field ? [active.dataset.field, active.dataset.id || ''] : null;
+    this._renderedTab = this.tab;
     const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ['mower', 'Mower'], ['model', 'Model'], ['data', 'Data']];
     const body = { rooms: () => this._roomsTab(), devices: () => this._devicesTab(), mower: () => this._mowerTab(), model: () => this._modelTab(), data: () => this._dataTab() }[this.tab]();
     const msg = this.message ? `<div class="msg ${this.message.error ? 'error' : this.message.warn ? 'warn' : ''}">${esc(this.message.text)}</div>` : '';
@@ -510,6 +527,13 @@ export class EditMode {
       <div class="tabs">${tabs.map(([id, label]) => `<button data-act="tab" data-id="${id}" class="${this.tab === id ? 'on' : ''}">${label}</button>`).join('')}</div>
       <div class="tab-body">${msg}${body}</div>
       <div class="foot"><span class="save-state">${this._saveText()}</span><span>${esc(this._backendLabel())}</span></div>`;
+    const newBody = this.panel.querySelector('.tab-body');
+    if (newBody && scroll) newBody.scrollTop = scroll;
+    if (focusKey) {
+      const el = [...this.panel.querySelectorAll('[data-field]')]
+        .find((x) => x.dataset.field === focusKey[0] && (x.dataset.id || '') === focusKey[1]);
+      if (el) el.focus({ preventScroll: true });
+    }
   }
 
   _backendLabel() {
@@ -712,7 +736,8 @@ export class EditMode {
   }
 
   // ---------- model ----------
-  onModelLoaded() {
+  onModelLoaded(changed = true) {
+    if (!changed) return; // same model re-placed (alignment, opacity): the panel is already current
     if (this._freshModel) { // a newly uploaded model: everything in it counts as seen
       this._freshModel = false;
       this._snapshotKnown();
