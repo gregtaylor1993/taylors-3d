@@ -8,7 +8,7 @@ import { LayoutStore } from './storage.js';
 import { buildMarkers, registrySignature, iconFor, isActive, displayValue, areaName } from './registry.js';
 import { mergeFloors, roomFloorId, markerPositions, lightGlow } from './layout.js';
 import {
-  resolveLevels, resolveRoomAreas, modelRooms, combineRooms, levelFloorOverrides, bindingDiff, levelsFromFloorMap,
+  resolveLevels, resolveRoomAreas, modelRooms, combineRooms, levelFloorOverrides, bindingDiff, snapshotDiff, levelsFromFloorMap,
 } from './bindings.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 
@@ -275,17 +275,18 @@ class Floorplan3dCard extends HTMLElement {
     if (!manifest || !this._hass) return null;
     const saved = (this._layout && this._layout.model) || {};
     const savedLevels = { ...(this._config.model ? levelsFromFloorMap(this._config.model_floors) : {}), ...(saved.levels || {}) };
-    const haFloors = mergeFloors(this._hass, { floors: [] });
+    const haFloors = mergeFloors(this._hass, this._layout || {}); // HA floors plus layout-only floors
     return {
       manifest,
       levels: resolveLevels(manifest.levels, haFloors, savedLevels),
       rooms: resolveRoomAreas(manifest.rooms, Object.keys(this._hass.areas || {}), saved.rooms || {}),
       diff: bindingDiff(manifest, saved),
+      notice: snapshotDiff(manifest, saved.known),
     };
   }
 
   _allRooms() {
-    return combineRooms(this._layout.rooms || [], this._modelRooms || []);
+    return combineRooms((this._layout && this._layout.rooms) || [], this._modelRooms || []);
   }
 
   getCardSize() {

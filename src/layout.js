@@ -10,7 +10,8 @@ export const LEVEL_SPACING = 3;
 // HA floors (auto-synced, elevation = level * 3) overlaid with what the layout stores.
 // Layout-only floors are kept. Never returns an empty list.
 export function mergeFloors(hass, layout) {
-  const stored = new Map((layout.floors || []).map((f) => [f.id, f]));
+  const stored = new Map();
+  for (const f of layout.floors || []) stored.set(f.id, { ...stored.get(f.id), ...f }); // merge per id
   const out = floorsFromHA(hass).map((f) => {
     const s = stored.get(f.id) || {};
     stored.delete(f.id);

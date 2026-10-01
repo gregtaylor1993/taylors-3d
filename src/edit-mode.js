@@ -713,7 +713,19 @@ export class EditMode {
 
   // ---------- model ----------
   onModelLoaded() {
+    if (this._freshModel) { // a newly uploaded model: everything in it counts as seen
+      this._freshModel = false;
+      this._snapshotKnown();
+      return;
+    }
     if (this.tab === 'model') this.render();
+  }
+
+  // Remember which levels/rooms the user has been shown, so the regeneration notice only reports changes.
+  _snapshotKnown() {
+    const man = this.card.modelBindings();
+    if (!man) return;
+    this.setModelProps({ known: { levels: man.manifest.levels.map((l) => l.id), rooms: man.manifest.rooms.map((r) => r.id) } });
   }
 
   setModelProps(patch, rerender = true) {
@@ -742,9 +754,11 @@ export class EditMode {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.message || 'Upload failed (HTTP ' + r.status + ')');
       const cur = this.layout.model || { position: [0, 0, 0], rotation: 0, scale: 1, opacity: 1 };
+      this._freshModel = true;
       this.message = { text: `Uploaded ${j.name} (${(j.size / 1048576).toFixed(1)} MB).` };
       this.commit({ ...this.layout, model: { ...cur, version: j.version, name: j.name, size: j.size, uploaded: new Date().toISOString() } });
     } catch (err) {
+      this._freshModel = false;
       this.message = { text: err.message, error: true };
     } finally {
       this.uploading = null;
@@ -779,8 +793,9 @@ export class EditMode {
       return `<p class="note warn">layout_key "${esc(c.layout_key)}" can only contain letters, digits, - and _ for model uploads.</p>`;
     }
     const m = this.layout.model;
-    let out = `<p class="hint">A 3D model of the house (.glb) shown under the plan. Groups named <code>floor:&lt;floor id&gt;</code>
-      show per floor; everything is cut at the selected floor's wall height. It is stored in Home Assistant and only shown to logged-in users.</p>
+    let out = `<p class="hint">A 3D model of the house (.glb) shown under the plan. Parts tagged as levels, rooms and zones
+      (<code>fp</code> tags, see <a href="https://github.com/istals/floorplan3d-card/blob/main/docs/model-builder-guide.md" target="_blank" rel="noopener">docs/model-builder-guide.md</a>)
+      are shown per floor and become rooms; everything is cut at the selected floor's wall height. It is stored in Home Assistant and only shown to logged-in users.</p>
       <div class="row"><label class="button ${this.uploading ? 'disabled' : 'primary'}">${this.uploading ? 'Uploading ' + esc(this.uploading) + '…' : (m ? 'Replace model' : 'Upload .glb')}
       <input type="file" accept=".glb,model/gltf-binary" data-field="model-file" hidden ${this.uploading ? 'disabled' : ''}></label></div>`;
     if (!m) return out;
@@ -809,7 +824,11 @@ export class EditMode {
   _modelBindingsHtml() {
     const mb = this.card.modelBindings();
     if (!mb) return '<p class="dim">Loading model…</p>';
-    const { manifest, levels, rooms, diff } = mb;
+    const { manifest, levels, rooms, diff, notice } = mb;
+    if (!(this.layout.model && this.layout.model.known) && !this._snapPending) { // first look at this model: nothing is "new" yet
+      this._snapPending = true;
+      Promise.resolve().then(() => { this._snapPending = false; if (!(this.layout.model && this.layout.model.known)) this._snapshotKnown(); });
+    }
     const s = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
     const objCount = manifest.objects.length;
     let out = `<div class="sub">In the model</div><p class="hint">${s(manifest.levels.length, 'level')},
@@ -820,22 +839,23 @@ export class EditMode {
         + manifest.errors.map((e) => `<li class="bad">${esc(e)}</li>`).join('')
         + manifest.warnings.map((w) => `<li class="dim">${esc(w)}</li>`).join('') + '</ul></details>';
     }
-    const added = diff.levels.added.length + diff.rooms.added.length;
-    const missing = diff.levels.missing.length + diff.rooms.missing.length;
-    if ((added || missing) && (this.layout.model && (this.layout.model.levels || this.layout.model.rooms))) {
+    const added = notice.levels.added.length + notice.rooms.added.length;
+    const missing = notice.levels.missing.length + notice.rooms.missing.length;
+    if (added || missing) {
       out += `<p class="note warn">Since the last setup: ${added} new part(s) (assigned automatically below, marked auto)
-        and ${missing} part(s) no longer in the model (kept below in case they come back).</p>`;
+        and ${missing} part(s) no longer in the model. <button class="link" data-act="md-ack">OK</button></p>`;
     }
     const sel = (k, id) => (this.modelPick && this.modelPick.kind !== 'untagged' && this.modelPick.id === id && k.includes(this.modelPick.kind) ? 'sel' : '');
 
     if (manifest.levels.length) {
       const opts = (v) => [
+        ['auto', 'auto'],
         ...this.floors.map((f) => [`floor:${f.id}`, 'with ' + f.name]),
         ['always', 'always shown'], ['all-only', 'only in "All"'], ['hidden', 'hidden'],
       ].map(([val, label]) => `<option value="${esc(val)}" ${val === v ? 'selected' : ''}>${esc(label)}</option>`).join('');
       out += '<div class="sub">Levels</div><table class="floors">' + manifest.levels.map((l) => {
         const a = levels[l.id];
-        const v = a.show === 'with' ? `floor:${a.floor}` : a.show;
+        const v = a.auto ? 'auto' : a.show === 'with' ? `floor:${a.floor}` : a.show;
         return `<tr data-pick="level:${esc(l.id)}" class="${sel(['level'], l.id)}"><td title="${esc(l.role)}">${esc(l.label)}</td>
           <td><select data-field="md-level" data-id="${esc(l.id)}">${opts(v)}</select></td>
           <td class="dim">${a.stale ? '<span class="bad">floor deleted</span>' : a.auto ? 'auto' : ''}</td></tr>`;
@@ -844,14 +864,15 @@ export class EditMode {
 
     if (manifest.rooms.length) {
       const areas = Object.values(this.hass.areas || {}).sort((a, b) => a.name.localeCompare(b.name));
-      const opts = (v) => `<option value="" ${v ? '' : 'selected'}>— no area —</option>`
-        + areas.map((a) => `<option value="${esc(a.area_id)}" ${a.area_id === v ? 'selected' : ''}>${esc(a.name)}</option>`).join('');
+      const opts = (v, auto) => `<option value="auto" ${auto ? 'selected' : ''}>auto${auto && v ? ' (' + esc((this.hass.areas[v] || {}).name || v) + ')' : ''}</option>`
+        + `<option value="" ${!auto && !v ? 'selected' : ''}>— no area —</option>`
+        + areas.map((a) => `<option value="${esc(a.area_id)}" ${!auto && a.area_id === v ? 'selected' : ''}>${esc(a.name)}</option>`).join('');
       out += '<div class="sub">Rooms and zones</div><table class="floors">' + manifest.rooms.map((r) => {
         const a = rooms[r.id];
         const note = a.stale ? '<span class="bad">area deleted</span>' : !levels[r.level] || !levels[r.level].floor
           ? 'level not on a floor' : r.outlineFallback ? 'no outline' : a.auto ? 'auto' : '';
         return `<tr data-pick="${r.kind}:${esc(r.id)}" class="${sel(['room', 'zone'], r.id)}"><td title="${esc(r.kind)} in ${esc(r.level || '?')}">${esc(r.label)}</td>
-          <td><select data-field="md-room" data-id="${esc(r.id)}">${opts(a.area)}</select></td><td class="dim">${note}</td></tr>`;
+          <td><select data-field="md-room" data-id="${esc(r.id)}">${opts(a.area, a.auto)}</select></td><td class="dim">${note}</td></tr>`;
       }).join('') + '</table>'
         + '<p class="hint">Rooms from the model replace rooms drawn for the same area. <a href="/config/areas/dashboard" target="_top">Create areas in Home Assistant</a>.</p>';
     }
@@ -894,6 +915,7 @@ export class EditMode {
         if (id !== 'model') { this.modelPick = null; this.view.highlightModelNode(null); }
         this._syncStageClasses();
         break;
+      case 'md-ack': this._snapshotKnown(); return;
       case 'md-forget': {
         const m = this.layout.model || {};
         const k = btn.dataset.kind;
@@ -1024,12 +1046,17 @@ export class EditMode {
       if (file) this._uploadModel(file);
     } else if (f === 'md-level') {
       const v = el.value;
-      const b = v.startsWith('floor:') ? { floor: v.slice(6) } : { show: v };
       const m = this.layout.model || {};
-      this.setModelProps({ levels: { ...(m.levels || {}), [el.dataset.id]: b } });
+      const levels = { ...(m.levels || {}) };
+      if (v === 'auto') delete levels[el.dataset.id]; // back to automatic
+      else levels[el.dataset.id] = v.startsWith('floor:') ? { floor: v.slice(6) } : { show: v };
+      this.setModelProps({ levels });
     } else if (f === 'md-room') {
       const m = this.layout.model || {};
-      this.setModelProps({ rooms: { ...(m.rooms || {}), [el.dataset.id]: { area: el.value || null } } });
+      const rooms = { ...(m.rooms || {}) };
+      if (el.value === 'auto') delete rooms[el.dataset.id];
+      else rooms[el.dataset.id] = { area: el.value || null };
+      this.setModelProps({ rooms });
     } else if (f === 'md-scale') {
       const v = Number(el.value);
       if (Number.isFinite(v) && v > 0) this.setModelProps({ scale: v }, false);

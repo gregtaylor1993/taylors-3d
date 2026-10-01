@@ -69,6 +69,16 @@ describe('buildManifest', () => {
     expect(m.errors[0]).toMatch(/duplicate level id "ground"/);
   });
 
+  it('rooms and zones share one id namespace', () => {
+    const lvl = { name: 'l', extras: fp({ kind: 'level', id: 'l' }), children: [
+      { name: 'a', extras: fp({ kind: 'room', id: 'x', outline: sq }) },
+      { name: 'b', extras: fp({ kind: 'zone', id: 'x', outline: sq }) },
+    ] };
+    const m = buildManifest(tree([lvl]));
+    expect(m.rooms).toHaveLength(1);
+    expect(m.errors.join('\n')).toMatch(/duplicate room\/zone id "x"/);
+  });
+
   it('reports invalid ids, unknown kinds and roles, rooms outside levels', () => {
     const m = buildManifest(tree([
       { name: 'x', extras: fp({ kind: 'level', id: 'Bad Id' }) },

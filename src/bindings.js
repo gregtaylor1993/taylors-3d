@@ -23,6 +23,8 @@ export function migrateModel(model) {
 }
 
 const byOrder = (a, b) => {
+  // legacy models without order/elevation: stack bottom-up by their lowest point
+  if (a.order == null && b.order == null && a.elevation == null && b.elevation == null) return (a.minY || 0) - (b.minY || 0);
   const aOrd = a.order ?? (a.role === 'basement' ? -1 : 0);
   const bOrd = b.order ?? (b.role === 'basement' ? -1 : 0);
   return aOrd - bOrd;
@@ -149,4 +151,17 @@ export function bindingDiff(manifest, model) {
   };
   const safeManifest = isPlainObject(manifest) ? manifest : {};
   return { levels: one(safeManifest.levels, model && model.levels), rooms: one(safeManifest.rooms, model && model.rooms) };
+}
+
+// Compare the manifest with the snapshot of ids the user has already seen ({ levels: [], rooms: [] }).
+// No snapshot means nothing to report.
+export function snapshotDiff(manifest, known) {
+  const one = (entries, ids) => {
+    const cur = (Array.isArray(entries) ? entries : []).map((e) => e.id);
+    if (!Array.isArray(ids)) return { added: [], missing: [] };
+    return { added: cur.filter((id) => !ids.includes(id)), missing: ids.filter((id) => !cur.includes(id)) };
+  };
+  const m = isPlainObject(manifest) ? manifest : {};
+  const k = isPlainObject(known) ? known : {};
+  return { levels: one(m.levels, k.levels), rooms: one(m.rooms, k.rooms) };
 }

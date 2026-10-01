@@ -227,6 +227,11 @@ export class FloorplanView {
         if (this._modelId !== id) return resolve(null);
         const root = gltf.scene;
         const manifest = buildManifest(threeAdapter(root));
+        // legacy levels without order/elevation stack bottom-up by their lowest point
+        for (const l of manifest.levels) {
+          const lb = new THREE.Box3().setFromObject(l.node);
+          l.minY = lb.isEmpty() ? 0 : lb.min.y;
+        }
         // rooms tagged without an outline: use their footprint (root is not placed yet, so world = model space)
         root.updateMatrixWorld(true);
         for (const r of manifest.rooms) {

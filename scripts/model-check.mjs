@@ -155,6 +155,10 @@ try {
   await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-level][data-id=lvl_a0]'); s.value = 'hidden'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   await sleep(200);
   check('choose "hidden"', JSON.stringify(await vis()) === '[false,true]');
+  await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-level][data-id=lvl_a0]'); s.value = 'auto'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await sleep(200);
+  check('choose "auto" removes the saved binding', !('lvl_a0' in (await page.evaluate(`${card}._layout.model.levels`))) && JSON.stringify(await vis()) === '[true,true]'
+    && await page.evaluate(`${card}.shadowRoot.querySelector('[data-field=md-level][data-id=lvl_a0]').value === 'auto'`));
 
   // untagged model: loads whole, no rooms
   const untagged = path.join(root, 'screenshots', 'untagged.glb');
@@ -177,6 +181,32 @@ try {
   await clickText('Frame model');
   await sleep(200);
   check('frame model moves the camera', (await page.evaluate(`${card}._view.camera.position.toArray().join()`)) !== cam0);
+
+  // legacy model (no fp tags, floor:<id> / site / roof names): auto mapping, per-chip visibility, no regeneration notice
+  const legacy = path.join(root, 'screenshots', 'legacy.glb');
+  const legacyNames = { level0: 'floor:ground', level1: 'floor:first', exterior: 'site' };
+  fs.writeFileSync(legacy, rewriteGlbJson(fs.readFileSync(path.join(root, 'demo', 'house.glb')), (json) => {
+    for (const n of json.nodes || []) { delete n.extras; if (legacyNames[n.name]) n.name = legacyNames[n.name]; }
+    return json;
+  }));
+  await upload(legacy);
+  await page.waitForFunction(`${card}._view.modelManifest()?.levels.some((l) => l.id === 'site')`, { timeout: 10000 });
+  await sleep(400);
+  fs.unlinkSync(legacy);
+  check('legacy names read as levels', (await page.evaluate(`${card}._view.modelManifest().levels.map((l) => l.id).join()`)) === 'ground,first,site,roof',
+    await page.evaluate(`${card}._view.modelManifest().levels.map((l) => l.id).join()`));
+  check('legacy levels map automatically', (await lv()) === JSON.stringify({ ground: 'with:ground', first: 'with:first', site: 'with:ground', roof: 'all-only:null' }), await lv());
+  const legacyVis = () => page.evaluate(`(() => { const l = ${card}._view.modelManifest().levels; return [l[0].node.visible, l[1].node.visible]; })()`);
+  await page.evaluate(`${card}._setFloor('ground')`);
+  await sleep(300);
+  check('legacy: ground chip shows ground only', JSON.stringify(await legacyVis()) === '[true,false]');
+  await page.evaluate(`${card}._setFloor('first')`);
+  await sleep(300);
+  check('legacy: first chip shows first only', JSON.stringify(await legacyVis()) === '[false,true]');
+  await clickText('Data');
+  await clickText('Model');
+  await sleep(200);
+  check('no "Since the last setup" notice after upload', !(await page.evaluate(`${panel('')}.textContent`)).includes('Since the last setup'));
 
   // importing a plan export keeps the uploaded model and maps foreign floor ids onto HA floors
   await clickText('Data');

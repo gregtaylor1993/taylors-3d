@@ -8,6 +8,14 @@ const hass = {
 };
 
 describe('mergeFloors', () => {
+  it('merges repeated entries per id (a partial entry keeps the model elevation)', () => {
+    const h = { floors: { f: { floor_id: 'f', name: 'F', level: 1 } }, areas: {} };
+    for (const hh of [h, { floors: {}, areas: {} }]) {
+      const f = mergeFloors(hh, { floors: [{ id: 'f', elevation: 3.25, height: 2.5 }, { id: 'f', height: 2.4 }] }).find((x) => x.id === 'f');
+      expect(f.elevation).toBe(3.25);
+      expect(f.height).toBe(2.4);
+    }
+  });
   it('syncs HA floors with elevation = level * 3', () => {
     expect(mergeFloors(hass, {})).toEqual([
       { id: 'ground', name: 'Ground', elevation: 0, height: 2.7 },

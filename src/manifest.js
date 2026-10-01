@@ -29,7 +29,7 @@ export function readTag(name, extras, { topLevel = false } = {}) {
 
 export function buildManifest(adapter) {
   const m = { levels: [], rooms: [], objects: [], errors: [], warnings: [], byNode: new Map() };
-  const seen = { level: new Set(), room: new Set(), zone: new Set(), object: new Set() };
+  const seen = { level: new Set(), room: new Set(), object: new Set() };
   m.ownerOf = (node) => {
     for (let n = node; n !== null && n !== undefined; n = adapter.parent(n)) {
       if (m.byNode.has(n)) return m.byNode.get(n);
@@ -49,8 +49,12 @@ export function buildManifest(adapter) {
       m.errors.push(`${path}: invalid id "${tag.id}" (use a-z, 0-9, _ and -, at most 64)`);
       return null;
     }
-    if (seen[tag.kind].has(tag.id)) { m.errors.push(`${path}: duplicate ${tag.kind} id "${tag.id}"`); return null; }
-    seen[tag.kind].add(tag.id);
+    const ns = tag.kind === 'zone' ? 'room' : tag.kind; // rooms and zones share one id namespace
+    if (seen[ns].has(tag.id)) {
+      m.errors.push(`${path}: duplicate ${ns === 'room' ? 'room/zone' : tag.kind} id "${tag.id}"`);
+      return null;
+    }
+    seen[ns].add(tag.id);
     const base = { kind: tag.kind, id: tag.id, label: tag.label || tag.id, node, path, source: tag.source };
     let entry;
     if (tag.kind === 'level') {

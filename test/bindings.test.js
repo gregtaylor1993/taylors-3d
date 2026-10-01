@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   levelsFromFloorMap, migrateModel, resolveLevels, resolveRoomAreas, transformPoint, modelRooms,
-  combineRooms, levelFloorOverrides, bindingDiff,
+  combineRooms, levelFloorOverrides, bindingDiff, snapshotDiff,
 } from '../src/bindings.js';
 
 const L = (id, role = 'storey', order = null, extra = {}) => ({ kind: 'level', id, role, order, elevation: null, height: null, ...extra });
@@ -180,5 +180,27 @@ describe('bindingDiff', () => {
     expect(bindingDiff(null, null)).toEqual({ levels: { kept: [], added: [], missing: [] }, rooms: { kept: [], added: [], missing: [] } });
     expect(bindingDiff({ levels: [], rooms: [] }, { levels: {}, rooms: {} })).toEqual({ levels: { kept: [], added: [], missing: [] }, rooms: { kept: [], added: [], missing: [] } });
     expect(bindingDiff({ levels: [{ id: 'x' }], rooms: [] }, null)).toEqual({ levels: { kept: [], added: ['x'], missing: [] }, rooms: { kept: [], added: [], missing: [] } });
+  });
+});
+
+describe('legacy storeys without order/elevation', () => {
+  it('stack bottom-up by minY, not file order', () => {
+    const levels = [L('upper', 'storey', null, { minY: 3 }), L('lower', 'storey', null, { minY: 0 })];
+    const r = resolveLevels(levels, floors);
+    expect(r.lower.floor).toBe('floor1');
+    expect(r.upper.floor).toBe('floor2');
+  });
+});
+
+describe('snapshotDiff', () => {
+  const man = { levels: [{ id: 'a' }, { id: 'b' }], rooms: [{ id: 'r1' }, { id: 'r2' }] };
+  it('compares the manifest with the known snapshot', () => {
+    expect(snapshotDiff(man, { levels: ['a', 'x'], rooms: ['r1'] })).toEqual({
+      levels: { added: ['b'], missing: ['x'] }, rooms: { added: ['r2'], missing: [] },
+    });
+  });
+  it('is empty when nothing changed or no snapshot exists', () => {
+    expect(snapshotDiff(man, { levels: ['a', 'b'], rooms: ['r1', 'r2'] })).toEqual({ levels: { added: [], missing: [] }, rooms: { added: [], missing: [] } });
+    expect(snapshotDiff(man, null)).toEqual({ levels: { added: [], missing: [] }, rooms: { added: [], missing: [] } });
   });
 });
