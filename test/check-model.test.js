@@ -88,6 +88,18 @@ describe('checkGlb', () => {
     expect(r.ok).toBe(false);
     expect(r.errors.some((e) => /invalid node structure/.test(e))).toBe(true);
   });
+
+  it('does not crash on malformed mesh data (missing meshes array)', () => {
+    const r = checkGlb(glb({ asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [
+      { name: 'ground', extras: fp({ kind: 'level', id: 'ground' }), children: [1] },
+      { name: 'm', mesh: 3 },
+    ] }));
+    expect(r).toHaveProperty('ok');
+    expect(() => checkGlb(glb({ asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [
+      { name: 'ground', extras: fp({ kind: 'level', id: 'ground' }), children: [1] },
+      { name: 'm', mesh: 3 },
+    ] }))).not.toThrow();
+  });
 });
 
 describe('CLI', () => {
@@ -102,5 +114,28 @@ describe('CLI', () => {
     expect(out).toMatch(/ERROR .*duplicate level id "x"/);
     const json = JSON.parse(execFileSync('node', ['tools/check-model.mjs', file, '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).toString() || '{}');
     expect(json.ok).toBe(false);
+  });
+
+  it('exits 1 on unreadable file in text mode', () => {
+    let code = 0, out = '';
+    try { execFileSync('node', ['tools/check-model.mjs', '/nonexistent/path.glb'], { encoding: 'utf8' }); } catch (e) { code = e.status; out = e.stdout; }
+    expect(code).toBe(1);
+    expect(out).toMatch(/ERROR .*cannot read.*\/nonexistent\/path\.glb/);
+  });
+
+  it('exits 0 with JSON ok:false on unreadable file in JSON mode', () => {
+    let code;
+    let out;
+    try {
+      out = execFileSync('node', ['tools/check-model.mjs', '/nonexistent/path.glb', '--json'], { encoding: 'utf8' });
+      code = 0;
+    } catch (e) {
+      code = e.status;
+      out = e.stdout || '';
+    }
+    expect(code).toBe(0);
+    const json = JSON.parse(out || '{}');
+    expect(json.ok).toBe(false);
+    expect(json.errors.some((e) => /cannot read/.test(e))).toBe(true);
   });
 });

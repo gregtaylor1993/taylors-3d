@@ -46,8 +46,10 @@ const apply = (m, [x, y, z]) => [m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * 
 
 function meshSize(json, meshIndex, world) {
   let min = [Infinity, Infinity], max = [-Infinity, -Infinity];
-  for (const p of json.meshes[meshIndex].primitives || []) {
-    const acc = json.accessors[p.attributes && p.attributes.POSITION];
+  const mesh = (json.meshes || [])[meshIndex];
+  if (!mesh) return 0;
+  for (const p of mesh.primitives || []) {
+    const acc = (json.accessors || [])[p.attributes && p.attributes.POSITION];
     if (!acc || !acc.min || !acc.max) continue;
     for (const cx of [acc.min[0], acc.max[0]]) for (const cy of [acc.min[1], acc.max[1]]) for (const cz of [acc.min[2], acc.max[2]]) {
       const [x, , z] = apply(world, [cx, cy, cz]);
@@ -94,32 +96,36 @@ export function checkGlb(buffer) {
   }
 
   // meshes larger than a plot inside storeys and basements
-  const nodes = json.nodes || [];
-  const storeyNodes = new Set(m.levels.filter((l) => l.role === 'storey' || l.role === 'basement').map((l) => l.node));
-  const scene = (json.scenes || [])[json.scene ?? 0] || { nodes: [] };
-  const walk = (i, parentWorld, inStorey, path, visited) => {
-    if (visited.has(i) || !nodes[i]) return;
-    visited.add(i);
-    const n = nodes[i];
-    const world = mul(parentWorld, local(n));
-    const p = path ? `${path}/${n.name || i}` : (n.name || String(i));
-    const storey = inStorey || storeyNodes.has(i);
-    if (storey && n.mesh !== undefined) {
-      const size = meshSize(json, n.mesh, world);
-      if (size > MAX_MESH_M) warnings.push(`mesh ${p} is larger than ${MAX_MESH_M} m (${size.toFixed(0)} m) inside a storey; move ground planes and roads to the exterior level`);
-    }
-    for (const c of n.children || []) walk(c, world, storey, p, visited);
-  };
-  for (const i of scene.nodes || []) walk(i, IDENT, false, '', new Set());
+  try {
+    const nodes = json.nodes || [];
+    const storeyNodes = new Set(m.levels.filter((l) => l.role === 'storey' || l.role === 'basement').map((l) => l.node));
+    const scene = (json.scenes || [])[json.scene ?? 0] || { nodes: [] };
+    const walk = (i, parentWorld, inStorey, path, visited) => {
+      if (visited.has(i) || !nodes[i]) return;
+      visited.add(i);
+      const n = nodes[i];
+      const world = mul(parentWorld, local(n));
+      const p = path ? `${path}/${n.name || i}` : (n.name || String(i));
+      const storey = inStorey || storeyNodes.has(i);
+      if (storey && n.mesh !== undefined) {
+        const size = meshSize(json, n.mesh, world);
+        if (size > MAX_MESH_M) warnings.push(`mesh ${p} is larger than ${MAX_MESH_M} m (${size.toFixed(0)} m) inside a storey; move ground planes and roads to the exterior level`);
+      }
+      for (const c of n.children || []) walk(c, world, storey, p, visited);
+    };
+    for (const i of scene.nodes || []) walk(i, IDENT, false, '', new Set());
 
-  (json.images || []).forEach((img, i) => {
-    const bv = json.bufferViews && json.bufferViews[img.bufferView];
-    if (!bv || !bin) return;
-    const bytes = bin.subarray(bv.byteOffset || 0, (bv.byteOffset || 0) + bv.byteLength);
-    const size = imageSize(Buffer.from(bytes), img.mimeType);
-    if (size && Math.max(...size) > MAX_TEXTURE_PX) warnings.push(`texture "${img.name || i}" is ${size[0]} × ${size[1]} px; keep textures at ${MAX_TEXTURE_PX} px or less`);
-  });
-  if (buf.length > MAX_FILE_MB * 1024 * 1024) warnings.push(`file is ${(buf.length / 1048576).toFixed(1)} MB; keep it under ${MAX_FILE_MB} MB`);
+    (json.images || []).forEach((img, i) => {
+      const bv = json.bufferViews && json.bufferViews[img.bufferView];
+      if (!bv || !bin) return;
+      const bytes = bin.subarray(bv.byteOffset || 0, (bv.byteOffset || 0) + bv.byteLength);
+      const size = imageSize(Buffer.from(bytes), img.mimeType);
+      if (size && Math.max(...size) > MAX_TEXTURE_PX) warnings.push(`texture "${img.name || i}" is ${size[0]} × ${size[1]} px; keep textures at ${MAX_TEXTURE_PX} px or less`);
+    });
+    if (buf.length > MAX_FILE_MB * 1024 * 1024) warnings.push(`file is ${(buf.length / 1048576).toFixed(1)} MB; keep it under ${MAX_FILE_MB} MB`);
+  } catch (e) {
+    errors.push(`invalid model data: ${e.message}`);
+  }
 
   return {
     ok: errors.length === 0, errors, warnings, summary: summarize(m),
@@ -134,7 +140,18 @@ function main(argv) {
     console.error('usage: node tools/check-model.mjs house.glb [--json]');
     return 2;
   }
-  const r = checkGlb(fs.readFileSync(file));
+  let r;
+  try {
+    r = checkGlb(fs.readFileSync(file));
+  } catch (e) {
+    const msg = `cannot read ${file}: ${e.message}`;
+    if (argv.includes('--json')) {
+      console.log(JSON.stringify({ ok: false, errors: [msg], warnings: [], summary: null, levels: [], rooms: [] }, null, 2));
+      return 0;
+    }
+    console.log('ERROR ' + msg);
+    return 1;
+  }
   if (argv.includes('--json')) {
     console.log(JSON.stringify(r, null, 2));
     return 0;
