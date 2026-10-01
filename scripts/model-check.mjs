@@ -78,12 +78,12 @@ try {
   await sleep(400);
   check('leaving edit mode removes labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label').length`)) === 0);
 
-  const lights = () => page.evaluate(`({ sun: ${card}._view.sun.intensity, hemi: ${card}._view.hemi.intensity })`);
+  const lights = () => page.evaluate(`({ sun: ${card}._view.sun.intensity, hemi: ${card}._view.hemi.intensity, cast: ${card}._view.sun.castShadow })`);
   const day = await lights();
   await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').click()`);
   await sleep(300);
   const night = await lights();
-  check('night: sun off, hemisphere dim', night.sun === 0 && night.hemi <= 0.4, JSON.stringify(night));
+  check('night: moonlight only, no shadows, hemisphere <= 1.4', night.sun < 1 && night.cast === false && night.hemi <= 1.4, JSON.stringify(night));
   check('button shows the moon at night', (await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').textContent`)) === '☾');
   await sh('look-night.png');
   await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').click()`);
@@ -230,10 +230,10 @@ try {
   await page.evaluate(`${dn}.click()`);
   await upload(path.join(root, 'demo', 'house.glb'));
   await sleep(1500);
-  check('night kept after re-upload', (await page.evaluate(`${dn}.textContent`)) === '\u263e' && (await page.evaluate(`${card}._view.sun.intensity`)) === 0);
+  check('night kept after re-upload', (await page.evaluate(`${dn}.textContent`)) === '\u263e' && (await page.evaluate(`${card}._view.sun.intensity`)) < 1 && (await page.evaluate(`${card}._view.sun.castShadow`)) === false);
   await page.evaluate(`${dn}.click()`);
   await sleep(200);
-  check('back to day', (await page.evaluate(`${dn}.textContent`)) === '\u2600' && (await page.evaluate(`${card}._view.sun.intensity`)) > 0);
+  check('back to day', (await page.evaluate(`${dn}.textContent`)) === '\u2600' && (await page.evaluate(`${card}._view.sun.intensity`)) > 1 && (await page.evaluate(`${card}._view.sun.castShadow`)) === true);
 
   // legacy model (no fp tags, floor:<id> / site / roof names): auto mapping, per-chip visibility, no regeneration notice
   const legacy = path.join(root, 'screenshots', 'legacy.glb');

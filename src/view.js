@@ -333,10 +333,12 @@ export class FloorplanView {
       r.toneMappingExposure = 1.25;
       r.shadowMap.enabled = true;
       r.shadowMap.type = THREE.PCFSoftShadowMap;
-      hemi.color.setHex(day ? 0xcfdcff : 0x8fa3d6);
+      hemi.color.setHex(day ? 0xcfdcff : 0x6f86c6);
       hemi.groundColor.setHex(day ? 0x7a6248 : 0x2a2622);
-      hemi.intensity = day ? 1.1 : 0.4;
-      sun.intensity = day ? 2.6 : 0;
+      hemi.intensity = day ? 1.1 : 1.4;
+      // night: the sun doubles as moonlight (no shadows) until lamps cast real light
+      sun.color.setHex(day ? 0xffffff : 0xa8bcff);
+      sun.intensity = day ? 2.6 : 0.9;
       sun.castShadow = day;
       sun.shadow.mapSize.set(2048, 2048);
       sun.shadow.bias = -0.0005;
@@ -348,6 +350,7 @@ export class FloorplanView {
       hemi.color.setHex(0xffffff);
       hemi.groundColor.setHex(0x8a8a8a);
       hemi.intensity = day ? 2.2 : 0.6;
+      sun.color.setHex(0xffffff);
       sun.intensity = day ? 1.4 : 0;
       sun.castShadow = false;
       sun.position.set(-12, 30, 18);
