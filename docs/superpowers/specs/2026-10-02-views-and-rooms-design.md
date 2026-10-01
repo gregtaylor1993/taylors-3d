@@ -7,9 +7,12 @@ Builds on: `2026-10-01-model-contract-design.md` (levels, rooms, bindings) and t
 ## Goal
 
 Make every floor view look the way the user wants without typing metres:
-- The floor buttons stay **one per HA floor plus "All"**. Each floor's view is **expanded with element
-  choices**: any part of the model (levels, rooms, zones, objects, layers, or plain model groups on
-  untagged models) can be shown or hidden on that floor, by clicking it in a tree or in the 3D view.
+- The floor buttons are **views owned by the house model** (any number: Exterior, Ground floor,
+  Attic…), each **linked to HA floors** so HA's own floor structure stays the source of truth for other
+  cards and automations. Each view has **element choices**: any part of the model (levels, rooms,
+  zones, objects, layers, or plain model groups on untagged models) can be shown or hidden in it, by
+  clicking it in a tree or in the 3D view. The same element (lawn, mower, driveway) can be in several
+  views.
 - **No metres or elevations to type.** Floor heights come from the model.
 - Each floor opens with the **house framed**, and the user can **save the current camera** as that
   floor's default.
@@ -26,11 +29,24 @@ and never see an elevation field; after a re-export with `fp` tags the same view
 - Custom views that are not HA floors.
 - Editing model geometry.
 
-## 1. Views
+## 1. Views (owned by the model, linked to HA floors)
 
-- Views = HA floors (in HA's level order) + `all`. Ids are HA floor ids and `all`.
-- "All" label: `layout.views.all.name` (UI) or card YAML `views.all.name`; default "All".
-- Layout-only floors (from the Rooms tab "Add floor" or an import) remain views as today.
+- **Source, in order:** (1) the model's own `views` (root `extras.fp.views`, see §8); (2) if the model
+  has none, generated views: one per `storey`/`basement` level (label = level label, id = level id) plus
+  `all` ("All"); (3) without a model: one view per HA floor plus `all` (today's behaviour).
+- **Each view** has: `id`, `label`, ordered `rules` (§2), `camera`, `floors` (linked HA floor ids),
+  `cut` (untagged models only).
+- **Linking to HA floors:** `floors` defaults to the HA floors of the levels the view shows by default
+  (level → HA floor binding from the Model tab, unchanged); the user can change it (multi-select).
+  An exterior-only view may link to no floor. One HA floor may be linked to several views.
+- **Overrides:** the UI stores edits per view id in `layout.views[id]` (label, rules appended after the
+  model's, camera, floors, cut, `hidden: true` to drop a model view); card YAML `views:` overrides the
+  same keys per card. The UI can also add views (`layout.views[id].added = true`).
+- **Which devices show in a view:** (a) a device whose area is linked to a room/zone that is visible in
+  the view; else (b) a device whose area's HA floor is linked to the view (covers pins and areas
+  without a room); else hidden. Markers on HA floors linked to the view but outside the top visible
+  storey fade in views that show several storeys (existing fading rule, now per view).
+- The level dropdown in the Model tab becomes "belongs to HA floor" (auto | floor | none).
 
 ## 2. Visibility model
 
@@ -47,6 +63,7 @@ and never see an elevation field; after a re-export with `fp` tags the same view
 | `layer:<name>` | every node whose `fp.layer` is (or contains) the name |
 | `node:<path>` | a node by path (names from the model root, `/`-separated; `*` matches within one segment, `**` across segments) |
 
+Model views use the same selectors in their `show`/`hide` lists.
 Unknown or non-matching selectors are ignored (listed as "not in this model" in the UI).
 
 ### Resolution (per floor view)
@@ -67,20 +84,21 @@ Picking ignores hidden nodes (already the case).
 ### Storage
 ```json
 "views": {
-  "floor1": {
+  "ground": {
     "rules": [{ "hide": "layer:ceiling" }, { "hide": "node:floor:ground/mesh_177" }],
     "camera": { "position": [4.1, 18.3, 21.0], "target": [5.2, 0.9, -8.0] },
-    "cut": false
+    "floors": ["floor1"]
   },
-  "all": { "name": "Exterior", "rules": [] }
+  "exterior": { "label": "Garden", "floors": [] },
+  "night_garden": { "added": true, "label": "Night garden", "rules": [{ "show": "role:exterior" }] }
 }
 ```
-`layout.views[viewId]`: `name` (all only), `rules`, `camera` (world coordinates), `cut`.
-Card YAML `views:` uses the same keys per view id; its `rules` are appended after the layout's, its
-`camera`, `cut` and `name` replace the layout's for that card only.
+`layout.views[viewId]`: `label`, `rules` (appended after the model's), `camera` (world coordinates),
+`floors`, `cut`, `hidden`, `added`. Card YAML `views:` uses the same keys per view id; its `rules` are
+appended last, other keys replace for that card only.
 
 ### Migration
-The level dropdown's show modes (`layout.model.levels[id].show`) become view rules on load:
+Existing layouts have no views: they get generated views (§1). The level dropdown's show modes (`layout.model.levels[id].show`) become view rules on load:
 `hidden` → `hide level:<id>` on every view; `always` → `show level:<id>` on every view; `all-only` →
 `hide level:<id>` on every floor view; `only` → `hide level:<id>` on floor views above its floor.
 The binding keeps only the floor (`{ floor }` or auto). The Model tab's level dropdown becomes
@@ -88,7 +106,8 @@ The binding keeps only the floor (`{ floor }` or auto). The Model tab's level dr
 
 ## 3. Edit → Views tab (new; the Model tab keeps upload, alignment, level→floor, rooms, report)
 
-- Floor picker (defaults to the selected floor chip; switching it switches the chip).
+- View picker (defaults to the selected view chip; switching it switches the chip), with add, rename,
+  hide and reorder, and the view's linked HA floors (multi-select).
 - **Element tree** of the loaded model: levels → rooms/zones → objects; a "Layers" section listing the
   model's `fp.layer` names; for untagged parts the model's own groups two levels deep. Each row has a
   three-state eye: default (inherits), shown, hidden. Rows show the resolved state.
@@ -99,7 +118,7 @@ The binding keeps only the floor (`{ floor }` or auto). The Model tab's level dr
 - **Camera**: "Save current view as this floor's start" and "Reset camera".
 - **Cut at wall height** checkbox (shown only for untagged models).
 - **Reset this floor** (removes its rules and camera).
-- "All" view: a name field.
+- Every view: a label field.
 
 ## 4. No metres
 
@@ -153,6 +172,11 @@ Room labels (edit mode with a model; always without a model) show the name and t
   never across rooms or storeys.
 - No world ground plane inside a storey (exterior `layer: terrain` instead).
 - Optional `fp.label`, `fp.area_m2` on rooms (display only).
+- **Views in the model:** root node (or the single wrapper) may carry
+  `extras.fp.views = [{ id, label, show: [selectors], hide: [selectors], camera?: { position, target } }]`
+  in display order, e.g. Exterior `{ show: ['all'] }`, Ground floor
+  `{ show: ['level:ground', 'role:exterior'], hide: ['level:attic', 'role:roof'] }`, Attic
+  `{ show: ['level:ground', 'level:attic', 'role:exterior'], hide: ['role:roof'] }`.
 - Concrete look values (renderer, sun, materials, lamps, cameras, labels) come from the prototype's
   source, summarised in `docs/prototype-findings.md`; they feed the objects-and-light step.
 
@@ -165,7 +189,8 @@ Room labels (edit mode with a model; always without a model) show the name and t
 
 ## 10. Testing
 
-- Unit (pure, on generic node trees): selector parsing and matching (incl. `*`/`**`), rule resolution
+- Unit (pure, on generic node trees): view sources and merge order (model → generated → layout →
+  YAML), device-in-view rule (room visible / linked floor / hidden), selector parsing and matching (incl. `*`/`**`), rule resolution
   (last match wins, inheritance, ancestor-visible-for-shown-descendant), migration of level show modes,
   YAML merge, measured elevations, outline extraction from triangle lists (rectangle, L-shape, hole-free
   with extra faces, failure → null), label formatting.
