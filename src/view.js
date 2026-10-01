@@ -7,6 +7,21 @@ import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { centroid } from './placement.js';
 import { wallSegments } from './layout.js';
+import { buildManifest, threeAdapter } from './manifest.js';
+
+// Visibility of a model level for the selected floor ('all' or a floor id).
+export function levelVisible(assign, visibleFloor) {
+  if (!assign) return true;
+  if (assign.show === 'hidden') return false;
+  if (assign.show === 'always') return true;
+  if (assign.show === 'all-only') return visibleFloor === 'all';
+  return visibleFloor === 'all' || visibleFloor === assign.floor;
+}
+
+// Plan rectangle of a world-space box (used for rooms tagged without an outline).
+export function fallbackOutline(box) {
+  return [[box.min.x, -box.max.z], [box.max.x, -box.max.z], [box.max.x, -box.min.z], [box.min.x, -box.min.z]];
+}
 
 const WALL_THICKNESS = 0.12;
 const GLOW_RADIUS = 2.2;
@@ -68,7 +83,7 @@ export class FloorplanView {
     this.trail = null;
     this.modelGroup = new THREE.Group();
     this.scene.add(this.modelGroup);
-    this.model = null; // { url, root, floorNodes: Map(floorId -> node), other: [nodes] }
+    this.model = null; // { id, root, manifest }
     this.modelClip = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
     this.raycaster = new THREE.Raycaster();
 
@@ -211,14 +226,15 @@ export class FloorplanView {
       const onLoad = (gltf) => {
         if (this._modelId !== id) return resolve(null);
         const root = gltf.scene;
-        // GLTFLoader strips ':' from node names; the original is kept in userData.name
-        const nameOf = (n) => (n.userData && n.userData.name) || n.name;
-        const isFloor = (n) => /^floor[:_]/.test(nameOf(n));
-        const floorNodes = new Map();
-        const top = root.children.length === 1 && !isFloor(root.children[0]) ? root.children[0].children : root.children;
-        for (const n of top) {
-          const m = /^floor[:_](.+)$/.exec(nameOf(n));
-          if (m) floorNodes.set(m[1], n);
+        const manifest = buildManifest(threeAdapter(root));
+        // rooms tagged without an outline: use their footprint (root is not placed yet, so world = model space)
+        root.updateMatrixWorld(true);
+        for (const r of manifest.rooms) {
+          if (r.outline) continue;
+          const box = new THREE.Box3().setFromObject(r.node);
+          if (box.isEmpty()) continue;
+          r.outline = fallbackOutline(box);
+          r.outlineFallback = true;
         }
         root.traverse((o) => {
           if (!o.isMesh) return;
@@ -229,7 +245,7 @@ export class FloorplanView {
             mat.userData.wasTransparent = mat.transparent;
           }
         });
-        this.model = { id, root, floorNodes };
+        this.model = { id, root, manifest };
         this.modelGroup.add(root);
         place();
         resolve(null);
@@ -245,30 +261,55 @@ export class FloorplanView {
     return this._modelLoading;
   }
 
-  // floor ids found as "floor:<id>" groups in the loaded model
-  modelFloors() {
-    return this.model ? [...this.model.floorNodes.keys()] : null;
+  modelManifest() {
+    return this.model ? this.model.manifest : null;
   }
 
-  // the same groups with their lowest point (model units), for bottom-up matching
-  modelFloorGroups() {
-    if (!this.model) return null;
-    return [...this.model.floorNodes].map(([id, node]) => {
-      const box = new THREE.Box3().setFromObject(node);
-      return { id, minY: box.isEmpty() ? 0 : box.min.y };
-    });
-  }
-
-  // group id -> HA floor id, 'always' or 'hidden'
-  setModelFloorMap(map) {
-    this.modelFloorMap = map || {};
+  // level id -> { show, floor } from the card's bindings
+  setModelLevels(assign) {
+    this.modelLevels = assign || {};
     this._applyFloorVisibility();
+    this.dirty = true;
+  }
+
+  // The tagged part under a screen point: nearest tagged ancestor of the first visible hit below
+  // the cut; untagged meshes come back as { kind: 'untagged' } so the UI can say so.
+  pickModel(clientX, clientY) {
+    if (!this.model) return null;
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const shown = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
+    const hit = this.raycaster.intersectObject(this.model.root, true)
+      .find((h) => h.object.isMesh && shown(h.object) && h.point.y <= this.modelClip.constant + 1e-6);
+    if (!hit) return null;
+    const owner = this.model.manifest.ownerOf(hit.object);
+    if (owner) return owner;
+    const names = [];
+    for (let p = hit.object; p && p !== this.model.root; p = p.parent) names.unshift((p.userData && p.userData.name) || p.name || '?');
+    return { kind: 'untagged', node: hit.object, path: names.join('/') };
+  }
+
+  highlightModelNode(node) {
+    if (this.pickHelper) {
+      this.scene.remove(this.pickHelper);
+      this.pickHelper.geometry.dispose();
+      this.pickHelper.material.dispose();
+      this.pickHelper = null;
+    }
+    if (node) {
+      this.pickHelper = new THREE.BoxHelper(node, this.theme.primary || 0x03a9f4);
+      this.pickHelper.material.depthTest = false;
+      this.pickHelper.renderOrder = 11;
+      this.scene.add(this.pickHelper);
+    }
     this.dirty = true;
   }
 
   _disposeModel() {
     this._modelId = null;
     if (!this.model) return;
+    this.highlightModelNode(null);
     this._clearGroup(this.modelGroup);
     this.model = null;
     this.dirty = true;
@@ -504,14 +545,12 @@ export class FloorplanView {
     for (const o of this.overlayGroup.children) if (!o.isCSS2DObject) o.visible = this._shows(o.userData.floorId);
     if (this.trail) this.trail.visible = this._shows(this.trail.userData.floorId);
     if (this.model) {
-      const map = this.modelFloorMap || {};
-      for (const [id, node] of this.model.floorNodes) {
-        const target = map[id] ?? id;
-        node.visible = target === 'always' ? true : target === 'hidden' ? false : this._shows(target);
-      }
+      const assign = this.modelLevels || {};
+      for (const l of this.model.manifest.levels) l.node.visible = levelVisible(assign[l.id], this.visibleFloor);
       // everything above the cut-away height of the selected floor is clipped (roof, upper floors)
       const cut = this.visibleFloor === 'all' ? 1e6 : this.floorElevation(this.visibleFloor) + Math.max(this.wallHeight, 0.3);
       this.modelClip.constant = cut;
+      if (this.pickHelper) this.pickHelper.update();
     }
     if (this.mapPlane && this.mapPlane.material.map) this.mapPlane.visible = this._shows(this.mapPlane.userData.floorId);
   }
