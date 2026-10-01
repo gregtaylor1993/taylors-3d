@@ -125,24 +125,3 @@ export function lightGlow(stateObj) {
   const b = Number.isFinite(a.brightness) ? a.brightness / 255 : 1;
   return { rgb, strength: 0.25 + 0.75 * Math.max(0, Math.min(1, b)) };
 }
-
-// Which HA floor each "floor:<id>" group of a model belongs to.
-// groups: [{id, minY}] from the model; floors: merged HA floors; saved: user choices
-// (floor id, 'always' or 'hidden'). Exact id matches first, then the remaining groups bottom-up
-// onto the remaining floors bottom-up; groups left over are always shown (the cut-away still
-// clips them above the selected floor).
-export function modelFloorMap(groups, floors, saved = {}) {
-  const ids = new Set(floors.map((f) => f.id));
-  const out = {};
-  const usedFloors = new Set();
-  for (const g of groups) {
-    const s = saved[g.id];
-    if (s && (s === 'always' || s === 'hidden' || ids.has(s))) out[g.id] = s;
-    else if (ids.has(g.id)) out[g.id] = g.id;
-    if (ids.has(out[g.id])) usedFloors.add(out[g.id]);
-  }
-  const freeFloors = floors.filter((f) => !usedFloors.has(f.id)).sort((a, b) => a.elevation - b.elevation);
-  const rest = groups.filter((g) => !(g.id in out)).sort((a, b) => a.minY - b.minY);
-  rest.forEach((g, i) => { out[g.id] = freeFloors[i] ? freeFloors[i].id : 'always'; });
-  return out;
-}

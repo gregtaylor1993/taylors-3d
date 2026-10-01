@@ -6,7 +6,10 @@ import { EditMode } from './edit-mode.js';
 import './card-editor.js';
 import { LayoutStore } from './storage.js';
 import { buildMarkers, registrySignature, iconFor, isActive, displayValue, areaName } from './registry.js';
-import { mergeFloors, roomFloorId, markerPositions, lightGlow, modelFloorMap } from './layout.js';
+import { mergeFloors, roomFloorId, markerPositions, lightGlow } from './layout.js';
+import {
+  resolveLevels, resolveRoomAreas, modelRooms, combineRooms, levelFloorOverrides, bindingDiff, levelsFromFloorMap,
+} from './bindings.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 
 const VERSION = '0.1.5';
@@ -239,29 +242,46 @@ class Floorplan3dCard extends HTMLElement {
       }
     }
     const firstLoad = opts && !this._view.model;
-    this._applyModelFloorMap();
     this._view.setModel(opts).then((err) => {
       this._notice.textContent = err || '';
       this._notice.hidden = !err;
-      this._applyModelFloorMap();
       // nothing drawn yet: show the model instead of an empty plan
-      if (!err && firstLoad && this._view.model && !(this._layout && this._layout.rooms && this._layout.rooms.length)) this._view.fit();
+      if (!err && firstLoad && this._view.model && !this._allRooms().length) this._view.fit();
+      this._schedule(); // the manifest arrived: rebuild
       if (this._editing) this._edit.onModelLoaded();
     });
   }
 
-  // group -> floor assignment: saved choices (layout.model.floor_map or YAML model_floors),
-  // else automatic
-  modelFloorAssignment() {
-    const groups = this._view.modelFloorGroups();
-    if (!groups || !this._floors) return null;
-    const saved = this._config.model ? this._config.model_floors : this._layout && this._layout.model && this._layout.model.floor_map;
-    return modelFloorMap(groups, this._floors, saved || {});
+  _modelAlign() {
+    const c = this._config;
+    if (c.model) {
+      return {
+        position: Array.isArray(c.model_position) ? c.model_position.map(Number) : [0, 0, 0],
+        rotation: Number(c.model_rotation) || 0, scale: Number(c.model_scale) || 1,
+      };
+    }
+    const m = (this._layout && this._layout.model) || {};
+    return { position: m.position || [0, 0, 0], rotation: m.rotation || 0, scale: m.scale || 1 };
   }
 
-  _applyModelFloorMap() {
-    const map = this.modelFloorAssignment();
-    if (map) this._view.setModelFloorMap(map);
+  // Saved level/room bindings (layout.model; YAML model_floors for URL models) resolved
+  // against the loaded model and the current HA floors and areas.
+  modelBindings() {
+    const manifest = this._view && this._view.modelManifest();
+    if (!manifest || !this._hass) return null;
+    const saved = (this._layout && this._layout.model) || {};
+    const savedLevels = { ...(this._config.model ? levelsFromFloorMap(this._config.model_floors) : {}), ...(saved.levels || {}) };
+    const haFloors = mergeFloors(this._hass, { floors: [] });
+    return {
+      manifest,
+      levels: resolveLevels(manifest.levels, haFloors, savedLevels),
+      rooms: resolveRoomAreas(manifest.rooms, Object.keys(this._hass.areas || {}), saved.rooms || {}),
+      diff: bindingDiff(manifest, saved),
+    };
+  }
+
+  _allRooms() {
+    return combineRooms(this._layout.rooms || [], this._modelRooms || []);
   }
 
   getCardSize() {
@@ -415,8 +435,13 @@ class Floorplan3dCard extends HTMLElement {
       this._applyTheme();
       structure = true;
     }
-    if (structure || l.rooms !== b.rooms || l.floors !== b.lfloors || h.floors !== b.floors || h.areas !== b.areas) {
-      this._buildStructure();
+    const mb = this.modelBindings();
+    const modelKey = mb ? JSON.stringify([mb.levels, mb.rooms, this._modelAlign()]) : '';
+    if (structure || l.rooms !== b.rooms || l.floors !== b.lfloors || h.floors !== b.floors || h.areas !== b.areas
+      || (mb && mb.manifest) !== b.manifest || modelKey !== b.modelKey) {
+      b.manifest = mb && mb.manifest;
+      b.modelKey = modelKey;
+      this._buildStructure(mb);
       markers = true;
     }
     const sig = registrySignature(h);
@@ -433,8 +458,6 @@ class Floorplan3dCard extends HTMLElement {
     if (l.model !== b.model) {
       b.model = l.model;
       this._loadModel();
-    } else if (markers) {
-      this._applyModelFloorMap(); // floors may have changed
     }
     if (m !== b.mower) {
       b.mower = m;
@@ -550,19 +573,24 @@ class Floorplan3dCard extends HTMLElement {
     this._view.setTheme(this._built.theme);
   }
 
-  _buildStructure() {
+  _buildStructure(mb) {
     const h = this._hass, b = this._built;
     b.rooms = this._layout.rooms;
     b.lfloors = this._layout.floors;
     b.floors = h.floors;
     b.areas = h.areas;
-    this._floors = mergeFloors(h, this._layout);
-    const rooms = (this._layout.rooms || []).map((room) => ({
+    const align = this._modelAlign();
+    // a level bound to an HA floor gives that floor its elevation and height (user overrides win)
+    const overrides = mb ? levelFloorOverrides(mb.manifest.levels, mb.levels, align) : [];
+    this._floors = mergeFloors(h, { ...this._layout, floors: [...overrides, ...(this._layout.floors || [])] });
+    this._modelRooms = mb ? modelRooms(mb.manifest.rooms, mb.levels, mb.rooms, align) : [];
+    if (mb) this._view.setModelLevels(mb.levels);
+    const rooms = this._allRooms().map((room) => ({
       room,
       floorId: roomFloorId(room, h, this._floors),
-      label: room.name || (room.area_id ? areaName(h, room.area_id) : ''),
+      label: room.name || (room.area_id ? areaName(h, room.area_id) : room.label || ''),
     }));
-    this._view.setStructure(this._floors, rooms, { wallHeight: Number(this._config.wall_height) || 1.0 });
+    this._view.setStructure(this._floors, rooms, { wallHeight: Number(this._config.wall_height) || 1.0, walls: !this._view.model });
 
     const withRooms = this._floors.filter((f) => rooms.some((r) => r.floorId === f.id));
     if (!this._floor || (this._floor !== 'all' && !this._floors.some((f) => f.id === this._floor))) {
@@ -584,7 +612,7 @@ class Floorplan3dCard extends HTMLElement {
   _buildMarkers() {
     const h = this._hass;
     this._markers = buildMarkers(h, this._layout, { group_by: this._config.group_by });
-    this._positions = markerPositions(this._markers, this._layout, h, this._floors);
+    this._positions = markerPositions(this._markers, { ...this._layout, rooms: this._allRooms() }, h, this._floors);
 
     // the mower's device marker follows the live position instead of being auto placed
     const cfg = this._layout.mower;

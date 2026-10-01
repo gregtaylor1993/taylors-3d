@@ -3,6 +3,8 @@
 // 2. frontend user data (stored in HA, but per user)
 // 3. browser localStorage (last resort)
 
+import { migrateModel } from './bindings.js';
+
 export const EMPTY_LAYOUT = () => ({
   version: 1,
   floors: [],
@@ -89,5 +91,6 @@ export function normalise(l) {
     rooms: Array.isArray(l.rooms) ? l.rooms : [],
     pins: l.pins && typeof l.pins === 'object' ? l.pins : {},
     hidden: Array.isArray(l.hidden) ? l.hidden : [],
+    model: migrateModel(l.model || null),
   };
 }

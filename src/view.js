@@ -412,7 +412,7 @@ export class FloorplanView {
   }
 
   // floors: [{id, elevation, height}], rooms: [{room, floorId, label}]
-  setStructure(floors, rooms, { wallHeight = 1.0 } = {}) {
+  setStructure(floors, rooms, { wallHeight = 1.0, walls = true } = {}) {
     this.floors = floors;
     this.wallHeight = wallHeight;
     this._clearGroup(this.staticGroup);
@@ -456,7 +456,7 @@ export class FloorplanView {
           this.cssObjects.push({ obj, floorId: f.id, kind: 'label' });
         }
       }
-      for (const w of wallSegments(own.map((r) => r.room))) {
+      for (const w of walls ? wallSegments(own.map((r) => r.room)) : []) {
         const dx = w.b[0] - w.a[0], dy = w.b[1] - w.a[1];
         const len = Math.hypot(dx, dy);
         const box = new THREE.Mesh(new THREE.BoxGeometry(len + WALL_THICKNESS, wallHeight, WALL_THICKNESS), wallMat);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeFloors, roomFloorId, wallSegments, markerPositions, lightGlow, modelFloorMap } from '../src/layout.js';
+import { mergeFloors, roomFloorId, wallSegments, markerPositions, lightGlow } from '../src/layout.js';
 import { pointInPolygon } from '../src/placement.js';
 
 const hass = {
@@ -107,23 +107,5 @@ describe('lightGlow', () => {
   it('uses rgb_color and brightness', () => {
     expect(lightGlow({ state: 'on', attributes: { rgb_color: [255, 0, 0], brightness: 255 } })).toEqual({ rgb: [255, 0, 0], strength: 1 });
     expect(lightGlow({ state: 'on', attributes: { brightness: 0 } })).toEqual({ rgb: [255, 196, 120], strength: 0.25 });
-  });
-});
-
-describe('modelFloorMap', () => {
-  const floors = [{ id: 'floor1', elevation: 0 }, { id: 'floor2', elevation: 3 }];
-  it('maps exact ids, then the rest bottom-up', () => {
-    expect(modelFloorMap([{ id: 'attic', minY: 5 }, { id: 'ground', minY: 0 }], floors))
-      .toEqual({ ground: 'floor1', attic: 'floor2' });
-    expect(modelFloorMap([{ id: 'floor2', minY: 3 }, { id: 'x', minY: 0 }], floors)).toEqual({ floor2: 'floor2', x: 'floor1' });
-  });
-  it('shows leftovers always', () => {
-    expect(modelFloorMap([{ id: 'ground', minY: 0 }, { id: 'attic', minY: 3 }], [{ id: 'floor1', elevation: 0 }]))
-      .toEqual({ ground: 'floor1', attic: 'always' });
-  });
-  it('honours saved choices and ignores stale ones', () => {
-    const g = [{ id: 'ground', minY: 0 }, { id: 'attic', minY: 3 }];
-    expect(modelFloorMap(g, floors, { attic: 'hidden', ground: 'gone' })).toEqual({ attic: 'hidden', ground: 'floor1' });
-    expect(modelFloorMap(g, floors, { ground: 'floor2' })).toEqual({ ground: 'floor2', attic: 'floor1' });
   });
 });
