@@ -65,6 +65,7 @@ The options below can be set in the visual editor or in YAML.
 | `model_rotation` | `0` | Model rotation in degrees, counter-clockwise. |
 | `model_scale` | `1` | Model scale (e.g. `0.01` for a centimetre model). |
 | `model_opacity` | `1` | Model opacity, `0`–`1`. |
+| `model_floors` | auto | Which HA floor shows each model storey group, e.g. `{ground: floor1, attic: always}` (`always` / `hidden` allowed). |
 
 ## Set up the plan
 
@@ -133,7 +134,9 @@ Alternatively put a `.glb` in `/config/www/` and set `model: /local/house.glb` i
 (files in `www` are readable without login). A YAML `model` takes precedence over an upload.
 
 Name the top-level groups `floor:<floor_id>` so each floor shows on its own; everything is cut
-at the selected floor's `wall_height`. Details: [docs/house-model-spec.md](docs/house-model-spec.md).
+at the selected floor's `wall_height`. The Model tab lists your HA floor ids. Groups with other
+names are matched to HA floors bottom-up; change the assignment per group there (a floor,
+*always shown* or *hidden*). Details: [docs/house-model-spec.md](docs/house-model-spec.md).
 
 To export an existing Three.js design: add `window.scene = scene;` to its code, open it in the
 browser, paste [tools/export-glb.js](tools/export-glb.js) into the developer console. It drops

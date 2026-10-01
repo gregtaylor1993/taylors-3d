@@ -88,7 +88,7 @@ try {
   const lm = await page.evaluate(`${card}._layout.model`);
   check('upload stored in layout', lm && lm.name === 'house.glb' && lm.version && lm.size > 1000, JSON.stringify(lm));
   check('model loaded with floor groups', JSON.stringify(await page.evaluate(`${card}._view.modelFloors()`)) === '["ground","first"]');
-  check('floor groups listed as known', (await page.evaluate(`${panel('.box')}.textContent`)).includes('ground ✓'));
+  check('matching groups map to their floors', JSON.stringify(await page.evaluate(`${card}.modelFloorAssignment()`)) === '{"ground":"ground","first":"first"}');
   await page.evaluate(`(() => { const s = ${panel('[data-field=md-rotation]')}; s.value = "90"; s.dispatchEvent(new Event("input", { bubbles: true })); })()`);
   await page.evaluate(`(() => { const s = ${panel('[data-field=md-opacity]')}; s.value = "0.5"; s.dispatchEvent(new Event("input", { bubbles: true })); })()`);
   await sleep(150);
@@ -98,6 +98,30 @@ try {
   await page.evaluate(`(() => { const s = ${panel('[data-field=md-rotation]')}; s.value = "0"; s.dispatchEvent(new Event("input", { bubbles: true })); })()`);
   await sleep(200);
   await page.screenshot({ path: path.join(root, 'screenshots/model-upload.png') });
+  // a model whose storey names don't match HA floors (like "ground" / "attic" vs "floor1")
+  const renamed = path.join(root, 'screenshots', 'renamed.glb');
+  const buf = fs.readFileSync(path.join(root, 'demo', 'house.glb'));
+  fs.writeFileSync(renamed, Buffer.from(buf.toString('latin1').replace('floor:ground', 'floor:level0').replace('floor:first', 'floor:attic'), 'latin1'));
+  await upload(renamed);
+  await page.waitForFunction(`JSON.stringify(${card}._view.modelFloors()) === '["level0","attic"]'`, { timeout: 10000 });
+  await sleep(300);
+  fs.unlinkSync(renamed);
+  check('unmatched groups map bottom-up', JSON.stringify(await page.evaluate(`${card}.modelFloorAssignment()`)) === '{"level0":"ground","attic":"first"}');
+  const vis = () => page.evaluate(`(() => { const n = ${card}._view.model.floorNodes; return [n.get('level0').visible, n.get('attic').visible]; })()`);
+  check('mapped group visible on its floor', JSON.stringify(await vis()) === '[true,false]');
+  check('mapping rows marked auto', (await page.evaluate(`${panel('table.floors')}.textContent`)).includes('auto'));
+  check('HA floor ids listed for the design', (await page.evaluate(`${card}.shadowRoot.querySelector('.panel .tab-body').textContent`)).includes('Your floor ids: ground'));
+  await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-floor][data-id=attic]'); s.value = 'always'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await sleep(200);
+  check('choose "always shown"', JSON.stringify(await page.evaluate(`${card}._layout.model.floor_map`)) === '{"attic":"always"}' && JSON.stringify(await vis()) === '[true,true]');
+  await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-floor][data-id=level0]'); s.value = 'hidden'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await sleep(200);
+  check('choose "hidden"', JSON.stringify(await vis()) === '[false,true]');
+  const cam0 = await page.evaluate(`${card}._view.camera.position.toArray().join()`);
+  await clickText('Frame model');
+  await sleep(200);
+  check('frame model moves the camera', (await page.evaluate(`${card}._view.camera.position.toArray().join()`)) !== cam0);
+
   await clickText('Remove model');
   await clickText('Really remove?');
   await sleep(300);

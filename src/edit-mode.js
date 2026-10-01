@@ -766,20 +766,14 @@ export class EditMode {
       <input type="file" accept=".glb,model/gltf-binary" data-field="model-file" hidden ${this.uploading ? 'disabled' : ''}></label></div>`;
     if (!m) return out;
 
-    const floors = this.view.modelFloors();
-    const known = new Set(this.floors.map((f) => f.id));
-    let floorInfo;
-    if (!floors) floorInfo = '<span class="dim">Loading…</span>';
-    else if (!floors.length) floorInfo = 'No <code>floor:&lt;id&gt;</code> groups: the whole model is shown, cut at the selected floor.';
-    else {
-      floorInfo = 'Floor groups: ' + floors.map((f) => known.has(f) ? `${esc(f)} ✓` : `<span class="bad">${esc(f)} (no such floor)</span>`).join(', ');
-    }
+    const floorInfo = this._modelFloorsHtml();
     const [x, y, z] = m.position || [0, 0, 0];
     const slider = (f, label, min, max, step, v) => `<label><span class="lab">${label}<span class="val" data-val="${f}">${fmt(v)}</span></span>
       <input type="range" data-field="md-${f}" min="${min}" max="${max}" step="${step}" value="${v}"></label>`;
     out += `<section class="box"><h3>${esc(m.name || 'house.glb')}</h3>
       <p class="dim">${m.size ? (m.size / 1048576).toFixed(1) + ' MB' : ''}${m.uploaded ? ' · ' + esc(new Date(m.uploaded).toLocaleString()) : ''}</p>
-      <p class="hint">${floorInfo}</p></section>
+      </section>${floorInfo}
+      <div class="row"><button data-act="model-fit">Frame model</button></div>
       <div class="sub">Alignment</div>`
       + slider('x', 'East (m)', -50, 50, 0.05, x)
       + slider('y', 'North (m)', -50, 50, 0.05, y)
@@ -790,6 +784,27 @@ export class EditMode {
       <p class="hint">Scale 0.01 for a model made in centimetres, 0.001 for millimetres.</p>
       <div class="row"><button data-act="model-delete" class="danger">${this.confirmModelDelete ? 'Really remove?' : 'Remove model'}</button></div>`;
     return out;
+  }
+
+  // per model floor group: which HA floor shows it
+  _modelFloorsHtml() {
+    const groups = this.view.modelFloors();
+    const haFloors = this.floors.map((f) => `<code>${esc(f.id)}</code> (${esc(f.name)})`).join(', ');
+    const idHint = `<p class="hint">Your floor ids: ${haFloors}. Name the model's storey groups <code>floor:&lt;id&gt;</code> with these to match automatically.</p>`;
+    if (!groups) return '<p class="dim">Loading model…</p>';
+    if (!groups.length) {
+      return '<div class="sub">Floors</div><p class="hint">The model has no <code>floor:&lt;id&gt;</code> groups, so it is shown whole and cut at the selected floor\'s wall height.</p>' + idHint;
+    }
+    const map = this.card.modelFloorAssignment() || {};
+    const saved = (this.layout.model && this.layout.model.floor_map) || {};
+    const opts = (g) => [
+      ...this.floors.map((f) => [f.id, 'with ' + f.name]),
+      ['always', 'always shown'],
+      ['hidden', 'hidden'],
+    ].map(([v, l]) => `<option value="${esc(v)}" ${map[g] === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
+    const rows = groups.map((g) => `<tr><td><code>${esc(g)}</code></td><td><select data-field="md-floor" data-id="${esc(g)}">${opts(g)}</select></td>
+      <td class="dim">${saved[g] ? '' : 'auto'}</td></tr>`).join('');
+    return `<div class="sub">Floors in the model</div><table class="floors">${rows}</table>${idHint}`;
   }
 
   _dataTab() {
@@ -872,6 +887,7 @@ export class EditMode {
       case 'trail-clear': this.card.clearTrail(); break;
       case 'ov-move': this.overlayMove = !this.overlayMove; this.calibrating = null; break;
       case 'ov-remove': this.overlayMove = false; this.setMower({ overlay: null }); return;
+      case 'model-fit': this.view.fit({ model: true }); return;
       case 'model-delete':
         if (!this.confirmModelDelete) { this.confirmModelDelete = true; break; }
         this._removeModel();
@@ -933,6 +949,9 @@ export class EditMode {
       const file = el.files && el.files[0];
       el.value = '';
       if (file) this._uploadModel(file);
+    } else if (f === 'md-floor') {
+      const m = this.layout.model;
+      if (m) this.setModelProps({ floor_map: { ...(m.floor_map || {}), [el.dataset.id]: el.value } });
     } else if (f === 'md-scale') {
       const v = Number(el.value);
       if (Number.isFinite(v) && v > 0) this.setModelProps({ scale: v }, false);

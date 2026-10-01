@@ -6,10 +6,10 @@ import { EditMode } from './edit-mode.js';
 import './card-editor.js';
 import { LayoutStore } from './storage.js';
 import { buildMarkers, registrySignature, iconFor, isActive, displayValue, areaName } from './registry.js';
-import { mergeFloors, roomFloorId, markerPositions, lightGlow } from './layout.js';
+import { mergeFloors, roomFloorId, markerPositions, lightGlow, modelFloorMap } from './layout.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 
-const VERSION = '0.1.3';
+const VERSION = '0.1.4';
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LONG_PRESS_MS = 500;
 const CLICK_SLOP_PX = 5;
@@ -237,11 +237,30 @@ class Floorplan3dCard extends HTMLElement {
         };
       }
     }
+    const firstLoad = opts && !this._view.model;
+    this._applyModelFloorMap();
     this._view.setModel(opts).then((err) => {
       this._notice.textContent = err || '';
       this._notice.hidden = !err;
+      this._applyModelFloorMap();
+      // nothing drawn yet: show the model instead of an empty plan
+      if (!err && firstLoad && this._view.model && !(this._layout && this._layout.rooms && this._layout.rooms.length)) this._view.fit();
       if (this._editing) this._edit.onModelLoaded();
     });
+  }
+
+  // group -> floor assignment: saved choices (layout.model.floor_map or YAML model_floors),
+  // else automatic
+  modelFloorAssignment() {
+    const groups = this._view.modelFloorGroups();
+    if (!groups || !this._floors) return null;
+    const saved = this._config.model ? this._config.model_floors : this._layout && this._layout.model && this._layout.model.floor_map;
+    return modelFloorMap(groups, this._floors, saved || {});
+  }
+
+  _applyModelFloorMap() {
+    const map = this.modelFloorAssignment();
+    if (map) this._view.setModelFloorMap(map);
   }
 
   getCardSize() {
@@ -413,6 +432,8 @@ class Floorplan3dCard extends HTMLElement {
     if (l.model !== b.model) {
       b.model = l.model;
       this._loadModel();
+    } else if (markers) {
+      this._applyModelFloorMap(); // floors may have changed
     }
     if (m !== b.mower) {
       b.mower = m;

@@ -249,6 +249,22 @@ export class FloorplanView {
     return this.model ? [...this.model.floorNodes.keys()] : null;
   }
 
+  // the same groups with their lowest point (model units), for bottom-up matching
+  modelFloorGroups() {
+    if (!this.model) return null;
+    return [...this.model.floorNodes].map(([id, node]) => {
+      const box = new THREE.Box3().setFromObject(node);
+      return { id, minY: box.isEmpty() ? 0 : box.min.y };
+    });
+  }
+
+  // group id -> HA floor id, 'always' or 'hidden'
+  setModelFloorMap(map) {
+    this.modelFloorMap = map || {};
+    this._applyFloorVisibility();
+    this.dirty = true;
+  }
+
   _disposeModel() {
     this._modelId = null;
     if (!this.model) return;
@@ -487,7 +503,11 @@ export class FloorplanView {
     for (const o of this.overlayGroup.children) if (!o.isCSS2DObject) o.visible = this._shows(o.userData.floorId);
     if (this.trail) this.trail.visible = this._shows(this.trail.userData.floorId);
     if (this.model) {
-      for (const [id, node] of this.model.floorNodes) node.visible = this._shows(id);
+      const map = this.modelFloorMap || {};
+      for (const [id, node] of this.model.floorNodes) {
+        const target = map[id] ?? id;
+        node.visible = target === 'always' ? true : target === 'hidden' ? false : this._shows(target);
+      }
       // everything above the cut-away height of the selected floor is clipped (roof, upper floors)
       const cut = this.visibleFloor === 'all' ? 1e6 : this.floorElevation(this.visibleFloor) + Math.max(this.wallHeight, 0.3);
       this.modelClip.constant = cut;
@@ -503,11 +523,21 @@ export class FloorplanView {
     this.fit();
   }
 
-  // Frame the rooms of the visible floor(s).
-  fit() {
+  // Frame the rooms of the visible floor(s); the model when there are no rooms (or asked to).
+  fit({ model = false } = {}) {
     const box = new THREE.Box3();
-    for (const g of this.staticGroup.children) if (g.visible) box.expandByObject(g);
-    if (box.isEmpty() && this.model) box.expandByObject(this.modelGroup);
+    if (!model) for (const g of this.staticGroup.children) if (g.visible) box.expandByObject(g);
+    if (box.isEmpty() && this.model) {
+      // only the parts currently shown, and not above the cut
+      this.modelGroup.updateMatrixWorld(true);
+      this.model.root.traverse((o) => {
+        if (!o.isMesh) return;
+        for (let p = o; p; p = p.parent) if (!p.visible) return;
+        const b = new THREE.Box3().setFromObject(o);
+        b.max.y = Math.min(b.max.y, this.modelClip.constant);
+        if (b.min.y <= b.max.y) box.union(b);
+      });
+    }
     if (box.isEmpty()) box.set(new THREE.Vector3(-5, 0, -5), new THREE.Vector3(5, 0, 5));
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
