@@ -21,21 +21,35 @@ export class LayoutStore {
   }
 
   async load(hass) {
+    let shared;
     try {
       const r = await hass.callWS({ type: 'floorplan3d/layout/get', key: this.key });
+      shared = r && r.layout;
       this.backend = 'shared';
-      return normalise(r && r.layout);
     } catch (e) { /* integration not installed */ }
+    // nothing shared yet: pick up a layout made before the integration was installed,
+    // the next save moves it to shared storage
+    if (this.backend === 'shared' && shared) return normalise(shared);
+    const user = await this._userData(hass);
+    if (!this.backend) this.backend = user.ok ? 'user' : 'browser';
+    if (user.value) return normalise(user.value);
+    return normalise(this._browser());
+  }
+
+  async _userData(hass) {
     try {
       const r = await hass.callWS({ type: 'frontend/get_user_data', key: 'floorplan3d_' + this.key });
-      this.backend = 'user';
-      return normalise(r && r.value);
-    } catch (e) { /* old HA */ }
-    this.backend = 'browser';
-    try {
-      return normalise(JSON.parse(localStorage.getItem('floorplan3d_' + this.key) || 'null'));
+      return { ok: true, value: r && r.value };
     } catch (e) {
-      return EMPTY_LAYOUT();
+      return { ok: false, value: null };
+    }
+  }
+
+  _browser() {
+    try {
+      return JSON.parse(localStorage.getItem('floorplan3d_' + this.key) || 'null');
+    } catch (e) {
+      return null;
     }
   }
 

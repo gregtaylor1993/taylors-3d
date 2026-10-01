@@ -2,3 +2,6 @@ node_modules/
 .env
 dist/
 screenshots/
+custom_components/floorplan3d/frontend/
+__pycache__/
+.pytest_cache/

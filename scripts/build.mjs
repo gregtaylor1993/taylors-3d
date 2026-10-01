@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import * as esbuild from 'esbuild';
 
 const watch = process.argv.includes('--watch');
@@ -7,6 +8,19 @@ const builds = [
   // demo-only helpers (mock hass, ha-icon stand-in)
   { entryPoints: ['demo/demo.js'], outfile: 'dist/demo.js' },
 ];
+
+// the companion integration serves its own copy of the card
+const copyToIntegration = {
+  name: 'copy-to-integration',
+  setup(build) {
+    build.onEnd((r) => {
+      if (r.errors.length) return;
+      fs.mkdirSync('custom_components/floorplan3d/frontend', { recursive: true });
+      fs.copyFileSync('dist/floorplan3d-card.js', 'custom_components/floorplan3d/frontend/floorplan3d-card.js');
+    });
+  },
+};
+builds[0].plugins = [copyToIntegration];
 
 for (const b of builds) {
   const opts = { bundle: true, format: 'esm', target: 'es2020', sourcemap: watch, logLevel: 'info', ...b };

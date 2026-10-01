@@ -28,6 +28,28 @@ describe('LayoutStore', () => {
     expect(callWS).toHaveBeenLastCalledWith({ type: 'floorplan3d/layout/set', key: 'k', layout: l });
   });
 
+  it('migrates an older per-user layout when nothing is shared yet', async () => {
+    const callWS = vi.fn(async (m) => {
+      if (m.type === 'floorplan3d/layout/get') return { layout: null };
+      if (m.type === 'frontend/get_user_data') return { value: { rooms: [{ id: 'old' }] } };
+      return null;
+    });
+    const s = new LayoutStore('k');
+    expect((await s.load({ callWS })).rooms).toEqual([{ id: 'old' }]);
+    expect(s.backend).toBe('shared');
+  });
+
+  it('migrates a browser layout when nothing is shared yet', async () => {
+    localStorage.setItem('floorplan3d_k', JSON.stringify({ rooms: [{ id: 'local' }] }));
+    const callWS = vi.fn(async (m) => {
+      if (m.type === 'floorplan3d/layout/get') return { layout: null };
+      throw new Error('unknown');
+    });
+    const s = new LayoutStore('k');
+    expect((await s.load({ callWS })).rooms).toEqual([{ id: 'local' }]);
+    expect(s.backend).toBe('shared');
+  });
+
   it('falls back to frontend user data', async () => {
     const callWS = vi.fn(async (m) => {
       if (m.type === 'frontend/get_user_data') return { value: { hidden: ['x'] } };
