@@ -324,6 +324,45 @@ try {
   await s.close();
 }
 
+// 2e. edit panel keeps its scroll position and the slider being dragged
+s = await openDemo({ view: '3d', height: '560px' }, { width: 1500, height: 680 });
+try {
+  const { page } = s;
+  await page.evaluate(`${card}.shadowRoot.querySelector("button.edit").click()`);
+  await sleep(300);
+  await page.evaluate(`[...${card}.shadowRoot.querySelectorAll(".panel button")].find((b) => b.textContent.trim() === "Model").click()`);
+  const inp = await page.evaluateHandle(`${card}.shadowRoot.querySelector("[data-field=model-file]")`);
+  await inp.uploadFile(path.join(root, 'demo/house.glb'));
+  await page.waitForFunction(`!!${card}._view.model`, { timeout: 20000 });
+  await sleep(800);
+  const body = `${card}.shadowRoot.querySelector(".panel .tab-body")`;
+  const keeps = async (label, act) => {
+    await page.evaluate(`(() => { const b = ${body}; b.scrollTop = b.scrollHeight; })()`);
+    const before = await page.evaluate(`${body}.scrollTop`);
+    await page.evaluate(act);
+    await sleep(500);
+    const after = await page.evaluate(`${body}.scrollTop`);
+    check(`panel scroll kept after ${label}`, before > 100 && Math.abs(after - before) < 2, `${before} -> ${after}`);
+  };
+  await keeps('rotation slider', `(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-rotation]'); s.value = '10'; s.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await keeps('opacity slider', `(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-opacity]'); s.value = '0.8'; s.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await keeps('room select', `(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-room]'); s.value = ''; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  // a slider being dragged must stay the same element (pointer down, several input ticks)
+  const same = await page.evaluate(`(async () => {
+    const root = ${card}.shadowRoot; const s = root.querySelector('[data-field=md-rotation]');
+    s.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    for (const v of ['20', '30', '40']) { s.value = v; s.dispatchEvent(new Event('input', { bubbles: true })); await new Promise((r) => setTimeout(r, 150)); }
+    const stillThere = root.querySelector('[data-field=md-rotation]') === s;
+    s.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+    s.dispatchEvent(new Event('change', { bubbles: true }));
+    return stillThere;
+  })()`);
+  check('dragged slider is not replaced while dragging', same);
+  allErrors.push(...s.errors);
+} finally {
+  await s.close();
+}
+
 // 3. export snippet round trip
 s = await openDemo({});
 try {

@@ -12,7 +12,7 @@ import {
 } from './bindings.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 
-const VERSION = '0.2.0';
+const VERSION = '0.2.1';
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LONG_PRESS_MS = 500;
 const CLICK_SLOP_PX = 5;
@@ -253,6 +253,7 @@ class Floorplan3dCard extends HTMLElement {
       }
     }
     const firstLoad = opts && !this._view.model;
+    const prevModel = this._view.model;
     this._view.setModel(opts).then((err) => {
       this._notice.textContent = err || '';
       this._notice.hidden = !err;
@@ -263,7 +264,7 @@ class Floorplan3dCard extends HTMLElement {
       else { this._daylight = true; this._view.setDaylight(true); } // no model: the toggle is hidden, so always day
       this._syncToolbar();
       this._schedule(); // the manifest arrived: rebuild
-      if (this._editing) this._edit.onModelLoaded();
+      if (this._editing) this._edit.onModelLoaded(this._view.model !== prevModel);
     });
   }
 
