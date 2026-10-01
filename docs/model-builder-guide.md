@@ -107,7 +107,10 @@ Tag anything that should react to Home Assistant or be controllable:
 - `glow`: name of the child mesh that should light up or change colour (the bulb, glass, LED);
   give that mesh its own material. Without `glow` the whole object is used.
 - `anchor`: local point where the light comes from / the label and popup attach (default: centre).
-- `group`: lamps of one circuit (all facade lamps) share a group; the user can bind them at once.
+- `group`: lamps of one circuit (all facade lamps) share a group. In Home Assistant the group
+  gets its main switch and each lamp can additionally get its own controller; a lamp is lit only
+  when every controller in its chain is on (main AND its own). You only set the group name; the
+  wiring is done in the card, so rewiring never needs a re-export.
 - `suggest`: optional hints for automatic binding: `domain`, `area`, or an exact `entity` if you
   know it. The user can change all of it.
 - `ui`: optional default controls (see Actions). The user can change all of it.

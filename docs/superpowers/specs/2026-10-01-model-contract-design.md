@@ -129,6 +129,8 @@ survives a re-export only while the path is unchanged.
   },
   "path:floor:ground/Kitchen/Hood": { "type": "fan", "entity": "fan.hood" }
 },
+"groups":  { "facade": { "entity": "switch.facade_main" }, "outdoor": { "entity": "switch.breaker_outside" },
+             "terrace": { "entity": "light.terrace_main", "group": "outdoor" } },
 "orphans": { "old_lamp_3": { "type": "light", "entity": "light.x" } }
 ```
 
@@ -141,6 +143,14 @@ survives a re-export only while the path is unchanged.
 - `objects[id]`: any field present overrides the model's tag. Default `entity` when unbound:
   `suggest.entity` if it exists in HA; otherwise unassigned (the card offers candidates by
   `suggest.domain` / `suggest.area` / type domains).
+- `groups[id]`: controller for every object tagged with that `group` (and for nested groups via
+  `group`). **Chain rule:** an object is active only when every controller up its chain is on:
+  its own `entity` (if any) AND its group's entity AND that group's parent group's entity … An
+  object without its own entity follows its group. Brightness/colour come from the nearest
+  `light.*` in the chain (own entity first); `switch.*`/`input_boolean.*` only gate on/off.
+  Example: facade lamps 1–2 on `switch.facade_left`, 3 on `switch.facade_right`, 4 with no own
+  controller, group `facade` on `switch.facade_main`: main off → all dark; main on, left off →
+  1–2 dark, 3–4 lit. Cycles in group parents are ignored (chain stops at the repeat).
 - `path:<node path>` keys bind untagged nodes (path = names from the level node down).
 - `orphans`: bindings whose id is no longer in the uploaded model, kept so a later model that
   brings the id back restores them; listed in the card with "remove".
@@ -172,8 +182,11 @@ opens:
 - object: type select, entity picker (candidates first), extra entities, hints (generated from
   the type's hint schema), actions (tap/hold/double-tap), popup rows, "test" button
 
-`group`: binding a group sets the same entity type/actions on every member, each member keeps
-its own entity unless "same entity for all" is ticked.
+`group`: the object panel shows the group and its controller (set once for the whole group,
+optionally a parent group). Each member keeps its own optional controller. Default tap toggles
+the object's own controller if it has one, else the group controller; the popup lists the whole
+chain (each controller with its state and a toggle) and says why the object is dark ("off
+because Facade left is off").
 
 Outside edit mode objects are live: their type behaviour runs, actions fire on tap/hold/double-tap
 (pointer slop and long-press timing as for markers), and an object's marker is not drawn (the
