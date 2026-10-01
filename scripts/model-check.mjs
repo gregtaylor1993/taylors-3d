@@ -122,6 +122,20 @@ try {
   await sleep(200);
   check('frame model moves the camera', (await page.evaluate(`${card}._view.camera.position.toArray().join()`)) !== cam0);
 
+  // importing a plan export keeps the uploaded model and maps foreign floor ids onto HA floors
+  await clickText('Data');
+  const plan = path.join(root, 'screenshots', 'plan-export.json');
+  fs.writeFileSync(plan, JSON.stringify({ version: 1, floors: [{ id: 'level0', elevation: 0, height: 2.8 }],
+    rooms: [{ id: 'x', area_id: 'kitchen', floor_id: 'level0', polygon: [[0, 0], [4, 0], [4, 3], [0, 3]] }] }));
+  const imp = await page.evaluateHandle(panel('[data-field=import]'));
+  await imp.uploadFile(plan);
+  await sleep(600);
+  fs.unlinkSync(plan);
+  check('import keeps the uploaded model', await page.evaluate(`!!(${card}._layout.model && ${card}._view.model)`));
+  check('import maps floor ids onto HA floors', (await page.evaluate(`${card}._layout.rooms[0].floor_id`)) === 'ground'
+    && (await page.evaluate(`${panel('.msg')}.textContent`)).includes('level0 → Ground floor'));
+  await clickText('Model');
+  await sleep(150);
   await clickText('Remove model');
   await clickText('Really remove?');
   await sleep(300);

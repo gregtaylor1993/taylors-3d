@@ -188,3 +188,26 @@ export function parseImport(text) {
   for (const f of l.floors) if (!f || !f.id) throw new Error('Every floor needs an id');
   return l;
 }
+
+// Fit an imported layout to this Home Assistant: floor ids HA doesn't have are mapped bottom-up
+// onto unused HA floors (rooms, pins and floor overrides follow); floors left over stay as
+// layout floors. haFloors: [{id, elevation}] from HA only.
+// Returns { layout, floorMap: {imported: haId}, unknownAreas: [...] }.
+export function fitImport(layout, haFloors, haAreaIds) {
+  const ha = new Set(haFloors.map((f) => f.id));
+  const imported = layout.floors || [];
+  const used = new Set(imported.filter((f) => ha.has(f.id)).map((f) => f.id));
+  for (const r of layout.rooms) if (ha.has(r.floor_id)) used.add(r.floor_id);
+  const free = haFloors.filter((f) => !used.has(f.id)).sort((a, b) => a.elevation - b.elevation);
+  const foreign = imported.filter((f) => !ha.has(f.id)).sort((a, b) => (a.elevation ?? 0) - (b.elevation ?? 0));
+  const floorMap = {};
+  foreign.forEach((f, i) => { if (free[i]) floorMap[f.id] = free[i].id; });
+  const mapId = (id) => floorMap[id] || id;
+  const floors = imported.map((f) => (floorMap[f.id] ? { ...f, id: floorMap[f.id], name: undefined } : f))
+    .map((f) => Object.fromEntries(Object.entries(f).filter(([, v]) => v !== undefined)));
+  const rooms = layout.rooms.map((r) => (r.floor_id && floorMap[r.floor_id] ? { ...r, floor_id: mapId(r.floor_id) } : r));
+  const pins = Object.fromEntries(Object.entries(layout.pins || {}).map(([k, p]) => [k, p.floor_id && floorMap[p.floor_id] ? { ...p, floor_id: mapId(p.floor_id) } : p]));
+  const areas = new Set(haAreaIds);
+  const unknownAreas = [...new Set(layout.rooms.map((r) => r.area_id).filter((a) => a && !areas.has(a)))];
+  return { layout: { ...layout, floors, rooms, pins }, floorMap, unknownAreas };
+}

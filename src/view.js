@@ -11,7 +11,8 @@ import { wallSegments } from './layout.js';
 const WALL_THICKNESS = 0.12;
 const GLOW_RADIUS = 2.2;
 const TOOLBAR_PX = 48; // plan is framed below the card's toolbar
-const COMPACT_PPM = 30; // pixels per metre below which markers shrink
+const COMPACT_PPM = 30;
+const MAX_FRAME_MESH_M = 60; // meshes larger than this are left out when framing the model // pixels per metre below which markers shrink
 
 export function planToWorld(x, y, z, elevation = 0) {
   return new THREE.Vector3(x, elevation + z, -y);
@@ -534,6 +535,8 @@ export class FloorplanView {
         if (!o.isMesh) return;
         for (let p = o; p; p = p.parent) if (!p.visible) return;
         const b = new THREE.Box3().setFromObject(o);
+        // a world ground plane or a long road would frame the whole neighbourhood
+        if (Math.max(b.max.x - b.min.x, b.max.z - b.min.z) > MAX_FRAME_MESH_M) return;
         b.max.y = Math.min(b.max.y, this.modelClip.constant);
         if (b.min.y <= b.max.y) box.union(b);
       });
