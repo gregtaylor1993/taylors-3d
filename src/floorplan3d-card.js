@@ -2,6 +2,7 @@
 
 import { Color } from 'three';
 import { FloorplanView } from './view.js';
+import { EditMode } from './edit-mode.js';
 import { LayoutStore } from './storage.js';
 import { buildMarkers, registrySignature, iconFor, isActive, displayValue, areaName } from './registry.js';
 import { mergeFloors, roomFloorId, markerPositions, lightGlow } from './layout.js';
@@ -54,6 +55,82 @@ const STYLE = `
     background: var(--card-background-color, #fff); color: var(--primary-text-color);
     box-shadow: 0 1px 3px rgba(0,0,0,.2); }
   .fp-val:empty { display: none; }
+  .body { display: flex; container-type: inline-size; }
+  .body .stage { flex: 1; min-width: 0; }
+  .panel { display: none; width: 300px; flex: none; box-sizing: border-box; flex-direction: column; max-height: var(--fp-height);
+    border-left: 1px solid var(--divider-color, rgba(0,0,0,.12)); font-size: 13px; }
+  .editing .panel { display: flex; }
+  @container (max-width: 640px) {
+    .body.editing { flex-direction: column; }
+    .editing .panel { width: auto; max-height: 420px; border-left: none; border-top: 1px solid var(--divider-color, rgba(0,0,0,.12)); }
+  }
+  .tabs { display: flex; border-bottom: 1px solid var(--divider-color, rgba(0,0,0,.12)); }
+  .panel .tabs button { flex: 1; border-radius: 0; font: inherit; padding: 10px 4px; background: none; border: none; cursor: pointer;
+    color: var(--secondary-text-color); border-bottom: 2px solid transparent; }
+  .panel .tabs button.on { color: var(--primary-color); border-bottom-color: var(--primary-color); }
+  .tab-body { flex: 1; overflow: auto; padding: 4px 12px 12px; }
+  .foot { display: flex; justify-content: space-between; padding: 6px 12px; font-size: 11px;
+    color: var(--secondary-text-color); border-top: 1px solid var(--divider-color, rgba(0,0,0,.12)); }
+  .panel h3 { margin: 4px 0 6px; font-size: 14px; font-weight: 500; }
+  .panel .sub { margin: 14px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--secondary-text-color); }
+  .panel .hint, .panel .dim { color: var(--secondary-text-color); }
+  .panel .hint { font-size: 12px; line-height: 1.4; }
+  .panel p { margin: 6px 0; }
+  .panel .box { border: 1px solid var(--divider-color, rgba(0,0,0,.12)); border-radius: 8px; padding: 8px 10px;
+    margin: 8px 0; }
+  .panel label { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; font-size: 12px;
+    color: var(--secondary-text-color); }
+  .panel label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--primary-text-color); }
+  .panel select, .panel input[type=number] { font: inherit; padding: 5px 6px; border-radius: 6px;
+    border: 1px solid var(--divider-color, rgba(0,0,0,.2)); background: var(--card-background-color, #fff);
+    color: var(--primary-text-color); min-width: 0; }
+  .panel button, .panel label.button { font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--divider-color, rgba(0,0,0,.2)); background: var(--card-background-color, #fff);
+    color: var(--primary-text-color); display: inline-block; margin: 0; }
+  .panel button:disabled { opacity: .45; cursor: default; }
+  .panel button.primary { background: var(--primary-color); border-color: var(--primary-color); color: var(--text-primary-color, #fff); }
+  .panel button.danger { color: var(--error-color, #db4437); }
+  .panel button.link { border: none; background: none; padding: 0 2px; color: var(--primary-color); }
+  .panel .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .panel ul { list-style: none; margin: 0; padding: 0; }
+  .panel ul.list li { display: flex; align-items: center; gap: 6px; padding: 4px 0;
+    border-bottom: 1px solid var(--divider-color, rgba(0,0,0,.06)); }
+  .panel ul.list li.sel .name { color: var(--primary-color); font-weight: 500; }
+  .panel .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .panel .pill { font-size: 10.5px; padding: 1px 7px; border-radius: 9px; }
+  .panel .pill.ok { background: rgba(76,175,80,.16); color: var(--success-color, #43a047); }
+  .panel .pill.missing { background: rgba(255,152,0,.16); color: var(--warning-color, #ef8a00); }
+  .panel table.floors { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .panel table.floors th { font-weight: normal; color: var(--secondary-text-color); text-align: left; font-size: 11px; }
+  .panel table.floors td { padding: 2px 3px 2px 0; }
+  .panel table.floors input { width: 64px; }
+  .panel .note { padding: 8px 10px; border-radius: 6px; font-size: 12px; line-height: 1.4; }
+  .panel .note.ok { background: rgba(76,175,80,.12); }
+  .panel .note.warn { background: rgba(255,152,0,.14); }
+  .panel .msg { margin: 8px 0; padding: 6px 10px; border-radius: 6px; background: rgba(76,175,80,.12); font-size: 12px; }
+  .panel .msg.error { background: rgba(219,68,55,.14); color: var(--error-color, #db4437); }
+  button.edit { font: inherit; font-size: 13px; line-height: 1; cursor: pointer; padding: 6px 10px; border-radius: 16px;
+    border: 1px solid var(--divider-color, rgba(0,0,0,.12)); background: var(--card-background-color, #fff);
+    color: var(--primary-text-color); display: flex; align-items: center; gap: 4px; --mdc-icon-size: 16px; }
+  button.edit[hidden] { display: none; }
+  .editing button.edit { background: var(--primary-color); border-color: var(--primary-color); color: var(--text-primary-color, #fff); }
+
+  .fp-handle { box-sizing: border-box; width: 13px; height: 13px; border-radius: 50%; pointer-events: auto; cursor: grab;
+    background: var(--card-background-color, #fff); border: 2px solid var(--primary-color, #03a9f4); touch-action: none; }
+  .fp-handle.mid { width: 9px; height: 9px; opacity: .75; border-width: 1.5px; }
+  .fp-handle.door { width: 11px; height: 11px; border-radius: 2px; background: var(--primary-color, #03a9f4);
+    pointer-events: none; }
+  .fp-handle.draw { pointer-events: none; width: 9px; height: 9px; }
+  .fp-handle.draw.first { width: 15px; height: 15px; background: var(--primary-color, #03a9f4); }
+  .fp-handle.cursor { pointer-events: none; width: 7px; height: 7px; border: none; background: var(--primary-color, #03a9f4); }
+  .fp-handle.cursor.vertex { width: 15px; height: 15px; background: none; border: 2px solid var(--primary-color, #03a9f4); }
+  .fp-handle.cursor.align { width: 9px; height: 9px; }
+  .editing .fp-marker { cursor: grab; }
+  .stage.drawing { cursor: crosshair; }
+  .stage.drawing .fp-marker { pointer-events: none; opacity: .4; }
+  .stage.drawing .fp-handle { pointer-events: none; }
+  .fp-marker.selected .fp-dot { outline: 3px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
   .compact .fp-dot { width: 21px; height: 21px; --mdc-icon-size: 13px; border-width: 1px; }
   .compact .fp-val { font-size: 9.5px; padding: 0 4px; }
 `;
@@ -92,7 +169,10 @@ class Floorplan3dCard extends HTMLElement {
     this._config = { layout_key: 'default', height: '520px', group_by: 'device', wall_height: 1.0, view: '3d', ...config };
     this._mode = this._config.view === 'top' ? 'top' : '3d';
     this._store = new LayoutStore(this._config.layout_key);
-    if (this._stage) this._stage.style.height = this._config.height;
+    if (this._stage) {
+      this._stage.style.height = this._config.height;
+      this._body.style.setProperty('--fp-height', this._config.height);
+    }
     if (this.isConnected && !this._view) this.connectedCallback();
   }
 
@@ -138,16 +218,20 @@ class Floorplan3dCard extends HTMLElement {
     const root = this.shadowRoot;
     root.innerHTML = `<style>${STYLE}</style>
       <ha-card>
-        <div class="stage">
-          <div class="toolbar">
-            <div class="chips"></div>
-            <div class="seg"><button data-mode="3d">3D</button><button data-mode="top">Top</button></div>
+        <div class="body">
+          <div class="stage">
+            <div class="toolbar">
+              <div class="chips"></div>
+              <div class="seg"><button data-mode="3d">3D</button><button data-mode="top">Top</button></div>
+              <button class="edit" hidden title="Edit floorplan"><ha-icon icon="mdi:pencil"></ha-icon><span>Edit</span></button>
+            </div>
+            <div class="empty" hidden></div>
           </div>
-          <div class="empty" hidden></div>
         </div>
       </ha-card>`;
     this._stage = root.querySelector('.stage');
     this._stage.style.height = this._config.height;
+    root.querySelector('.body').style.setProperty('--fp-height', this._config.height);
     this._chips = root.querySelector('.chips');
     this._empty = root.querySelector('.empty');
     root.querySelector('.seg').addEventListener('click', (e) => {
@@ -158,9 +242,50 @@ class Floorplan3dCard extends HTMLElement {
       const id = e.target.dataset && e.target.dataset.floor;
       if (id) this._setFloor(id);
     });
+    this._body = root.querySelector('.body');
+    this._editBtn = root.querySelector('button.edit');
+    this._editBtn.addEventListener('click', () => this._toggleEdit());
     this._view = new FloorplanView(this._stage);
     this._view.setMode(this._mode);
+    this._edit = new EditMode(this);
+    this._body.append(this._edit.panel);
+    const canvas = this._view.renderer.domElement;
+    canvas.addEventListener('pointerdown', (e) => this._editing && this._edit.canvasDown(e));
+    canvas.addEventListener('pointermove', (e) => this._editing && this._edit.canvasMove(e));
+    canvas.addEventListener('pointerup', (e) => this._editing && this._edit.canvasUp(e));
     this._syncToolbar();
+  }
+
+  _toggleEdit() {
+    this._editing = !this._editing;
+    this._body.classList.toggle('editing', this._editing);
+    if (this._editing) {
+      if (this._floor === 'all') this._setFloor(this._floors[0].id);
+      this._edit.enter();
+    } else {
+      this._edit.exit();
+    }
+    this._syncToolbar();
+    // the panel changes the canvas size: reframe once the layout has settled
+    requestAnimationFrame(() => {
+      this._resize();
+      this._view.fit();
+    });
+  }
+
+  // Apply an edited layout: rebuild the plan and save it.
+  _commit(layout) {
+    this._layout = layout;
+    const seq = (this._saveSeq = (this._saveSeq || 0) + 1);
+    this._edit.setSaveState('saving');
+    this._store.save(this._hass, layout).then((ok) => {
+      if (seq === this._saveSeq) this._edit.setSaveState(ok ? 'saved' : 'failed');
+    });
+    this._schedule();
+  }
+
+  _applyMarkerSelection(id) {
+    for (const [mid, el] of this._markerEls) el.classList.toggle('selected', mid === id);
   }
 
   _resize() {
@@ -200,11 +325,13 @@ class Floorplan3dCard extends HTMLElement {
     if (markers || !b.sig || sig.some((x, i) => x !== b.sig[i])) {
       b.sig = sig;
       this._buildMarkers();
+      markers = true;
     }
     if (h.states !== b.states || markers) {
       b.states = h.states;
       this._refreshStates();
     }
+    if (markers && this._editing) this._edit.afterUpdate();
   }
 
   _applyTheme() {
@@ -219,6 +346,7 @@ class Floorplan3dCard extends HTMLElement {
       outdoor: mix(bg, new Color('#5a9e4b'), dark ? 0.22 : 0.3),
       wall: mix(bg, text, dark ? 0.42 : 0.3),
       edge: mix(bg, text, dark ? 0.3 : 0.22),
+      primary: cssColor(this, '--primary-color', '#03a9f4'),
     };
     this._view.setTheme(this._built.theme);
   }
@@ -243,10 +371,11 @@ class Floorplan3dCard extends HTMLElement {
         ? wanted : (withRooms[0] || this._floors[0]).id;
     }
     this._view.setVisibleFloor(this._floor);
-    this._empty.hidden = rooms.length > 0;
+    this._empty.hidden = rooms.length > 0 || !!this._editing;
     this._empty.textContent = 'No rooms drawn yet. Open edit mode to draw rooms for your areas.';
     this._syncToolbar();
-    if (this._view.size.w > 1) {
+    // frame once; later rebuilds (edits, registry changes) keep the user's camera
+    if (!this._fitted && this._view.size.w > 1) {
       this._fitted = true;
       this._view.fit();
     }
@@ -276,6 +405,10 @@ class Floorplan3dCard extends HTMLElement {
     let start = null, timer = null, long = false;
     const cancel = () => { clearTimeout(timer); timer = null; };
     el.addEventListener('pointerdown', (e) => {
+      if (this._editing) {
+        this._edit.markerDown(m, e);
+        return;
+      }
       if (e.button !== 0) return;
       e.stopPropagation();
       start = [e.clientX, e.clientY];
@@ -352,7 +485,8 @@ class Floorplan3dCard extends HTMLElement {
   _syncToolbar() {
     const floors = this._floors || [];
     if (floors.length > 1) {
-      const chips = [...floors.map((f) => [f.id, f.name]), ['all', 'All']];
+      // editing works on one floor at a time
+      const chips = [...floors.map((f) => [f.id, f.name]), ...(this._editing ? [] : [['all', 'All']])];
       this._chips.innerHTML = '';
       for (const [id, name] of chips) {
         const btn = document.createElement('button');
@@ -365,6 +499,9 @@ class Floorplan3dCard extends HTMLElement {
       this._chips.innerHTML = '';
     }
     for (const btn of this.shadowRoot.querySelectorAll('.seg button')) btn.classList.toggle('on', btn.dataset.mode === this._mode);
+    this._editBtn.hidden = !(this._hass && this._hass.user && this._hass.user.is_admin);
+    this._editBtn.querySelector('span').textContent = this._editing ? 'Done' : 'Edit';
+    if (this._empty && this._editing) this._empty.hidden = true;
   }
 }
 

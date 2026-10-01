@@ -102,7 +102,7 @@ export function createMockHass({ onChange }) {
     },
     callWS: async (msg) => {
       if (msg.type === 'floorplan3d/layout/get') return { layout: layoutStore };
-      if (msg.type === 'floorplan3d/layout/set') { layoutStore = msg.layout; return null; }
+      if (msg.type === 'floorplan3d/layout/set') { layoutStore = msg.layout; window.__savedLayout = msg.layout; return null; }
       throw { code: 'unknown_command', message: 'Unknown command.' };
     },
   });

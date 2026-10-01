@@ -1,0 +1,135 @@
+import { describe, it, expect } from 'vitest';
+import {
+  snapPoint, floorVertices, nearestEdge, newRoomId, upsertRoom, deleteRoom, moveVertex, insertVertex,
+  removeVertex, addDoor, removeDoor, cleanPolygon, setPin, clearPin, hide, unhide, upsertFloor, deleteFloor,
+  newFloorId, parseImport,
+} from '../src/editor.js';
+
+const square = { id: 'r1', polygon: [[0, 0], [4, 0], [4, 3], [0, 3]] };
+
+describe('snapPoint', () => {
+  it('snaps to the 5 cm grid', () => {
+    expect(snapPoint([1.234, 2.071])).toEqual({ point: [1.25, 2.05], kind: 'grid' });
+  });
+
+  it('snaps to an existing vertex within 25 cm', () => {
+    expect(snapPoint([3.85, 0.1], { vertices: square.polygon })).toEqual({ point: [4, 0], kind: 'vertex' });
+    expect(snapPoint([3.7, 1.5], { vertices: square.polygon }).kind).not.toBe('vertex');
+  });
+
+  it('picks the closest vertex', () => {
+    expect(snapPoint([0.1, 0.1], { vertices: [[0.2, 0.2], [0, 0]] }).point).toEqual([0, 0]);
+  });
+
+  it('aligns with a vertex on one axis for straight walls', () => {
+    expect(snapPoint([3.9, 1.52], { vertices: square.polygon })).toEqual({ point: [4, 1.5], kind: 'align' });
+  });
+
+  it('honours a custom radius', () => {
+    expect(snapPoint([3.5, 0.4], { vertices: square.polygon, radius: 0.8 }).point).toEqual([4, 0]);
+  });
+});
+
+describe('floorVertices', () => {
+  it('collects vertices of one floor and can skip one', () => {
+    const rooms = [square, { id: 'r2', floor_id: 'up', polygon: [[9, 9], [10, 9], [10, 10]] }];
+    const fid = (r) => r.floor_id || 'ground';
+    expect(floorVertices(rooms, fid, 'ground')).toHaveLength(4);
+    expect(floorVertices(rooms, fid, 'ground', { roomId: 'r1', index: 1 })).not.toContainEqual([4, 0]);
+    expect(floorVertices(rooms, fid, 'up')).toHaveLength(3);
+  });
+});
+
+describe('room edits', () => {
+  it('finds the nearest edge and the projection on it', () => {
+    expect(nearestEdge(square.polygon, [2, -0.3])).toMatchObject({ index: 0, point: [2, 0] });
+    expect(nearestEdge(square.polygon, [4.2, 1]).index).toBe(1);
+  });
+
+  it('adds, updates and deletes rooms without mutating', () => {
+    const l0 = { rooms: [] };
+    const l1 = upsertRoom(l0, square);
+    expect(l0.rooms).toEqual([]);
+    const l2 = upsertRoom(l1, { ...square, outdoor: true });
+    expect(l2.rooms).toEqual([{ ...square, outdoor: true }]);
+    expect(deleteRoom(l2, 'r1').rooms).toEqual([]);
+  });
+
+  it('generates unused room ids', () => {
+    expect(newRoomId({ rooms: [{ id: 'r1' }, { id: 'r2' }] })).toBe('r3');
+    expect(newRoomId({ rooms: [{ id: 'r2' }] })).toBe('r1');
+    expect(newRoomId({})).toBe('r1');
+  });
+
+  it('moves, inserts and removes vertices', () => {
+    expect(moveVertex(square, 2, [5, 3]).polygon[2]).toEqual([5, 3]);
+    expect(square.polygon[2]).toEqual([4, 3]);
+    expect(insertVertex(square, 0, [2, -1]).polygon).toEqual([[0, 0], [2, -1], [4, 0], [4, 3], [0, 3]]);
+    expect(removeVertex(square, 1).polygon).toEqual([[0, 0], [4, 3], [0, 3]]);
+    const tri = { polygon: [[0, 0], [1, 0], [0, 1]] };
+    expect(removeVertex(tri, 0)).toBe(tri);
+  });
+
+  it('puts doors on the nearest wall', () => {
+    const r = addDoor(square, [1.93, 0.3]);
+    expect(r.doors).toEqual([[1.95, 0]]);
+    expect(addDoor(square, [2, 1.5])).toBe(square); // too far from any wall
+    expect(removeDoor(r, 0).doors).toEqual([]);
+  });
+
+  it('keeps doors on diagonal walls', () => {
+    const tri = { polygon: [[0, 0], [3, 3], [0, 3]] };
+    const [d] = addDoor(tri, [1.33, 1.2]).doors;
+    expect(nearestEdge(tri.polygon, d).dist).toBeLessThan(0.01);
+  });
+
+  it('cleans duplicate points and a repeated closing point', () => {
+    expect(cleanPolygon([[0, 0], [0, 0], [1, 0], [1, 1], [0, 0]])).toEqual([[0, 0], [1, 0], [1, 1]]);
+  });
+});
+
+describe('device edits', () => {
+  it('pins snap to the grid and can be cleared', () => {
+    const l = setPin({ pins: {} }, 'device:a', { x: 1.234, y: 2.0, z: 1.5, floor_id: 'ground' });
+    expect(l.pins['device:a']).toEqual({ x: 1.25, y: 2, z: 1.5, floor_id: 'ground' });
+    expect(clearPin(l, 'device:a').pins).toEqual({});
+    expect(l.pins['device:a']).toBeDefined();
+  });
+
+  it('hides and unhides once', () => {
+    const l = hide(hide({ hidden: [] }, 'x'), 'x');
+    expect(l.hidden).toEqual(['x']);
+    expect(unhide(l, 'x').hidden).toEqual([]);
+  });
+});
+
+describe('floors', () => {
+  it('stores overrides and standalone floors', () => {
+    let l = upsertFloor({ floors: [] }, { id: 'ground', height: 2.5 });
+    l = upsertFloor(l, { id: 'ground', elevation: 0.2 });
+    expect(l.floors).toEqual([{ id: 'ground', height: 2.5, elevation: 0.2 }]);
+    expect(deleteFloor(l, 'ground').floors).toEqual([]);
+    expect(newFloorId(l, [{ id: 'floor_1' }])).toBe('floor_2');
+  });
+});
+
+describe('parseImport', () => {
+  it('accepts a valid layout and fills defaults', () => {
+    const l = parseImport(JSON.stringify({ version: 1, rooms: [square] }));
+    expect(l).toMatchObject({ version: 1, rooms: [square], pins: {}, hidden: [], floors: [] });
+  });
+
+  it('dedupes room ids', () => {
+    const l = parseImport(JSON.stringify({ rooms: [square, square] }));
+    expect(l.rooms.map((r) => r.id)).toEqual(['r1', 'r1_']);
+  });
+
+  it('rejects junk with a readable message', () => {
+    expect(() => parseImport('{nope')).toThrow(/Not valid JSON/);
+    expect(() => parseImport('[]')).toThrow(/layout object/);
+    expect(() => parseImport('{"version":2}')).toThrow(/version 2/);
+    expect(() => parseImport(JSON.stringify({ rooms: [{ id: 'a', polygon: [[0, 0], [1, 1]] }] }))).toThrow(/Room a/);
+    expect(() => parseImport(JSON.stringify({ rooms: [{ ...square, doors: [[1, 'x']] }] }))).toThrow(/doors/);
+    expect(() => parseImport(JSON.stringify({ floors: [{ name: 'x' }] }))).toThrow(/floor needs an id/);
+  });
+});

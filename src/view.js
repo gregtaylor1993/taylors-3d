@@ -58,7 +58,9 @@ export class FloorplanView {
     this.staticGroup = new THREE.Group();
     this.markerGroup = new THREE.Group();
     this.glowGroup = new THREE.Group();
-    this.scene.add(this.staticGroup, this.glowGroup, this.markerGroup);
+    this.overlayGroup = new THREE.Group(); // editor graphics, drawn on top
+    this.scene.add(this.staticGroup, this.glowGroup, this.markerGroup, this.overlayGroup);
+    this.raycaster = new THREE.Raycaster();
 
     this.floors = [];
     this.visibleFloor = 'all';
@@ -81,11 +83,89 @@ export class FloorplanView {
     c.screenSpacePanning = true;
     if (this.mode === 'top') {
       c.enableRotate = false;
+      c.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+      c.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN };
     } else {
       c.maxPolarAngle = Math.PI * 0.48;
     }
     c.addEventListener('change', () => { this.dirty = true; });
+    if (this.controls) c.enabled = this.controls.enabled;
     this.controls = c;
+  }
+
+  setControlsEnabled(on) {
+    this.controls.enabled = on;
+  }
+
+  // Plan point [x, y] under a screen position, on the horizontal plane at world height `height`.
+  planPoint(clientX, clientY, height) {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const hit = this.raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -height), new THREE.Vector3());
+    return hit ? [hit.x, -hit.z] : null;
+  }
+
+  // Screen position (client px) of a plan point, the inverse of planPoint.
+  screenPoint(x, y, z, floorId) {
+    const v = planToWorld(x, y, z, this.floorElevation(floorId)).project(this.camera);
+    const r = this.renderer.domElement.getBoundingClientRect();
+    return [r.left + ((v.x + 1) / 2) * r.width, r.top + ((1 - v.y) / 2) * r.height];
+  }
+
+  // Editor overlay. lines: [{points, closed, floorId, color}], fills: [{points, floorId, color, opacity}],
+  // handles: [{element, x, y, floorId}] (DOM, CSS2D).
+  setOverlay({ lines = [], fills = [], handles = [] } = {}) {
+    this._clearGroup(this.overlayGroup);
+    this.cssObjects = this.cssObjects.filter((c) => c.kind !== 'handle');
+    for (const f of fills) {
+      if (f.points.length < 3) continue;
+      const geo = new THREE.ShapeGeometry(new THREE.Shape(f.points.map(([x, y]) => new THREE.Vector2(x, y))));
+      geo.rotateX(-Math.PI / 2);
+      const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: f.color, transparent: true, opacity: f.opacity ?? 0.18, depthTest: false, side: THREE.DoubleSide,
+      }));
+      mesh.position.y = this.floorElevation(f.floorId) + 0.02;
+      mesh.renderOrder = 9;
+      mesh.userData.floorId = f.floorId;
+      this.overlayGroup.add(mesh);
+    }
+    for (const l of lines) {
+      if (l.points.length < 2) continue;
+      const pts = l.points.map(([x, y]) => new THREE.Vector3(x, 0, -y));
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      const mat = new THREE.LineBasicMaterial({ color: l.color, depthTest: false, transparent: true });
+      const line = l.closed ? new THREE.LineLoop(geo, mat) : new THREE.Line(geo, mat);
+      line.position.y = this.floorElevation(l.floorId) + 0.03;
+      line.renderOrder = 10;
+      line.userData.floorId = l.floorId;
+      this.overlayGroup.add(line);
+    }
+    for (const h of handles) {
+      const obj = new CSS2DObject(h.element);
+      obj.position.copy(planToWorld(h.x, h.y, 0.03, this.floorElevation(h.floorId)));
+      this.overlayGroup.add(obj);
+      this.cssObjects.push({ obj, floorId: h.floorId, kind: 'handle' });
+    }
+    this._applyFloorVisibility();
+    this.dirty = true;
+  }
+
+  // Move one handle without rebuilding the overlay (vertex drag).
+  moveHandle(element, x, y, floorId) {
+    const c = this.cssObjects.find((o) => o.kind === 'handle' && o.obj.element === element);
+    if (c) c.obj.position.copy(planToWorld(x, y, 0.03, this.floorElevation(floorId)));
+    this.dirty = true;
+  }
+
+  moveMarker(id, x, y, z, floorId) {
+    const m = this.markerObjects.get(id);
+    if (!m) return;
+    m.obj.position.copy(planToWorld(x, y, z, this.floorElevation(floorId)));
+    const g = this.glows.get(id);
+    if (g) g.mesh.position.copy(planToWorld(x, y, 0.03, this.floorElevation(floorId)));
+    this.dirty = true;
   }
 
   setTheme(theme) {
@@ -162,7 +242,7 @@ export class FloorplanView {
     this.cssObjects = this.cssObjects.filter((c) => c.kind !== 'marker');
     for (const m of markers) {
       const obj = new CSS2DObject(m.element);
-      obj.position.copy(planToWorld(m.x, m.y, m.z, this._elevation(m.floorId)));
+      obj.position.copy(planToWorld(m.x, m.y, m.z, this.floorElevation(m.floorId)));
       this.markerGroup.add(obj);
       this.markerObjects.set(m.id, { obj, floorId: m.floorId });
       this.cssObjects.push({ obj, floorId: m.floorId, kind: 'marker' });
@@ -190,7 +270,7 @@ export class FloorplanView {
       }
       entry.floorId = g.floorId;
       const { mesh } = entry;
-      mesh.position.copy(planToWorld(g.x, g.y, 0.03, this._elevation(g.floorId)));
+      mesh.position.copy(planToWorld(g.x, g.y, 0.03, this.floorElevation(g.floorId)));
       const r = GLOW_RADIUS * (0.6 + 0.4 * g.strength) * 2;
       mesh.scale.set(r, 1, r);
       mesh.material.color.setRGB(g.rgb[0] / 255, g.rgb[1] / 255, g.rgb[2] / 255, THREE.SRGBColorSpace);
@@ -213,7 +293,7 @@ export class FloorplanView {
     this.dirty = true;
   }
 
-  _elevation(floorId) {
+  floorElevation(floorId) {
     const f = this.floors.find((x) => x.id === floorId);
     return f ? f.elevation : 0;
   }
@@ -227,6 +307,7 @@ export class FloorplanView {
     // markers live in one group for all floors, so visibility is set per object
     for (const c of this.cssObjects) c.obj.visible = this._shows(c.floorId);
     for (const g of this.glows.values()) g.mesh.visible = this._shows(g.floorId);
+    for (const o of this.overlayGroup.children) if (!o.isCSS2DObject) o.visible = this._shows(o.userData.floorId);
   }
 
   setMode(mode) {
@@ -246,7 +327,7 @@ export class FloorplanView {
     const size = box.getSize(new THREE.Vector3());
     const aspect = this.size.w / this.size.h;
     const target = center.clone();
-    if (this.visibleFloor !== 'all') target.y = this._elevation(this.visibleFloor);
+    if (this.visibleFloor !== 'all') target.y = this.floorElevation(this.visibleFloor);
 
     if (this.mode === 'top') {
       const { h } = this.size;
@@ -350,6 +431,7 @@ export class FloorplanView {
     this._clearGroup(this.staticGroup);
     this._clearGroup(this.markerGroup);
     this._clearGroup(this.glowGroup);
+    this._clearGroup(this.overlayGroup);
     this.markerObjects.clear();
     this.glows.clear();
     this.cssObjects = [];

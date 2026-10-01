@@ -10,7 +10,8 @@
     "test": "vitest run",
     "lint": "eslint .",
     "demo": "node scripts/build.mjs && python3 -m http.server 8765",
-    "screenshot": "node scripts/screenshot.mjs"
+    "screenshot": "node scripts/screenshot.mjs",
+    "check:edit": "node scripts/edit-check.mjs"
   },
   "license": "MIT",
   "dependencies": {
