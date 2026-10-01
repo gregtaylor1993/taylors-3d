@@ -17,8 +17,8 @@ function findChrome() {
   return chrome;
 }
 
-// Opens demo/index.html?query and waits for markers. Returns { page, errors, close }.
-export async function openDemo(query = {}, viewport = { width: 1400, height: 560 }) {
+// Static server + headless Chrome. Returns { browser, base, close }.
+export async function launch() {
   const server = http.createServer((req, res) => {
     const file = path.join(root, decodeURIComponent(new URL(req.url, 'http://x').pathname));
     if (!file.startsWith(root) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404).end(); return; }
@@ -30,22 +30,34 @@ export async function openDemo(query = {}, viewport = { width: 1400, height: 560
     args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
   });
   const close = async () => { await browser.close(); server.close(); };
+  return { browser, base: `http://localhost:${server.address().port}`, close };
+}
+
+// A page that records errors and console warnings (GPU driver chatter excluded).
+export async function newPage(browser, viewport = { width: 1400, height: 560 }) {
   const errors = [];
+  const page = await browser.newPage();
+  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('console', (m) => {
+    if (['error', 'warn', 'warning'].includes(m.type()) && !m.location().url?.endsWith('favicon.ico') && !m.text().includes('GL Driver Message')) errors.push(m.type() + ': ' + m.text());
+  });
+  await page.setViewport({ deviceScaleFactor: 1, ...viewport });
+  return { page, errors };
+}
+
+// Opens demo/index.html?query and waits for markers. Returns { page, errors, close }.
+export async function openDemo(query = {}, viewport = { width: 1400, height: 560 }) {
+  const { browser, base, close } = await launch();
   try {
-    const page = await browser.newPage();
-    page.on('pageerror', (e) => errors.push(e.message));
-    page.on('console', (m) => {
-      if (['error', 'warn', 'warning'].includes(m.type()) && !m.location().url?.endsWith('favicon.ico') && !m.text().includes('GL Driver Message')) errors.push(m.type() + ': ' + m.text());
-    });
-    await page.setViewport({ deviceScaleFactor: 1, ...viewport });
+    const { page, errors } = await newPage(browser, viewport);
     const q = new URLSearchParams(Object.entries(query).filter(([, v]) => v !== undefined));
-    await page.goto(`http://localhost:${server.address().port}/demo/index.html?${q}`, { waitUntil: 'networkidle0' });
+    await page.goto(`${base}/demo/index.html?${q}`, { waitUntil: 'networkidle0' });
     await page.waitForFunction(() => {
       const c = document.querySelector('floorplan3d-card');
       return c && c.shadowRoot && c.shadowRoot.querySelectorAll('.fp-marker').length > 0;
     }, { timeout: 10000 });
     await new Promise((r) => setTimeout(r, 500));
-    return { page, errors, close };
+    return { page, errors, close, browser, base };
   } catch (e) {
     await close();
     throw e;

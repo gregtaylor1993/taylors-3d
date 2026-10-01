@@ -38,7 +38,10 @@ const STYLE = `
   .seg button:last-child { border-radius: 0 16px 16px 0; border-left: none; }
   .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
     text-align: center; padding: 24px; color: var(--secondary-text-color); pointer-events: none; }
-  .empty[hidden] { display: none; }
+  .empty[hidden], .notice[hidden] { display: none; }
+  .notice { position: absolute; left: 8px; bottom: 8px; right: 8px; padding: 6px 10px; border-radius: 6px; font-size: 12px;
+    background: var(--card-background-color, #fff); color: var(--error-color, #db4437);
+    border: 1px solid var(--divider-color, rgba(0,0,0,.12)); pointer-events: none; }
 
   .fp-room-label { font-size: 11px; letter-spacing: .02em; color: var(--secondary-text-color, #727272);
     white-space: nowrap; pointer-events: none; opacity: .9; }
@@ -186,6 +189,20 @@ class Floorplan3dCard extends HTMLElement {
       this._body.style.setProperty('--fp-height', this._config.height);
     }
     if (this.isConnected && !this._view) this.connectedCallback();
+    else if (this._view) this._loadModel();
+  }
+
+  _loadModel() {
+    const c = this._config;
+    const url = c.model ? String(c.model) : null;
+    const position = Array.isArray(c.model_position) ? c.model_position.map(Number) : [0, 0, 0];
+    this._view.setModel(url && {
+      url, position, rotation: Number(c.model_rotation) || 0, scale: Number(c.model_scale) || 1,
+      opacity: c.model_opacity === undefined ? 1 : Number(c.model_opacity),
+    }).then((err) => {
+      this._notice.textContent = err || '';
+      this._notice.hidden = !err;
+    });
   }
 
   getCardSize() {
@@ -239,6 +256,7 @@ class Floorplan3dCard extends HTMLElement {
               <button class="edit" hidden title="Edit floorplan"><ha-icon icon="mdi:pencil"></ha-icon><span>Edit</span></button>
             </div>
             <div class="empty" hidden></div>
+            <div class="notice" hidden></div>
           </div>
         </div>
       </ha-card>`;
@@ -247,6 +265,7 @@ class Floorplan3dCard extends HTMLElement {
     root.querySelector('.body').style.setProperty('--fp-height', this._config.height);
     this._chips = root.querySelector('.chips');
     this._empty = root.querySelector('.empty');
+    this._notice = root.querySelector('.notice');
     root.querySelector('.seg').addEventListener('click', (e) => {
       const mode = e.target.dataset && e.target.dataset.mode;
       if (mode) this._setMode(mode);
@@ -260,6 +279,7 @@ class Floorplan3dCard extends HTMLElement {
     this._editBtn.addEventListener('click', () => this._toggleEdit());
     this._view = new FloorplanView(this._stage);
     this._view.setMode(this._mode);
+    this._loadModel();
     this._edit = new EditMode(this);
     this._body.append(this._edit.panel);
     const canvas = this._view.renderer.domElement;

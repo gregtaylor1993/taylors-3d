@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { centroid } from './placement.js';
 import { wallSegments } from './layout.js';
 
@@ -40,6 +41,7 @@ export class FloorplanView {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setClearColor(0x000000, 0);
+    this.renderer.localClippingEnabled = true; // model cut-away
     this.labelRenderer = new CSS2DRenderer();
     Object.assign(this.labelRenderer.domElement.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
     container.append(this.renderer.domElement, this.labelRenderer.domElement);
@@ -63,6 +65,10 @@ export class FloorplanView {
     this.scene.add(this.staticGroup, this.mowerGroup, this.glowGroup, this.markerGroup, this.overlayGroup);
     this.mapPlane = null;
     this.trail = null;
+    this.modelGroup = new THREE.Group();
+    this.scene.add(this.modelGroup);
+    this.model = null; // { url, root, floorNodes: Map(floorId -> node), other: [nodes] }
+    this.modelClip = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
     this.raycaster = new THREE.Raycaster();
 
     this.floors = [];
@@ -152,6 +158,72 @@ export class FloorplanView {
       this.cssObjects.push({ obj, floorId: h.floorId, kind: 'handle' });
     }
     this._applyFloorVisibility();
+    this.dirty = true;
+  }
+
+  // GLB underlay. opts: {url, position: [x, y, z] plan metres, rotation: degrees CCW, scale, opacity}.
+  // Top-level nodes named "floor:<id>" are shown only with their floor; everything is cut at the
+  // selected floor's cut-away height. Resolves to null or an error message.
+  setModel(opts) {
+    if (!opts || !opts.url) {
+      this._disposeModel();
+      return Promise.resolve(null);
+    }
+    const place = () => {
+      const g = this.modelGroup;
+      const [x, y, z] = opts.position || [0, 0, 0];
+      g.position.set(x, z, -y);
+      g.rotation.y = ((opts.rotation || 0) * Math.PI) / 180;
+      g.scale.setScalar(opts.scale || 1);
+      this._applyFloorVisibility();
+      this.dirty = true;
+    };
+    if (this.model && this.model.url === opts.url) {
+      place();
+      return Promise.resolve(null);
+    }
+    this._disposeModel();
+    const url = opts.url;
+    this._modelUrl = url;
+    return new Promise((resolve) => {
+      new GLTFLoader().load(url, (gltf) => {
+        if (this._modelUrl !== url) return resolve(null);
+        const root = gltf.scene;
+        // GLTFLoader strips ':' from node names; the original is kept in userData.name
+        const nameOf = (n) => (n.userData && n.userData.name) || n.name;
+        const isFloor = (n) => /^floor[:_]/.test(nameOf(n));
+        const floorNodes = new Map();
+        const top = root.children.length === 1 && !isFloor(root.children[0]) ? root.children[0].children : root.children;
+        for (const n of top) {
+          const m = /^floor[:_](.+)$/.exec(nameOf(n));
+          if (m) floorNodes.set(m[1], n);
+        }
+        const opacity = opts.opacity ?? 1;
+        root.traverse((o) => {
+          if (!o.isMesh) return;
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          for (const mat of mats) {
+            mat.clippingPlanes = [this.modelClip];
+            mat.clipShadows = true;
+            if (opacity < 1) { mat.transparent = true; mat.opacity = opacity; mat.depthWrite = false; }
+          }
+        });
+        this.model = { url, root, floorNodes };
+        this.modelGroup.add(root);
+        place();
+        resolve(null);
+      }, undefined, (err) => {
+        console.warn('floorplan3d: could not load model', url, err);
+        resolve(`Could not load model ${url}`);
+      });
+    });
+  }
+
+  _disposeModel() {
+    this._modelUrl = null;
+    if (!this.model) return;
+    this._clearGroup(this.modelGroup);
+    this.model = null;
     this.dirty = true;
   }
 
@@ -258,8 +330,10 @@ export class FloorplanView {
     this._clearGroup(this.staticGroup);
     this.cssObjects = this.cssObjects.filter((c) => c.kind !== 'label');
     const t = this.theme;
-    const floorMat = new THREE.MeshLambertMaterial({ color: t.floor, side: THREE.DoubleSide });
-    const outdoorMat = new THREE.MeshLambertMaterial({ color: t.outdoor, side: THREE.DoubleSide, transparent: true, opacity: 0.7 });
+    // polygon offset: room floors win over a GLB model's slab at the same height (no z-fighting)
+    const offset = { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 };
+    const floorMat = new THREE.MeshLambertMaterial({ color: t.floor, side: THREE.DoubleSide, ...offset });
+    const outdoorMat = new THREE.MeshLambertMaterial({ color: t.outdoor, side: THREE.DoubleSide, transparent: true, opacity: 0.7, ...offset });
     const wallMat = new THREE.MeshLambertMaterial({ color: t.wall });
     const edgeMat = new THREE.LineBasicMaterial({ color: t.edge });
 
@@ -382,6 +456,12 @@ export class FloorplanView {
     for (const g of this.glows.values()) g.mesh.visible = this._shows(g.floorId);
     for (const o of this.overlayGroup.children) if (!o.isCSS2DObject) o.visible = this._shows(o.userData.floorId);
     if (this.trail) this.trail.visible = this._shows(this.trail.userData.floorId);
+    if (this.model) {
+      for (const [id, node] of this.model.floorNodes) node.visible = this._shows(id);
+      // everything above the cut-away height of the selected floor is clipped (roof, upper floors)
+      const cut = this.visibleFloor === 'all' ? 1e6 : this.floorElevation(this.visibleFloor) + Math.max(this.wallHeight, 0.3);
+      this.modelClip.constant = cut;
+    }
     if (this.mapPlane && this.mapPlane.material.map) this.mapPlane.visible = this._shows(this.mapPlane.userData.floorId);
   }
 
@@ -397,6 +477,7 @@ export class FloorplanView {
   fit() {
     const box = new THREE.Box3();
     for (const g of this.staticGroup.children) if (g.visible) box.expandByObject(g);
+    if (box.isEmpty() && this.model) box.expandByObject(this.modelGroup);
     if (box.isEmpty()) box.set(new THREE.Vector3(-5, 0, -5), new THREE.Vector3(5, 0, 5));
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
@@ -507,6 +588,7 @@ export class FloorplanView {
     this._clearGroup(this.markerGroup);
     this._clearGroup(this.glowGroup);
     this._clearGroup(this.overlayGroup);
+    this._disposeModel();
     this.setMapOverlay(null);
     this.setTrail(null);
     this.markerObjects.clear();

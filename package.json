@@ -11,7 +11,9 @@
     "lint": "eslint .",
     "demo": "node scripts/build.mjs && python3 -m http.server 8765",
     "screenshot": "node scripts/screenshot.mjs",
-    "check:edit": "node scripts/edit-check.mjs"
+    "check:edit": "node scripts/edit-check.mjs",
+    "check:model": "node scripts/model-check.mjs",
+    "check": "npm run build && node scripts/screenshot.mjs && node scripts/edit-check.mjs && node scripts/model-check.mjs"
   },
   "license": "MIT",
   "dependencies": {

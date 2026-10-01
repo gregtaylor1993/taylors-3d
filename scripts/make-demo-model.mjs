@@ -1,0 +1,71 @@
+// Builds demo/house.glb from the demo layout: one "floor:<id>" group per storey with a slab,
+// full-height walls and a few furniture blocks, plus a "roof" group. Run: node scripts/make-demo-model.mjs
+import fs from 'node:fs';
+import * as THREE from 'three';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { DEMO_LAYOUT } from '../demo/layout.js';
+import { wallSegments } from '../src/layout.js';
+
+// GLTFExporter reads blobs with FileReader, which Node lacks
+globalThis.FileReader = class {
+  readAsArrayBuffer(blob) { blob.arrayBuffer().then((r) => { this.result = r; this.onloadend && this.onloadend(); }); }
+  readAsDataURL(blob) {
+    blob.arrayBuffer().then((r) => {
+      this.result = `data:${blob.type};base64,` + Buffer.from(r).toString('base64');
+      this.onloadend && this.onloadend();
+    });
+  }
+};
+
+const floors = { ground: { elevation: 0, height: 2.7 }, first: { elevation: 3, height: 2.6 } };
+const floorOf = (r) => r.floor_id || (['r-kids', 'r-landing', 'r-office', 'r-master', 'r-bath2'].includes(r.id) ? 'first' : 'ground');
+const mat = (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.9 });
+const slabMat = mat(0xd9cfc1), wallMat = mat(0xf2efe9), woodMat = mat(0x9b7653), fabricMat = mat(0x6f86a6), roofMat = mat(0x7a4b3a);
+
+const scene = new THREE.Scene();
+for (const [id, f] of Object.entries(floors)) {
+  const g = new THREE.Group();
+  g.name = 'floor:' + id;
+  const rooms = DEMO_LAYOUT.rooms.filter((r) => floorOf(r) === id);
+  for (const r of rooms.filter((x) => !x.outdoor)) {
+    const shape = new THREE.Shape(r.polygon.map(([x, y]) => new THREE.Vector2(x, y)));
+    const slab = new THREE.Mesh(new THREE.ExtrudeGeometry(shape, { depth: 0.2, bevelEnabled: false }), slabMat);
+    slab.rotation.x = -Math.PI / 2;
+    slab.position.y = f.elevation - 0.2;
+    slab.name = 'room:' + r.area_id;
+    g.add(slab);
+  }
+  for (const w of wallSegments(rooms)) {
+    const dx = w.b[0] - w.a[0], dy = w.b[1] - w.a[1];
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(Math.hypot(dx, dy) + 0.15, f.height, 0.15), wallMat);
+    wall.position.set((w.a[0] + w.b[0]) / 2, f.elevation + f.height / 2, -(w.a[1] + w.b[1]) / 2);
+    wall.rotation.y = Math.atan2(dy, dx);
+    g.add(wall);
+  }
+  scene.add(g);
+}
+const furniture = [
+  ['ground', fabricMat, [1.2, 3.0], [2.2, 0.9, 0.45]], // sofa
+  ['ground', woodMat, [2.6, 1.6], [1.2, 0.7, 0.45]], // coffee table
+  ['ground', woodMat, [10.5, 2.5], [1.6, 0.9, 0.75]], // kitchen table
+  ['ground', fabricMat, [2.5, 7.5], [1.8, 2.0, 0.5]], // bed
+  ['first', fabricMat, [2.5, 7.0], [1.6, 2.0, 0.5]],
+  ['first', woodMat, [10.5, 1.0], [1.6, 0.8, 0.75]],
+];
+for (const [fid, m, [x, y], [w, d, h]] of furniture) {
+  const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+  box.position.set(x, floors[fid].elevation + h / 2, -y);
+  scene.getObjectByName('floor:' + fid).add(box);
+}
+const roof = new THREE.Group();
+roof.name = 'roof';
+const r = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 7.8, 2.6, 4, 1), roofMat);
+r.rotation.y = Math.PI / 4;
+r.scale.set(1, 1, 0.75);
+r.position.set(6, 5.6 + 1.3, -4.5);
+roof.add(r);
+scene.add(roof);
+
+const glb = await new Promise((res, rej) => new GLTFExporter().parse(scene, res, rej, { binary: true }));
+fs.writeFileSync(new URL('../demo/house.glb', import.meta.url), Buffer.from(glb));
+console.log('demo/house.glb', glb.byteLength, 'bytes');

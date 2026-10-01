@@ -1,0 +1,84 @@
+// Headless check of the GLB underlay and the export snippet:
+// - demo with ?model=1: model loads, floor:<id> groups follow the floor chips, roof is cut away
+// - a missing model shows a notice instead of breaking the card
+// - tools/export-glb.js exports a named scene to a valid .glb without lights/helpers
+import fs from 'node:fs';
+import path from 'node:path';
+import { openDemo, newPage, root } from './lib/demo-browser.mjs';
+
+const failures = [];
+const check = (name, ok, detail = '') => {
+  console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ' – ' + detail : ''}`);
+  if (!ok) failures.push(name);
+};
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const card = 'document.querySelector("floorplan3d-card")';
+let allErrors = [];
+
+// 1. model in the demo
+let s = await openDemo({ model: '1', view: '3d' }, { width: 1400, height: 560 });
+try {
+  const { page } = s;
+  await page.waitForFunction(`!!${card}._view.model`, { timeout: 10000 });
+  await sleep(300);
+  const st = () => page.evaluate(`(() => { const v = ${card}._view; return {
+    ground: v.model.floorNodes.get('ground')?.visible, first: v.model.floorNodes.get('first')?.visible,
+    cut: v.modelClip.constant, floors: [...v.model.floorNodes.keys()] }; })()`);
+  let v = await st();
+  check('model loaded with floor groups', JSON.stringify(v.floors) === '["ground","first"]', JSON.stringify(v.floors));
+  check('ground floor shown, first hidden, cut at wall height', v.ground === true && v.first === false && Math.abs(v.cut - 1) < 1e-6, JSON.stringify(v));
+  fs.mkdirSync(path.join(root, 'screenshots'), { recursive: true });
+  await page.screenshot({ path: path.join(root, 'screenshots/model-ground.png') });
+  await page.evaluate(`${card}._setFloor('first')`);
+  await sleep(300);
+  v = await st();
+  check('first floor chip shows first floor group, cut above it', v.first === true && v.ground === false && Math.abs(v.cut - 4) < 1e-6, JSON.stringify(v));
+  await page.screenshot({ path: path.join(root, 'screenshots/model-first.png') });
+  await page.evaluate(`${card}._setFloor('all')`);
+  await sleep(300);
+  v = await st();
+  check('"All" shows everything uncut', v.first && v.ground && v.cut > 1000);
+  check('no notice', await page.evaluate(`${card}.shadowRoot.querySelector('.notice').hidden`));
+  allErrors.push(...s.errors);
+} finally {
+  await s.close();
+}
+
+// 2. missing model
+s = await openDemo({ model: '/demo/missing.glb' });
+try {
+  await s.page.waitForFunction(`!${card}.shadowRoot.querySelector('.notice').hidden`, { timeout: 10000 });
+  const text = await s.page.evaluate(`${card}.shadowRoot.querySelector('.notice').textContent`);
+  check('missing model shows a notice', text.includes('missing.glb'), text);
+  check('card still renders markers', (await s.page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-marker').length`)) > 0);
+  allErrors.push(...s.errors.filter((e) => !e.includes('missing.glb') && !e.includes('404')));
+} finally {
+  await s.close();
+}
+
+// 3. export snippet round trip
+s = await openDemo({});
+try {
+  const { page, errors } = await newPage(s.browser);
+  await page.goto(`${s.base}/scripts/fixtures/export-test.html`);
+  await page.waitForFunction('window.ready === true');
+  // a real download would leave headless Chrome hanging on close
+  await page.evaluate('HTMLAnchorElement.prototype.click = function () { window.__downloaded = this.download; }');
+  await page.evaluate(fs.readFileSync(path.join(root, 'tools/export-glb.js'), 'utf8'));
+  await page.waitForFunction('!!window.__floorplan3dGlb', { timeout: 10000 });
+  const glb = Buffer.from(await page.evaluate('Array.from(new Uint8Array(window.__floorplan3dGlb))'));
+  check('export is a binary glTF', glb.toString('ascii', 0, 4) === 'glTF');
+  check('download offered as house.glb', (await page.evaluate('window.__downloaded')) === 'house.glb');
+  const jsonLen = glb.readUInt32LE(12);
+  const gltf = JSON.parse(glb.toString('utf8', 20, 20 + jsonLen));
+  const names = gltf.nodes.map((n) => n.name);
+  check('floor groups exported', names.includes('floor:ground') && names.includes('floor:first'), names.join(', '));
+  check('lights, cameras and helpers dropped', !gltf.extensions?.KHR_lights_punctual && !gltf.cameras && gltf.nodes.length === 4, `${gltf.nodes.length} nodes`);
+  allErrors.push(...errors.filter((e) => !e.includes('GPU stall')));
+} finally {
+  await s.close();
+}
+
+if (allErrors.length) console.error('page errors:\n' + allErrors.join('\n'));
+if (failures.length || allErrors.length) process.exit(1);
+console.log('all model checks passed');
