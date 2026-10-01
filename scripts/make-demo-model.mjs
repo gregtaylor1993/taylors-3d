@@ -1,5 +1,6 @@
-// Builds demo/house.glb from the demo layout: one "floor:<id>" group per storey with a slab,
-// full-height walls and a few furniture blocks, plus a "roof" group. Run: node scripts/make-demo-model.mjs
+// Builds demo/house.glb from the demo layout, tagged with fp userData (see docs/model-builder-guide.md):
+// storey levels (level0 / level1) with a tagged room group per room, an exterior level with the
+// outdoor zones, a roof level and one tagged lamp object. Run: node scripts/make-demo-model.mjs
 import fs from 'node:fs';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
@@ -25,15 +26,20 @@ const slabMat = mat(0xd9cfc1), wallMat = mat(0xf2efe9), woodMat = mat(0x9b7653),
 const scene = new THREE.Scene();
 for (const [id, f] of Object.entries(floors)) {
   const g = new THREE.Group();
-  g.name = 'floor:' + id;
+  g.name = id === 'ground' ? 'level0' : 'level1'; // ids deliberately differ from HA floor ids
+  g.userData.fp = { kind: 'level', id: g.name, role: 'storey', order: id === 'ground' ? 0 : 1, elevation: f.elevation, height: f.height };
   const rooms = DEMO_LAYOUT.rooms.filter((r) => floorOf(r) === id);
   for (const r of rooms.filter((x) => !x.outdoor)) {
     const shape = new THREE.Shape(r.polygon.map(([x, y]) => new THREE.Vector2(x, y)));
     const slab = new THREE.Mesh(new THREE.ExtrudeGeometry(shape, { depth: 0.2, bevelEnabled: false }), slabMat);
     slab.rotation.x = -Math.PI / 2;
     slab.position.y = f.elevation - 0.2;
-    slab.name = 'room:' + r.area_id;
-    g.add(slab);
+    slab.name = 'slab:' + r.area_id;
+    const rg = new THREE.Group();
+    rg.name = r.area_id;
+    rg.userData.fp = { kind: 'room', id: r.area_id, outline: r.polygon, doors: r.doors || [], suggest: { area: r.area_id } };
+    rg.add(slab);
+    g.add(rg);
   }
   for (const w of wallSegments(rooms)) {
     const dx = w.b[0] - w.a[0], dy = w.b[1] - w.a[1];
@@ -55,10 +61,35 @@ const furniture = [
 for (const [fid, m, [x, y], [w, d, h]] of furniture) {
   const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
   box.position.set(x, floors[fid].elevation + h / 2, -y);
-  scene.getObjectByName('floor:' + fid).add(box);
+  scene.getObjectByName(fid === 'ground' ? 'level0' : 'level1').add(box);
 }
+// exterior level: the outdoor rooms as zones (one slab each)
+const ext = new THREE.Group();
+ext.name = 'exterior';
+ext.userData.fp = { kind: 'level', id: 'exterior', role: 'exterior' };
+for (const z of DEMO_LAYOUT.rooms.filter((x) => x.outdoor)) {
+  const shape = new THREE.Shape(z.polygon.map(([x, y]) => new THREE.Vector2(x, y)));
+  const slab = new THREE.Mesh(new THREE.ExtrudeGeometry(shape, { depth: 0.1, bevelEnabled: false }), mat(0x9bb58a));
+  slab.rotation.x = -Math.PI / 2;
+  slab.position.y = -0.1;
+  slab.name = 'slab:' + z.area_id;
+  const zg = new THREE.Group();
+  zg.name = z.area_id;
+  zg.userData.fp = { kind: 'zone', id: z.area_id, outline: z.polygon, doors: z.doors || [], suggest: { area: z.area_id } };
+  zg.add(slab);
+  ext.add(zg);
+}
+const lampGroup = new THREE.Group();
+lampGroup.name = 'terrace_lamp_1';
+lampGroup.userData.fp = { kind: 'object', id: 'terrace_lamp_1', type: 'light', suggest: { domain: 'light', area: 'terrace' } };
+const lamp = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.2, 8), mat(0x333333));
+lamp.position.set(4.5, 0.6, 2.5);
+lampGroup.add(lamp);
+ext.add(lampGroup);
+scene.add(ext);
 const roof = new THREE.Group();
 roof.name = 'roof';
+roof.userData.fp = { kind: 'level', id: 'roof', role: 'roof' };
 const r = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 7.8, 2.6, 4, 1), roofMat);
 r.rotation.y = Math.PI / 4;
 r.scale.set(1, 1, 0.75);

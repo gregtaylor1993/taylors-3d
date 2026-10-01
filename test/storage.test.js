@@ -10,6 +10,10 @@ describe('normalise', () => {
     expect(normalise({ rooms: 'x', pins: null, floors: [{ id: 'g' }], extra: 1 }))
       .toMatchObject({ version: 1, rooms: [], pins: {}, floors: [{ id: 'g' }], hidden: [], extra: 1 });
   });
+  it('migrates the v0.1.4 model floor_map into level bindings', () => {
+    expect(normalise({ model: { version: 'v', floor_map: { ground: 'floor1', attic: 'always' } } }).model)
+      .toEqual({ version: 'v', levels: { ground: { floor: 'floor1' }, attic: { show: 'always' } } });
+  });
 });
 
 describe('LayoutStore', () => {

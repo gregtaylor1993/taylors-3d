@@ -1,6 +1,6 @@
 {
   "name": "floorplan3d-card",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "Home Assistant Lovelace card: 3D floorplan with auto-placed devices",
   "type": "module",
   "private": true,
@@ -13,6 +13,7 @@
     "screenshot": "node scripts/screenshot.mjs",
     "check:edit": "node scripts/edit-check.mjs",
     "check:model": "node scripts/model-check.mjs",
+    "check-model": "node tools/check-model.mjs",
     "check": "npm run build && node scripts/screenshot.mjs && node scripts/edit-check.mjs && node scripts/model-check.mjs",
     "deploy": "node scripts/deploy.mjs",
     "make-demo-model": "node scripts/make-demo-model.mjs"

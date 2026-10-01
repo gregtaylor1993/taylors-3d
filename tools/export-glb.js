@@ -6,8 +6,10 @@
 //    whole file and press Enter.
 // 3. house.glb downloads. Copy it to /config/www/ and set  model: /local/house.glb  in the card.
 //
-// Conventions the card understands (see docs/house-model-spec.md): metres, Y up, plan x = east,
-// plan y = north = -Z; top-level groups named "floor:<ha_floor_id>" are shown per floor.
+// Conventions the card understands (see docs/model-builder-guide.md): metres, Y up, plan x = east,
+// plan y = north = -Z. Tag levels, rooms and zones with  node.userData.fp = { kind: 'level', id: 'ground' }
+// (also kind 'room' / 'zone' with an outline); userData is exported as glTF extras. Legacy groups
+// named "floor:<id>" still work.
 (async () => {
   const SCALE = 1; // multiply into metres: 0.01 for centimetres, 0.001 for millimetres
   const FILE = 'house.glb';
@@ -44,8 +46,8 @@
     'Plan origin (0,0) should be the south-west corner (x≈0, z≈0); otherwise set model_position in the card.');
   const names = copy.children.map((c) => c.name || '(unnamed)');
   console.log('floorplan3d: top-level nodes:', names.join(', '));
-  if (!names.some((n) => /^floor[:_]/.test(n))) {
-    console.warn('floorplan3d: no "floor:<id>" groups; the card will only cut the model at the selected floor height.');
+  if (!names.some((n) => /^floor[:_]/.test(n)) && !copy.children.some((c) => c.userData && c.userData.fp)) {
+    console.warn('floorplan3d: no fp-tagged levels (node.userData.fp = { kind: "level", id }, see docs/model-builder-guide.md); the card will only cut the model at the selected floor height.');
   }
 
   const glb = await new Promise((resolve, reject) =>
