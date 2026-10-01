@@ -82,6 +82,24 @@ device('bath2_light', 'Bathroom 2 light', 'bathroom_2', [light('light.bathroom_2
 device('bath2_heater', 'Floor heating', 'bathroom_2', [['climate.bathroom_2', 'heat', { current_temperature: 24 }]]);
 void temp;
 
+// In-memory stand-in for the integration's /api/floorplan3d/model/<key> endpoint.
+const models = new Map();
+async function fetchWithAuth(url, init = {}) {
+  const key = decodeURIComponent(new URL(url, location.href).pathname.split('/').pop());
+  const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  const method = (init.method || 'GET').toUpperCase();
+  if (method === 'GET') return models.has(key) ? new Response(models.get(key)) : json(404, { message: 'No model uploaded' });
+  if (method === 'DELETE') { models.delete(key); return json(200, { deleted: true }); }
+  const file = init.body && init.body.get('file');
+  if (!file) return json(400, { message: 'Missing file field' });
+  const buf = await file.arrayBuffer();
+  const head = new Uint8Array(buf, 0, Math.min(8, buf.byteLength));
+  if (String.fromCharCode(...head.slice(0, 4)) !== 'glTF' || head[4] !== 2) return json(400, { message: 'Not a binary glTF 2.0 (.glb) file' });
+  models.set(key, buf);
+  const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return json(200, { size: buf.byteLength, version: digest.slice(0, 12), name: file.name });
+}
+
 export function createMockHass({ onChange }) {
   let layoutStore = JSON.parse(JSON.stringify(DEMO_LAYOUT));
   let current;
@@ -90,6 +108,7 @@ export function createMockHass({ onChange }) {
     user: { name: 'Demo', is_admin: true },
     language: 'en',
     hassUrl: (p) => p,
+    fetchWithAuth,
     callService: async (domain, service, data) => {
       const s = current.states[data.entity_id];
       if (!s || service !== 'toggle') return;

@@ -161,33 +161,54 @@ export class FloorplanView {
     this.dirty = true;
   }
 
-  // GLB underlay. opts: {url, position: [x, y, z] plan metres, rotation: degrees CCW, scale, opacity}.
+  // GLB underlay. opts: {url} or {id, data: ArrayBuffer | () => Promise<ArrayBuffer>}, plus
+  // position: [x, y, z] plan metres, rotation: degrees CCW, scale, opacity.
   // Top-level nodes named "floor:<id>" are shown only with their floor; everything is cut at the
-  // selected floor's cut-away height. Resolves to null or an error message.
+  // selected floor's cut-away height. Same url/id again only re-places the loaded model.
+  // Resolves to null or an error message.
   setModel(opts) {
-    if (!opts || !opts.url) {
+    const id = opts && (opts.id || opts.url);
+    if (!id) {
       this._disposeModel();
       return Promise.resolve(null);
     }
     const place = () => {
       const g = this.modelGroup;
       const [x, y, z] = opts.position || [0, 0, 0];
-      g.position.set(x, z, -y);
+      g.position.set(Number(x) || 0, Number(z) || 0, -(Number(y) || 0));
       g.rotation.y = ((opts.rotation || 0) * Math.PI) / 180;
       g.scale.setScalar(opts.scale || 1);
+      const opacity = opts.opacity ?? 1;
+      if (this.model) {
+        this.model.root.traverse((o) => {
+          if (!o.isMesh) return;
+          for (const mat of Array.isArray(o.material) ? o.material : [o.material]) {
+            mat.transparent = opacity < 1 || mat.userData.wasTransparent;
+            mat.opacity = opacity < 1 ? opacity : mat.userData.baseOpacity;
+            mat.depthWrite = opacity >= 1;
+            mat.needsUpdate = true;
+          }
+        });
+      }
       this._applyFloorVisibility();
       this.dirty = true;
     };
-    if (this.model && this.model.url === opts.url) {
+    if (this.model && this.model.id === id) {
       place();
       return Promise.resolve(null);
     }
+    if (this._modelId === id) return this._modelLoading; // already on its way
     this._disposeModel();
-    const url = opts.url;
-    this._modelUrl = url;
-    return new Promise((resolve) => {
-      new GLTFLoader().load(url, (gltf) => {
-        if (this._modelUrl !== url) return resolve(null);
+    this._modelId = id;
+    const label = opts.name || opts.url || 'model';
+    this._modelLoading = new Promise((resolve) => {
+      const fail = (err) => {
+        console.warn('floorplan3d: could not load model', label, err);
+        if (this._modelId === id) this._modelId = null;
+        resolve(`Could not load model ${label}`);
+      };
+      const onLoad = (gltf) => {
+        if (this._modelId !== id) return resolve(null);
         const root = gltf.scene;
         // GLTFLoader strips ':' from node names; the original is kept in userData.name
         const nameOf = (n) => (n.userData && n.userData.name) || n.name;
@@ -198,29 +219,38 @@ export class FloorplanView {
           const m = /^floor[:_](.+)$/.exec(nameOf(n));
           if (m) floorNodes.set(m[1], n);
         }
-        const opacity = opts.opacity ?? 1;
         root.traverse((o) => {
           if (!o.isMesh) return;
-          const mats = Array.isArray(o.material) ? o.material : [o.material];
-          for (const mat of mats) {
+          for (const mat of Array.isArray(o.material) ? o.material : [o.material]) {
             mat.clippingPlanes = [this.modelClip];
             mat.clipShadows = true;
-            if (opacity < 1) { mat.transparent = true; mat.opacity = opacity; mat.depthWrite = false; }
+            mat.userData.baseOpacity = mat.opacity;
+            mat.userData.wasTransparent = mat.transparent;
           }
         });
-        this.model = { url, root, floorNodes };
+        this.model = { id, root, floorNodes };
         this.modelGroup.add(root);
         place();
         resolve(null);
-      }, undefined, (err) => {
-        console.warn('floorplan3d: could not load model', url, err);
-        resolve(`Could not load model ${url}`);
-      });
+      };
+      const loader = new GLTFLoader();
+      if (opts.url) loader.load(opts.url, onLoad, undefined, fail);
+      else {
+        Promise.resolve(typeof opts.data === 'function' ? opts.data() : opts.data)
+          .then((buf) => loader.parse(buf, '', onLoad, fail))
+          .catch(fail);
+      }
     });
+    return this._modelLoading;
+  }
+
+  // floor ids found as "floor:<id>" groups in the loaded model
+  modelFloors() {
+    return this.model ? [...this.model.floorNodes.keys()] : null;
   }
 
   _disposeModel() {
-    this._modelUrl = null;
+    this._modelId = null;
     if (!this.model) return;
     this._clearGroup(this.modelGroup);
     this.model = null;

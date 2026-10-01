@@ -49,11 +49,8 @@ layout is then stored per user, or per browser on old HA versions; the Data tab 
 
 ## Add the card
 
-Dashboard → Edit → Add card → Manual:
-
-```yaml
-type: custom:floorplan3d-card
-```
+Dashboard → Edit → Add card → search **Floorplan 3D** (or Manual: `type: custom:floorplan3d-card`).
+The options below can be set in the visual editor or in YAML.
 
 | Option | Default | |
 |---|---|---|
@@ -71,7 +68,7 @@ type: custom:floorplan3d-card
 
 ## Set up the plan
 
-Click **Edit** on the card (admins only). The panel has four tabs.
+Click **Edit** on the card (admins only). The panel has five tabs.
 
 ![Edit mode](docs/images/edit-rooms.png)
 
@@ -92,6 +89,10 @@ its height above the floor; **Return to auto placement** removes the pin; **Hide
 from the plan. Devices whose area has no room yet, and hidden devices, are listed here.
 
 **Mower.** See below.
+
+**Model.** Upload a 3D model of the house (.glb, up to 100 MB) and line it up with the plan
+using the sliders (east, north, up, rotation, opacity) and scale. Shows which `floor:<id>`
+groups the model has. Needs the integration; see below.
 
 **Data.** Export and import the layout as JSON, and see where it is stored. *Shared* means the
 integration is active and everyone sees the same plan.
@@ -125,9 +126,14 @@ The mower's own marker follows the live position and draws a trail for the curre
 
 ![Model](docs/images/model.png)
 
-Put a `.glb` in `/config/www/` and set `model: /local/house.glb`. Name the top-level groups
-`floor:<floor_id>` so each floor shows on its own; everything is cut at the selected floor's
-`wall_height`. Details: [docs/house-model-spec.md](docs/house-model-spec.md).
+Upload it on the card: **Edit → Model → Upload .glb**, then align it with the sliders. The file
+is stored in `/config/floorplan3d/models/` and only served to logged-in users.
+
+Alternatively put a `.glb` in `/config/www/` and set `model: /local/house.glb` in the card
+(files in `www` are readable without login). A YAML `model` takes precedence over an upload.
+
+Name the top-level groups `floor:<floor_id>` so each floor shows on its own; everything is cut
+at the selected floor's `wall_height`. Details: [docs/house-model-spec.md](docs/house-model-spec.md).
 
 To export an existing Three.js design: add `window.scene = scene;` to its code, open it in the
 browser, paste [tools/export-glb.js](tools/export-glb.js) into the developer console. It drops
