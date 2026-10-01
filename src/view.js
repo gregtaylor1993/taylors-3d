@@ -94,6 +94,7 @@ export class FloorplanView {
   }
 
   _makeControls() {
+    const prevTarget = this.controls && this.controls.target.clone();
     if (this.controls) this.controls.dispose();
     const c = new OrbitControls(this.camera, this.renderer.domElement);
     c.enableDamping = true;
@@ -109,6 +110,7 @@ export class FloorplanView {
     c.addEventListener('change', () => { this.dirty = true; });
     c.addEventListener('start', () => { this._tween = null; });
     if (this.controls) c.enabled = this.controls.enabled;
+    if (prevTarget) c.target.copy(prevTarget);
     this.controls = c;
   }
 
@@ -200,6 +202,7 @@ export class FloorplanView {
           }
         });
       }
+      if (this.model && this.daylight) this._fitShadow();
       this._applyFloorVisibility();
       this.dirty = true;
     };
@@ -337,21 +340,7 @@ export class FloorplanView {
       sun.castShadow = day;
       sun.shadow.mapSize.set(2048, 2048);
       sun.shadow.bias = -0.0005;
-      this.modelGroup.updateMatrixWorld(true);
-      const box = new THREE.Box3().setFromObject(this.modelGroup);
-      if (!box.isEmpty()) {
-        const centre = box.getCenter(new THREE.Vector3());
-        const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 1);
-        sun.target.position.copy(centre);
-        sun.position.copy(centre).addScaledVector(new THREE.Vector3(-0.4, 1, 0.35).normalize(), radius * 2.5);
-        const cam = sun.shadow.camera;
-        cam.left = cam.bottom = -radius * 1.1;
-        cam.right = cam.top = radius * 1.1;
-        cam.near = 0.5;
-        cam.far = radius * 5;
-        cam.updateProjectionMatrix();
-        sun.target.updateMatrixWorld();
-      }
+      this._fitShadow();
     } else {
       r.toneMapping = THREE.NoToneMapping;
       r.toneMappingExposure = 1;
@@ -369,6 +358,27 @@ export class FloorplanView {
       if (!o.material) return;
       for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.needsUpdate = true;
     });
+    this.dirty = true;
+  }
+
+  // Fit the sun's shadow camera to the placed model.
+  _fitShadow() {
+    if (!this.model) return;
+    const sun = this.sun;
+    this.modelGroup.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(this.modelGroup);
+    if (box.isEmpty()) return;
+    const centre = box.getCenter(new THREE.Vector3());
+    const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 1);
+    sun.target.position.copy(centre);
+    sun.position.copy(centre).addScaledVector(new THREE.Vector3(-0.4, 1, 0.35).normalize(), radius * 2.5);
+    const cam = sun.shadow.camera;
+    cam.left = cam.bottom = -radius * 1.1;
+    cam.right = cam.top = radius * 1.1;
+    cam.near = 0.5;
+    cam.far = radius * 5;
+    cam.updateProjectionMatrix();
+    sun.target.updateMatrixWorld();
     this.dirty = true;
   }
 
