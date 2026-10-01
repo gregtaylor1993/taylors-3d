@@ -1,8 +1,9 @@
 """Floorplan 3D: shared layout storage for floorplan3d-card.
 
-Enabled with `floorplan3d:` in configuration.yaml. Stores card layouts in
-.storage/floorplan3d.layouts, exposes them over the websocket API, and serves
-the bundled card JavaScript so no manual Lovelace resource is needed.
+Added from Settings → Devices & services (or `floorplan3d:` in configuration.yaml, which is
+imported as a config entry). Stores card layouts in .storage/floorplan3d.layouts, exposes them
+over the websocket API, and serves the bundled card JavaScript so no manual Lovelace resource
+is needed.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
+from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.storage import Store
@@ -59,7 +61,18 @@ class LayoutStore:
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up storage, websocket commands and the card resource."""
+    """YAML `floorplan3d:` is imported as a config entry."""
+    if DOMAIN in config and not hass.config_entries.async_entries(DOMAIN):
+        hass.async_create_task(
+            hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_IMPORT}, data={})
+        )
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up storage, websocket commands and the card resource (once per HA run)."""
+    if DOMAIN in hass.data:
+        return True  # reloaded entry: commands and static path stay registered
     store = LayoutStore(hass)
     await store.async_load()
     hass.data[DOMAIN] = store
@@ -68,6 +81,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     websocket_api.async_register_command(hass, ws_set_layout)
 
     await _async_register_card(hass)
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Nothing to tear down; websocket commands and the card stay until restart."""
     return True
 
 

@@ -13,9 +13,11 @@ LAYOUT = {"version": 1, "rooms": [{"id": "r1", "area_id": "kitchen", "polygon": 
 
 
 async def _setup(hass: HomeAssistant) -> None:
+    """Set up through YAML, which imports a config entry."""
     assert await async_setup_component(hass, "http", {})
     assert await async_setup_component(hass, DOMAIN, {DOMAIN: {}})
     await hass.async_block_till_done()
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
 
 
 async def test_get_unknown_key_returns_null(hass: HomeAssistant, hass_ws_client) -> None:

@@ -8,7 +8,7 @@ import { buildMarkers, registrySignature, iconFor, isActive, displayValue, areaN
 import { mergeFloors, roomFloorId, markerPositions, lightGlow } from './layout.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LONG_PRESS_MS = 500;
 const CLICK_SLOP_PX = 5;

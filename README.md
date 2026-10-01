@@ -28,19 +28,19 @@ covers both. The integration stores the layout and makes it available to all use
 
 1. HACS → ⋮ → Custom repositories → add `https://github.com/istals/floorplan3d-card`,
    type **Integration**.
-2. Install **Floorplan 3D**.
-3. Add to `configuration.yaml`:
-   ```yaml
-   floorplan3d:
-   ```
-4. Restart Home Assistant, then reload the browser.
+2. Search for **Floorplan 3D** in HACS and download it.
+3. Restart Home Assistant.
+4. Settings → Devices & services → **Add integration** → **Floorplan 3D** → Submit.
+5. Reload the browser.
 
 ### Manual
 
 1. Download `floorplan3d.zip` from the [latest release](https://github.com/istals/floorplan3d-card/releases)
    and extract it to `/config/custom_components/floorplan3d/`
    (or build it yourself: `npm ci && npm run build`, then copy `custom_components/floorplan3d/`).
-2. Add `floorplan3d:` to `configuration.yaml` and restart.
+2. Restart, then Settings → Devices & services → Add integration → **Floorplan 3D**.
+
+`floorplan3d:` in `configuration.yaml` also works; it is imported as the integration entry.
 
 The card is loaded on every dashboard automatically; you do not need to add a resource.
 If you only want the card without the integration, add `floorplan3d-card.js` from the release
@@ -157,8 +157,8 @@ operations), `src/edit-mode.js` (panel and plan interactions), `src/mower.js` (m
 ## Troubleshooting
 
 - **Card not found** after install: restart HA, then reload the browser (clear cache on mobile app).
-- **Data tab says per-user or browser storage**: `floorplan3d:` is missing from
-  `configuration.yaml`, or HA has not been restarted since adding it.
+- **Data tab says per-user or browser storage**: the Floorplan 3D integration is not added
+  (Settings → Devices & services), or HA has not been restarted since installing it.
 - **No Edit button**: only admins can edit.
 - **A device is missing**: give it an area and draw that area's room, or check *Devices → Hidden*.
   Diagnostic and configuration entities are never shown.
