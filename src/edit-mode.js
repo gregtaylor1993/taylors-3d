@@ -75,6 +75,8 @@ export class EditMode {
     this.overlayMove = false;
     this.selectedRoom = null;
     this.selectedMarker = null;
+    this.modelPick = null;
+    this.view.highlightModelNode(null);
     this.view.setOverlay({});
     this._syncStageClasses();
     this.card._applyMarkerSelection(null);
@@ -131,6 +133,15 @@ export class EditMode {
       const { src } = this.calibrating;
       this.calibrating = null;
       this.setMower({ calibration: [...(this.mower().calibration || []), { src, plan }] });
+      return;
+    }
+    if (this.tab === 'model' && this.view.model && !this.drawing) {
+      const owner = this.view.pickModel(e.clientX, e.clientY);
+      this.modelPick = owner ? (owner.kind === 'untagged' ? { kind: 'untagged', path: owner.path } : { kind: owner.kind, id: owner.id }) : null;
+      this.view.highlightModelNode(owner ? owner.node : null);
+      this.render();
+      const row = this.panel.querySelector('tr.sel');
+      if (row) row.scrollIntoView({ block: 'nearest' });
       return;
     }
     const fid = this.drawing ? this.drawing.floorId : this.activeFloor();
@@ -264,6 +275,7 @@ export class EditMode {
   _syncStageClasses() {
     this.card._stage.classList.toggle('drawing', !!this.drawing || this.doorMode || !!this.calibrating);
     this.card._stage.classList.toggle('moving', this.overlayMove);
+    this.card._stage.classList.toggle('picking', this.tab === 'model' && !!this.view.model);
   }
 
   // Overlay move tool: grab the pointer before OrbitControls sees it (capture phase on the stage).
@@ -553,6 +565,12 @@ export class EditMode {
       const fname = fid ? this.floors.find((f) => f.id === fid).name : 'No floor';
       out += `<div class="sub">${esc(fname)}</div><ul class="list">`;
       for (const a of list) {
+        const mr = (this.card._modelRooms || []).find((x) => x.area_id === a.area_id);
+        if (mr) {
+          out += `<li><span class="name">${esc(a.name)}</span><span class="pill ok">model</span>
+            <button data-act="tab" data-id="model">Model</button></li>`;
+          continue;
+        }
         const r = rooms.find((x) => x.area_id === a.area_id);
         out += `<li class="${r && r.id === this.selectedRoom ? 'sel' : ''}"><span class="name">${esc(a.name)}</span>
           <span class="pill ${r ? 'ok' : 'missing'}">${r ? 'drawn' : 'missing'}</span>
@@ -698,8 +716,7 @@ export class EditMode {
   }
 
   setModelProps(patch, rerender = true) {
-    const cur = this.layout.model;
-    if (!cur) return;
+    const cur = this.layout.model || {};
     this.card._commit({ ...this.layout, model: { ...cur, ...patch } });
     if (rerender) this.render();
   }
@@ -750,7 +767,8 @@ export class EditMode {
     const c = this.card._config;
     if (c.model) {
       return `<p class="note warn">This card shows <b>${esc(c.model)}</b> from its YAML (<code>model:</code>).
-        Remove <code>model</code> and the <code>model_*</code> options from the card YAML to upload and align the model here.</p>`;
+        Remove <code>model</code> and the <code>model_*</code> options from the card YAML to upload and align the model here.</p>`
+        + this._modelBindingsHtml();
     }
     if (this.card._store.backend !== 'shared') {
       return `<p class="note warn">Uploading a model needs the Floorplan 3D integration (Settings → Devices &amp; services → Add integration).
@@ -766,7 +784,7 @@ export class EditMode {
       <input type="file" accept=".glb,model/gltf-binary" data-field="model-file" hidden ${this.uploading ? 'disabled' : ''}></label></div>`;
     if (!m) return out;
 
-    const floorInfo = this._modelFloorsHtml();
+    const floorInfo = this._modelBindingsHtml();
     const [x, y, z] = m.position || [0, 0, 0];
     const slider = (f, label, min, max, step, v) => `<label><span class="lab">${label}<span class="val" data-val="${f}">${fmt(v)}</span></span>
       <input type="range" data-field="md-${f}" min="${min}" max="${max}" step="${step}" value="${v}"></label>`;
@@ -786,25 +804,67 @@ export class EditMode {
     return out;
   }
 
-  // per model floor group: which HA floor shows it
-  _modelFloorsHtml() {
-    const groups = this.view.modelFloors();
-    const haFloors = this.floors.map((f) => `<code>${esc(f.id)}</code> (${esc(f.name)})`).join(', ');
-    const idHint = `<p class="hint">Your floor ids: ${haFloors}. Name the model's storey groups <code>floor:&lt;id&gt;</code> with these to match automatically.</p>`;
-    if (!groups) return '<p class="dim">Loading model…</p>';
-    if (!groups.length) {
-      return '<div class="sub">Floors</div><p class="hint">The model has no <code>floor:&lt;id&gt;</code> groups, so it is shown whole and cut at the selected floor\'s wall height.</p>' + idHint;
+  // Levels -> HA floors, rooms/zones -> HA areas, plus what changed since the last upload.
+  _modelBindingsHtml() {
+    const mb = this.card.modelBindings();
+    if (!mb) return '<p class="dim">Loading model…</p>';
+    const { manifest, levels, rooms, diff } = mb;
+    const s = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+    const objCount = manifest.objects.length;
+    let out = `<div class="sub">In the model</div><p class="hint">${s(manifest.levels.length, 'level')},
+      ${s(manifest.rooms.filter((r) => r.kind === 'room').length, 'room')}, ${s(manifest.rooms.filter((r) => r.kind === 'zone').length, 'zone')},
+      ${s(objCount, 'object')}${objCount ? ' (object controls come in a later version)' : ''}. Click a part of the model to find it here.</p>`;
+    if (manifest.errors.length || manifest.warnings.length) {
+      out += `<details class="report"><summary>${manifest.errors.length} error(s), ${manifest.warnings.length} warning(s)</summary><ul class="plain">`
+        + manifest.errors.map((e) => `<li class="bad">${esc(e)}</li>`).join('')
+        + manifest.warnings.map((w) => `<li class="dim">${esc(w)}</li>`).join('') + '</ul></details>';
     }
-    const map = this.card.modelFloorAssignment() || {};
-    const saved = (this.layout.model && this.layout.model.floor_map) || {};
-    const opts = (g) => [
-      ...this.floors.map((f) => [f.id, 'with ' + f.name]),
-      ['always', 'always shown'],
-      ['hidden', 'hidden'],
-    ].map(([v, l]) => `<option value="${esc(v)}" ${map[g] === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
-    const rows = groups.map((g) => `<tr><td><code>${esc(g)}</code></td><td><select data-field="md-floor" data-id="${esc(g)}">${opts(g)}</select></td>
-      <td class="dim">${saved[g] ? '' : 'auto'}</td></tr>`).join('');
-    return `<div class="sub">Floors in the model</div><table class="floors">${rows}</table>${idHint}`;
+    const added = diff.levels.added.length + diff.rooms.added.length;
+    const missing = diff.levels.missing.length + diff.rooms.missing.length;
+    if ((added || missing) && (this.layout.model && (this.layout.model.levels || this.layout.model.rooms))) {
+      out += `<p class="note warn">Since the last setup: ${added} new part(s) (assigned automatically below, marked auto)
+        and ${missing} part(s) no longer in the model (kept below in case they come back).</p>`;
+    }
+    const sel = (k, id) => (this.modelPick && this.modelPick.kind !== 'untagged' && this.modelPick.id === id && k.includes(this.modelPick.kind) ? 'sel' : '');
+
+    if (manifest.levels.length) {
+      const opts = (v) => [
+        ...this.floors.map((f) => [`floor:${f.id}`, 'with ' + f.name]),
+        ['always', 'always shown'], ['all-only', 'only in "All"'], ['hidden', 'hidden'],
+      ].map(([val, label]) => `<option value="${esc(val)}" ${val === v ? 'selected' : ''}>${esc(label)}</option>`).join('');
+      out += '<div class="sub">Levels</div><table class="floors">' + manifest.levels.map((l) => {
+        const a = levels[l.id];
+        const v = a.show === 'with' ? `floor:${a.floor}` : a.show;
+        return `<tr data-pick="level:${esc(l.id)}" class="${sel(['level'], l.id)}"><td title="${esc(l.role)}">${esc(l.label)}</td>
+          <td><select data-field="md-level" data-id="${esc(l.id)}">${opts(v)}</select></td>
+          <td class="dim">${a.stale ? '<span class="bad">floor deleted</span>' : a.auto ? 'auto' : ''}</td></tr>`;
+      }).join('') + '</table>';
+    }
+
+    if (manifest.rooms.length) {
+      const areas = Object.values(this.hass.areas || {}).sort((a, b) => a.name.localeCompare(b.name));
+      const opts = (v) => `<option value="" ${v ? '' : 'selected'}>— no area —</option>`
+        + areas.map((a) => `<option value="${esc(a.area_id)}" ${a.area_id === v ? 'selected' : ''}>${esc(a.name)}</option>`).join('');
+      out += '<div class="sub">Rooms and zones</div><table class="floors">' + manifest.rooms.map((r) => {
+        const a = rooms[r.id];
+        const note = a.stale ? '<span class="bad">area deleted</span>' : !levels[r.level] || !levels[r.level].floor
+          ? 'level not on a floor' : r.outlineFallback ? 'no outline' : a.auto ? 'auto' : '';
+        return `<tr data-pick="${r.kind}:${esc(r.id)}" class="${sel(['room', 'zone'], r.id)}"><td title="${esc(r.kind)} in ${esc(r.level || '?')}">${esc(r.label)}</td>
+          <td><select data-field="md-room" data-id="${esc(r.id)}">${opts(a.area)}</select></td><td class="dim">${note}</td></tr>`;
+      }).join('') + '</table>'
+        + '<p class="hint">Rooms from the model replace rooms drawn for the same area. <a href="/config/areas/dashboard" target="_top">Create areas in Home Assistant</a>.</p>';
+    }
+
+    const gone = [...diff.levels.missing.map((id) => ['levels', id]), ...diff.rooms.missing.map((id) => ['rooms', id])];
+    if (gone.length) {
+      out += '<div class="sub">No longer in the model</div><ul class="plain">' + gone.map(([k, id]) =>
+        `<li><code>${esc(id)}</code> <button class="link" data-act="md-forget" data-kind="${k}" data-id="${esc(id)}">Forget</button></li>`).join('') + '</ul>';
+    }
+    if (this.modelPick && this.modelPick.kind === 'untagged') {
+      out += `<p class="note warn">“${esc(this.modelPick.path)}” is not tagged in the model, so it can't be assigned.
+        Ask the model builder to tag it (docs/model-builder-guide.md).</p>`;
+    }
+    return out;
   }
 
   _dataTab() {
@@ -828,7 +888,19 @@ export class EditMode {
     const sel = this.room(this.selectedRoom);
     this.message = null;
     switch (btn.dataset.act) {
-      case 'tab': this.tab = id; break;
+      case 'tab':
+        this.tab = id;
+        if (id !== 'model') { this.modelPick = null; this.view.highlightModelNode(null); }
+        this._syncStageClasses();
+        break;
+      case 'md-forget': {
+        const m = this.layout.model || {};
+        const k = btn.dataset.kind;
+        const next = { ...(m[k] || {}) };
+        delete next[id];
+        this.setModelProps({ [k]: next });
+        return;
+      }
       case 'draw': this.startDrawing(id); return;
       case 'finish': this.finishDrawing(); return;
       case 'undo-point': this.drawing.points.pop(); this.refreshOverlay(); break;
@@ -949,9 +1021,14 @@ export class EditMode {
       const file = el.files && el.files[0];
       el.value = '';
       if (file) this._uploadModel(file);
-    } else if (f === 'md-floor') {
-      const m = this.layout.model;
-      if (m) this.setModelProps({ floor_map: { ...(m.floor_map || {}), [el.dataset.id]: el.value } });
+    } else if (f === 'md-level') {
+      const v = el.value;
+      const b = v.startsWith('floor:') ? { floor: v.slice(6) } : { show: v };
+      const m = this.layout.model || {};
+      this.setModelProps({ levels: { ...(m.levels || {}), [el.dataset.id]: b } });
+    } else if (f === 'md-room') {
+      const m = this.layout.model || {};
+      this.setModelProps({ rooms: { ...(m.rooms || {}), [el.dataset.id]: { area: el.value || null } } });
     } else if (f === 'md-scale') {
       const v = Number(el.value);
       if (Number.isFinite(v) && v > 0) this.setModelProps({ scale: v }, false);

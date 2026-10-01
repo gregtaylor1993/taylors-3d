@@ -114,6 +114,10 @@ const STYLE = `
   .panel .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .panel .pill { font-size: 10.5px; padding: 1px 7px; border-radius: 9px; }
   .panel .pill.ok { background: rgba(76,175,80,.16); color: var(--success-color, #43a047); }
+  .panel tr.sel td { background: rgba(3,169,244,.12); }
+  .stage.picking .fp-marker, .stage.picking .fp-handle { pointer-events: none; opacity: .45; }
+  .panel details.report { margin: 6px 0; font-size: 12px; }
+  .panel details.report summary { cursor: pointer; color: var(--secondary-text-color); }
   .panel .pill.missing { background: rgba(255,152,0,.16); color: var(--warning-color, #ef8a00); }
   .panel table.floors { width: 100%; border-collapse: collapse; font-size: 12px; }
   .panel table.floors th { font-weight: normal; color: var(--secondary-text-color); text-align: left; font-size: 11px; }
