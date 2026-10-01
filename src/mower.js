@@ -12,15 +12,21 @@
 
 const R_EARTH = 6378137;
 
+// Number() turns null and '' into 0, which would put the mower at the origin.
+function num(v) {
+  if (v === null || v === undefined || v === '') return NaN;
+  return Number(v);
+}
+
 export function readSource(stateObj, cfg) {
   if (!stateObj) return null;
   const a = stateObj.attributes || {};
   if ((cfg.source || 'gps') === 'xy') {
-    const u = Number(a[cfg.x_attr || 'x']);
-    const v = Number(a[cfg.y_attr || 'y']);
+    const u = num(a[cfg.x_attr || 'x']);
+    const v = num(a[cfg.y_attr || 'y']);
     return Number.isFinite(u) && Number.isFinite(v) ? { u, v, raw: [u, v] } : null;
   }
-  let lat = Number(a.latitude), lon = Number(a.longitude);
+  let lat = num(a.latitude), lon = num(a.longitude);
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
     const m = String(stateObj.state).match(/(-?\d+(?:\.\d+)?)\s*[,; ]\s*(-?\d+(?:\.\d+)?)/);
     if (!m) return null;

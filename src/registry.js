@@ -115,7 +115,7 @@ export function displayValue(hass, eid) {
   }
   if (d === 'climate') {
     const t = st.attributes.current_temperature;
-    return t !== undefined ? t + '°' : '';
+    return t !== undefined && t !== null ? t + '°' : '';
   }
   return '';
 }

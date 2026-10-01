@@ -17,6 +17,7 @@ export class LayoutStore {
     this.key = key || 'default';
     this.backend = null;
     this._timer = null;
+    this._pending = null;
   }
 
   async load(hass) {
@@ -40,8 +41,12 @@ export class LayoutStore {
 
   save(hass, layout, delay = 600) {
     clearTimeout(this._timer);
+    // a newer save replaces this one; settle the old promise so callers don't hang
+    if (this._pending) this._pending(false);
     return new Promise((resolve) => {
+      this._pending = resolve;
       this._timer = setTimeout(async () => {
+        this._pending = null;
         try {
           if (this.backend === 'shared') {
             await hass.callWS({ type: 'floorplan3d/layout/set', key: this.key, layout });

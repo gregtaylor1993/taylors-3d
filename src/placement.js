@@ -104,7 +104,7 @@ export const SKIP_DOMAINS = new Set([
   'zone', 'person', 'sun', 'image', 'tts', 'stt', 'conversation', 'wake_word', 'todo',
   'calendar', 'notify', 'input_number', 'input_select', 'input_text', 'input_datetime',
   'input_button', 'counter', 'timer', 'schedule', 'date', 'time', 'datetime', 'siren',
-  'device_tracker', 'remote', 'weather', 'assist_satellite', 'valve_state',
+  'device_tracker', 'remote', 'weather', 'assist_satellite',
 ]);
 
 // When several entities share a device, the marker uses the highest priority one.
@@ -126,7 +126,7 @@ export function sensorPriority(dc) {
 // ---------- layout ----------
 // markers: [{id, domain, deviceClass}] belonging to one room.
 // Returns Map id -> {x, y, z, auto: true}
-export function autoPlace(room, markers, roomHeight) {
+export function autoPlace(room, markers, roomHeight = 2.7) {
   const out = new Map();
   const poly = room.polygon;
   if (!poly || poly.length < 3) return out;
@@ -190,7 +190,7 @@ export function autoPlace(room, markers, roomHeight) {
     const per = perimeter(poly);
     const n = groups.wall.length;
     groups.wall.forEach(({ m, r }, i) => {
-      const p = pointOnPerimeter(poly, ((i + 0.5) / n) * per + per * 0.07, inset);
+      const p = pointOnPerimeter(poly, (((i + 0.5) / n) * per + per * 0.07) % per, inset);
       out.set(m.id, { x: p[0], y: p[1], z: zOf(r), auto: true });
     });
   }
