@@ -1,3 +1,5 @@
+> **Superseded by [model-builder-guide.md](model-builder-guide.md)** (model contract v2: tagged levels, rooms, zones and objects, all assigned in the card). This page describes the v1 format (`floor:<id>` groups + separate layout JSON), which keeps working.
+
 # House model spec
 
 What a house design (for example a Three.js scene) should produce so floorplan3d-card can use it.
