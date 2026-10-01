@@ -169,7 +169,7 @@ Popup rows: `toggle`, `brightness`, `color`, `color_temp`, `speed`, `cover_contr
       stable ids, glow mesh named where it matters, moving parts as separate nodes with `hinge`.
 - [ ] No mesh larger than the plot inside a storey; no world ground plane in storeys.
 - [ ] No lights / cameras / helpers in the export. Under ~20 MB, textures ≤ 2048 px.
-- [ ] `node tools/check-model.mjs house.glb` passes (from the floorplan3d-card repository).
+- [ ] `node tools/check-model.mjs house.glb` reports OK (run it in the floorplan3d-card repository).
 
 ## Example (Three.js)
 

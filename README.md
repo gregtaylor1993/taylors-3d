@@ -133,10 +133,17 @@ is stored in `/config/floorplan3d/models/` and only served to logged-in users.
 Alternatively put a `.glb` in `/config/www/` and set `model: /local/house.glb` in the card
 (files in `www` are readable without login). A YAML `model` takes precedence over an upload.
 
-Name the top-level groups `floor:<floor_id>` so each floor shows on its own; everything is cut
-at the selected floor's `wall_height`. The Model tab lists your HA floor ids. Groups with other
-names are matched to HA floors bottom-up; change the assignment per group there (a floor,
-*always shown* or *hidden*). Details: [docs/house-model-spec.md](docs/house-model-spec.md).
+Tag the model's parts (levels, rooms, zones, objects) so the card can use them: top-level
+levels become floors, tagged rooms and zones become the card's rooms, so the model's outlines
+replace hand-drawn ones. Format and examples: [docs/model-builder-guide.md](docs/model-builder-guide.md).
+Untagged models still load and show whole.
+
+In **Edit → Model** you assign each level to an HA floor (or *always shown*, *only in All*,
+*hidden*) and each room to an HA area. Defaults follow level order and the tag's suggested
+area, so most of it is automatic; your choices are stored by id and survive re-exports.
+Click a part of the model in the view to find it in the lists. Everything is cut at the
+selected floor's `wall_height`. Check a model before uploading with
+`npm run check-model -- house.glb`.
 
 To export an existing Three.js design: add `window.scene = scene;` to its code, open it in the
 browser, paste [tools/export-glb.js](tools/export-glb.js) into the developer console. It drops

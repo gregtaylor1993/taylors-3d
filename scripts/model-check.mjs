@@ -1,5 +1,5 @@
 // Headless check of the GLB underlay and the export snippet:
-// - demo with ?model=1: model loads, floor:<id> groups follow the floor chips, roof is cut away
+// - demo with ?model=1: model loads, level groups follow the floor chips, roof is cut away
 // - a missing model shows a notice instead of breaking the card
 // - tools/export-glb.js exports a named scene to a valid .glb without lights/helpers
 import fs from 'node:fs';
@@ -15,6 +15,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const card = 'document.querySelector("floorplan3d-card")';
 let allErrors = [];
 
+function rewriteGlbJson(buf, edit) {
+  const jsonLen = buf.readUInt32LE(12);
+  const json = edit(JSON.parse(buf.toString('utf8', 20, 20 + jsonLen)));
+  let j = Buffer.from(JSON.stringify(json));
+  j = Buffer.concat([j, Buffer.alloc((4 - (j.length % 4)) % 4, 0x20)]);
+  const rest = buf.subarray(20 + jsonLen); // BIN chunk unchanged
+  const head = Buffer.alloc(20);
+  head.write('glTF', 0, 'latin1'); head.writeUInt32LE(2, 4); head.writeUInt32LE(20 + j.length + rest.length, 8);
+  head.writeUInt32LE(j.length, 12); head.write('JSON', 16, 'latin1');
+  return Buffer.concat([head, j, rest]);
+}
+
 // 1. model in the demo
 let s = await openDemo({ model: '1', view: '3d' }, { width: 1400, height: 560 });
 try {
@@ -22,10 +34,11 @@ try {
   await page.waitForFunction(`!!${card}._view.model`, { timeout: 10000 });
   await sleep(300);
   const st = () => page.evaluate(`(() => { const v = ${card}._view; return {
-    ground: v.model.floorNodes.get('ground')?.visible, first: v.model.floorNodes.get('first')?.visible,
-    cut: v.modelClip.constant, floors: [...v.model.floorNodes.keys()] }; })()`);
+    ground: v.modelManifest().levels.find((l) => l.id === 'level0')?.node.visible,
+    first: v.modelManifest().levels.find((l) => l.id === 'level1')?.node.visible,
+    cut: v.modelClip.constant, floors: v.modelManifest().levels.map((l) => l.id) }; })()`);
   let v = await st();
-  check('model loaded with floor groups', JSON.stringify(v.floors) === '["ground","first"]', JSON.stringify(v.floors));
+  check('model loaded with level groups', JSON.stringify(v.floors) === '["level0","level1","exterior","roof"]', JSON.stringify(v.floors));
   check('ground floor shown, first hidden, cut at wall height', v.ground === true && v.first === false && Math.abs(v.cut - 1) < 1e-6, JSON.stringify(v));
   fs.mkdirSync(path.join(root, 'screenshots'), { recursive: true });
   await page.screenshot({ path: path.join(root, 'screenshots/model-ground.png') });
@@ -87,8 +100,12 @@ try {
   await sleep(300);
   const lm = await page.evaluate(`${card}._layout.model`);
   check('upload stored in layout', lm && lm.name === 'house.glb' && lm.version && lm.size > 1000, JSON.stringify(lm));
-  check('model loaded with floor groups', JSON.stringify(await page.evaluate(`${card}._view.modelFloors()`)) === '["ground","first"]');
-  check('matching groups map to their floors', JSON.stringify(await page.evaluate(`${card}.modelFloorAssignment()`)) === '{"ground":"ground","first":"first"}');
+  check('model loaded with level groups', JSON.stringify(await page.evaluate(`${card}._view.modelManifest().levels.map((l) => l.id)`)) === '["level0","level1","exterior","roof"]');
+  const lv = () => page.evaluate(`JSON.stringify(Object.fromEntries(Object.entries(${card}.modelBindings().levels).map(([k, v]) => [k, v.show + ':' + v.floor])))`);
+  check('levels map by order, exterior with ground, roof all-only',
+    (await lv()) === JSON.stringify({ level0: 'with:ground', level1: 'with:first', exterior: 'with:ground', roof: 'all-only:null' }), await lv());
+  check('rooms come from the model', await page.evaluate(`${card}._modelRooms.some((r) => r.id === 'm:kitchen' && r.floor_id === 'ground')`));
+  check('model room replaces the drawn kitchen', await page.evaluate(`${card}._allRooms().filter((r) => r.area_id === 'kitchen').length === 1`));
   await page.evaluate(`(() => { const s = ${panel('[data-field=md-rotation]')}; s.value = "90"; s.dispatchEvent(new Event("input", { bubbles: true })); })()`);
   await page.evaluate(`(() => { const s = ${panel('[data-field=md-opacity]')}; s.value = "0.5"; s.dispatchEvent(new Event("input", { bubbles: true })); })()`);
   await sleep(150);
@@ -98,25 +115,64 @@ try {
   await page.evaluate(`(() => { const s = ${panel('[data-field=md-rotation]')}; s.value = "0"; s.dispatchEvent(new Event("input", { bubbles: true })); })()`);
   await sleep(200);
   await page.screenshot({ path: path.join(root, 'screenshots/model-upload.png') });
-  // a model whose storey names don't match HA floors (like "ground" / "attic" vs "floor1")
+  // rotation moves the rooms with the model
+  const k0 = await page.evaluate(`JSON.stringify(${card}._modelRooms.find((r) => r.id === 'm:kitchen').polygon[1])`);
+  await page.evaluate(`(() => { const s = ${panel('[data-field=md-rotation]')}; s.value = '90'; s.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await sleep(300);
+  check('rotation moves rooms', (await page.evaluate(`JSON.stringify(${card}._modelRooms.find((r) => r.id === 'm:kitchen').polygon[1])`)) !== k0);
+  await page.evaluate(`(() => { const s = ${panel('[data-field=md-rotation]')}; s.value = '0'; s.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await sleep(300);
+  // assign a room to no area
+  await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-room][data-id=kitchen]'); s.value = ''; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await sleep(200);
+  check('room binding saved', JSON.stringify(await page.evaluate(`${card}._layout.model.rooms`)) === '{"kitchen":{"area":null}}', JSON.stringify(await page.evaluate(`${card}._layout.model.rooms`)));
+  // click to pick: the kitchen floor in top view
+  await page.evaluate(`${card}._setMode('top')`);
+  await page.evaluate(`${card}._view.fit({ model: true })`);
+  await sleep(300);
+  const pt = await page.evaluate(`${card}._view.screenPoint(9.5, 2, 0, 'ground')`);
+  await page.mouse.click(pt[0], pt[1]);
+  await sleep(200);
+  check('click picks the room', JSON.stringify(await page.evaluate(`${card}._edit.modelPick`)) === '{"kind":"room","id":"kitchen"}'
+    && await page.evaluate(`!!${card}.shadowRoot.querySelector('tr.sel[data-pick="room:kitchen"]')`), JSON.stringify(await page.evaluate(`${card}._edit.modelPick`)));
+  await page.evaluate(`${card}._setMode('3d')`);
+  await sleep(200);
+  // a model whose level ids differ again: the ids keep their order mapping
   const renamed = path.join(root, 'screenshots', 'renamed.glb');
   const buf = fs.readFileSync(path.join(root, 'demo', 'house.glb'));
-  fs.writeFileSync(renamed, Buffer.from(buf.toString('latin1').replace('floor:ground', 'floor:level0').replace('floor:first', 'floor:attic'), 'latin1'));
+  fs.writeFileSync(renamed, Buffer.from(buf.toString('latin1').replace('"id":"level0"', '"id":"lvl_a0"').replace('"id":"level1"', '"id":"lvl_a1"'), 'latin1'));
   await upload(renamed);
-  await page.waitForFunction(`JSON.stringify(${card}._view.modelFloors()) === '["level0","attic"]'`, { timeout: 10000 });
+  await page.waitForFunction(`${card}._view.modelManifest()?.levels.some((l) => l.id === 'lvl_a0')`, { timeout: 10000 });
   await sleep(300);
   fs.unlinkSync(renamed);
-  check('unmatched groups map bottom-up', JSON.stringify(await page.evaluate(`${card}.modelFloorAssignment()`)) === '{"level0":"ground","attic":"first"}');
-  const vis = () => page.evaluate(`(() => { const n = ${card}._view.model.floorNodes; return [n.get('level0').visible, n.get('attic').visible]; })()`);
-  check('mapped group visible on its floor', JSON.stringify(await vis()) === '[true,false]');
-  check('mapping rows marked auto', (await page.evaluate(`${panel('table.floors')}.textContent`)).includes('auto'));
-  check('HA floor ids listed for the design', (await page.evaluate(`${card}.shadowRoot.querySelector('.panel .tab-body').textContent`)).includes('Your floor ids: ground'));
-  await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-floor][data-id=attic]'); s.value = 'always'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  check('renamed levels still map by order', (await lv()) === JSON.stringify({ lvl_a0: 'with:ground', lvl_a1: 'with:first', exterior: 'with:ground', roof: 'all-only:null' }), await lv());
+  const vis = () => page.evaluate(`(() => { const l = ${card}._view.modelManifest().levels; return [l[0].node.visible, l[1].node.visible]; })()`);
+  check('mapped level visible on its floor', JSON.stringify(await vis()) === '[true,false]');
+  check('level rows marked auto', (await page.evaluate(`${panel('table.floors')}.textContent`)).includes('auto'));
+  await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-level][data-id=lvl_a1]'); s.value = 'always'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   await sleep(200);
-  check('choose "always shown"', JSON.stringify(await page.evaluate(`${card}._layout.model.floor_map`)) === '{"attic":"always"}' && JSON.stringify(await vis()) === '[true,true]');
-  await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-floor][data-id=level0]'); s.value = 'hidden'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  check('choose "always shown"', JSON.stringify(await page.evaluate(`${card}._layout.model.levels.lvl_a1`)).includes('"always"') && JSON.stringify(await vis()) === '[true,true]', JSON.stringify(await page.evaluate(`${card}._layout.model.levels`)));
+  await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-level][data-id=lvl_a0]'); s.value = 'hidden'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   await sleep(200);
   check('choose "hidden"', JSON.stringify(await vis()) === '[false,true]');
+
+  // untagged model: loads whole, no rooms
+  const untagged = path.join(root, 'screenshots', 'untagged.glb');
+  fs.writeFileSync(untagged, rewriteGlbJson(fs.readFileSync(path.join(root, 'demo', 'house.glb')), (json) => {
+    for (const n of json.nodes || []) { delete n.extras; if (n.name === 'roof') n.name = 'top'; } // legacy name "roof" would still tag a level
+    return json;
+  }));
+  await upload(untagged);
+  await page.waitForFunction(`${card}._view.model && ${card}._view.modelManifest().levels.length === 0`, { timeout: 10000 });
+  fs.unlinkSync(untagged);
+  check('untagged model loads whole', await page.evaluate(`${card}._view.model.root.visible && ${card}._modelRooms.length === 0`));
+  await sleep(200);
+  check('stale bindings offered for forgetting', await page.evaluate(`!!${card}.shadowRoot.querySelector('[data-act=md-forget]')`));
+  await page.evaluate(`${card}.shadowRoot.querySelector('[data-act=md-forget]').click()`);
+  await sleep(200);
+  await upload(path.join(root, 'demo', 'house.glb'));
+  await page.waitForFunction(`${card}._view.modelManifest()?.levels.length === 4`, { timeout: 10000 });
+  await sleep(300);
   const cam0 = await page.evaluate(`${card}._view.camera.position.toArray().join()`);
   await clickText('Frame model');
   await sleep(200);

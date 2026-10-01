@@ -12,7 +12,7 @@ import {
 } from './bindings.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 
-const VERSION = '0.1.5';
+const VERSION = '0.2.0';
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LONG_PRESS_MS = 500;
 const CLICK_SLOP_PX = 5;
