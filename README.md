@@ -91,9 +91,15 @@ from the plan. Devices whose area has no room yet, and hidden devices, are liste
 
 **Mower.** See below.
 
-**Model.** Upload a 3D model of the house (.glb, up to 100 MB) and line it up with the plan
-using the sliders (east, north, up, rotation, opacity) and scale. Shows which `floor:<id>`
-groups the model has. Needs the integration; see below.
+**Model.** Upload or replace a 3D model of the house (.glb, up to 100 MB; needs the
+integration, see below) and line it up with the plan using the sliders (east, north, up,
+rotation, opacity) and scale. For a tagged model the tab lists its levels and rooms/zones:
+assign each level to an HA floor (or *always shown*, *only in All*, *hidden*) and each room
+or zone to an HA area. Defaults follow level order and the tag's suggested area. Click a part
+of the model in the view to find it in the lists. A report shows errors and warnings found
+in the model's tags, and a "no longer in the model" list shows assignments whose level or
+room was removed by a re-export, with **Forget** to drop them. See
+[docs/model-builder-guide.md](docs/model-builder-guide.md).
 
 **Data.** Export and import the layout as JSON, and see where it is stored. *Shared* means the
 integration is active and everyone sees the same plan.
