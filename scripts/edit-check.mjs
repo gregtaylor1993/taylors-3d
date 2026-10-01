@@ -205,6 +205,25 @@ try {
 } finally {
   await close();
 }
+// narrow card (a sections-view column): plan on top, panel below, nothing covering the buttons
+const narrow = await openDemo({ height: '520px' }, { width: 520, height: 1300 });
+try {
+  const p = narrow.page;
+  await p.evaluate(`${card}.shadowRoot.querySelector("button.edit").click()`);
+  await sleep(400);
+  const box = await p.evaluate(`(() => { const s = ${card}.shadowRoot; const r = (q) => s.querySelector(q).getBoundingClientRect();
+    return { card: r('ha-card').width, stage: [r('.stage').width, r('.stage').height], panel: r('.panel').width, panelTop: r('.panel').top, stageBottom: r('.stage').bottom }; })()`);
+  check('narrow: plan keeps full width and height', Math.abs(box.stage[0] - box.card) < 1 && box.stage[1] === 520, JSON.stringify(box));
+  check('narrow: panel below the plan, within the card', box.panelTop >= box.stageBottom - 1 && box.panel <= box.card + 1);
+  const hit = await p.evaluate(`(() => { const s = ${card}.shadowRoot;
+    const b = [...s.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === 'Draw');
+    const r = b.getBoundingClientRect(); return s.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === b; })()`);
+  check('narrow: Draw button is clickable (not covered)', hit);
+  errors.push(...narrow.errors);
+} finally {
+  await narrow.close();
+}
+
 if (errors.length) console.error('page errors:\n' + errors.join('\n'));
 if (failures.length || errors.length) process.exit(1);
 console.log('all edit checks passed');

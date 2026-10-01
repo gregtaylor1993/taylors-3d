@@ -9,7 +9,7 @@ import { buildMarkers, registrySignature, iconFor, isActive, displayValue, areaN
 import { mergeFloors, roomFloorId, markerPositions, lightGlow } from './layout.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 
-const VERSION = '0.1.2';
+const VERSION = '0.1.3';
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LONG_PRESS_MS = 500;
 const CLICK_SLOP_PX = 5;
@@ -20,7 +20,7 @@ const MODEL_API = '/api/floorplan3d/model';
 
 const STYLE = `
   :host { display: block; }
-  ha-card { display: block; overflow: hidden; position: relative;
+  ha-card { display: block; overflow: hidden; position: relative; container-type: inline-size;
     background: var(--ha-card-background, var(--card-background-color, #fff));
     border-radius: var(--ha-card-border-radius, 12px); color: var(--primary-text-color); }
   .stage { position: relative; width: 100%; touch-action: none; user-select: none; -webkit-user-select: none; }
@@ -64,13 +64,15 @@ const STYLE = `
     background: var(--card-background-color, #fff); color: var(--primary-text-color);
     box-shadow: 0 1px 3px rgba(0,0,0,.2); }
   .fp-val:empty { display: none; }
-  .body { display: flex; container-type: inline-size; }
+  .body { display: flex; }
   .body .stage { flex: 1; min-width: 0; }
   .panel { display: none; width: 300px; flex: none; box-sizing: border-box; flex-direction: column; max-height: var(--fp-height);
     border-left: 1px solid var(--divider-color, rgba(0,0,0,.12)); font-size: 13px; }
   .editing .panel { display: flex; }
+  /* narrow cards (e.g. a sections-view column): plan on top, panel below */
   @container (max-width: 640px) {
     .body.editing { flex-direction: column; }
+    .body.editing .stage { flex: none; width: 100%; }
     .editing .panel { width: auto; max-height: 420px; border-left: none; border-top: 1px solid var(--divider-color, rgba(0,0,0,.12)); }
   }
   .tabs { display: flex; border-bottom: 1px solid var(--divider-color, rgba(0,0,0,.12)); }
@@ -186,6 +188,11 @@ class Floorplan3dCard extends HTMLElement {
 
   static getStubConfig() {
     return {};
+  }
+
+  // sections view: span the whole section by default
+  getGridOptions() {
+    return { columns: 'full', min_columns: 6, rows: 'auto' };
   }
 
   static getConfigElement() {
