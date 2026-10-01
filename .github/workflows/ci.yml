@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  card:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - name: Headless browser checks (demo, edit mode, model)
+        run: node scripts/screenshot.mjs && node scripts/edit-check.mjs && node scripts/model-check.mjs
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: card
+          path: |
+            dist/floorplan3d-card.js
+            screenshots/
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install Home Assistant test harness
+        run: |
+          pip install -r requirements-test.txt
+          # the frontend package matching the installed core, needed by the frontend dependency
+          FRONTEND=$(python -c "import json, importlib.resources as r; print(json.load(open(r.files('homeassistant') / 'components/frontend/manifest.json'))['requirements'][0])")
+          pip install "$FRONTEND"
+      - run: python -m pytest -q

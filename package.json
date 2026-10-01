@@ -1,0 +1,34 @@
+{
+  "name": "floorplan3d-card",
+  "version": "0.1.0",
+  "description": "Home Assistant Lovelace card: 3D floorplan with auto-placed devices",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "demo": "node scripts/build.mjs && python3 -m http.server 8765",
+    "screenshot": "node scripts/screenshot.mjs",
+    "check:edit": "node scripts/edit-check.mjs",
+    "check:model": "node scripts/model-check.mjs",
+    "check": "npm run build && node scripts/screenshot.mjs && node scripts/edit-check.mjs && node scripts/model-check.mjs",
+    "deploy": "node scripts/deploy.mjs",
+    "make-demo-model": "node scripts/make-demo-model.mjs"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "three": "0.169.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@mdi/js": "7.4.47",
+    "esbuild": "0.28.2",
+    "eslint": "10.11.0",
+    "globals": "17.13.0",
+    "jsdom": "29.1.1",
+    "puppeteer-core": "25.12.0",
+    "vitest": "5.0.3"
+  }
+}
