@@ -146,6 +146,10 @@ In the **Mower** tab:
 
 The mower's own marker follows the live position and draws a trail for the current session.
 
+A mower object in the 3D model (type `mower`) replaces the mower device's marker: the model itself drives
+around, turned to its direction of travel (`hints.front`: `+x` default, `-x`, `+z` or `-z` for the model's
+front axis). Its popup shows state, battery and start / dock.
+
 ## 3D model underlay
 
 ![Model](docs/images/model.png)

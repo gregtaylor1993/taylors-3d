@@ -268,6 +268,50 @@ describe('ObjectLayer', () => {
     expect(node.position.distanceTo(p0)).toBeCloseTo(0);
   });
 
+  it('mower height is relative to its own floor: upper-floor node stays put on the same floor', () => {
+    const m = model([{ id: 'mw', x: 1, type: 'mower' }]);
+    m.manifest.levels[0].elevation = 3;
+    const node = m.manifest.objects[0].node;
+    node.position.y = 3.1;
+    layer.setModel(m);
+    layer.setBindings(bind([['mw', 'lawn_mower.m']]), {});
+    layer.update({ 'lawn_mower.m': st('mowing') }, ctx);
+    layer.setMowerPose({ x: 2, y: 2, floorId: 'up', heading: 0 }); // elevation(up) = 3
+    expect(node.getWorldPosition(new THREE.Vector3()).y).toBeCloseTo(3.1);
+    layer.setMowerPose({ x: 2, y: 2, floorId: 'ground', heading: 0 }); // elevation 0
+    expect(node.getWorldPosition(new THREE.Vector3()).y).toBeCloseTo(0.1);
+  });
+
+  it('realigning the model re-captures the node origin', () => {
+    const m = model([{ id: 'mw', x: 1, type: 'mower' }]);
+    layer.setModel(m);
+    layer.setBindings(bind([['mw', 'lawn_mower.m']]), {});
+    layer.update({ 'lawn_mower.m': st('mowing') }, ctx);
+    layer.setMowerPose({ x: 2, y: 4, floorId: 'ground', heading: 0 });
+    m.root.position.set(7, 1, -3);
+    m.root.rotation.y = 1;
+    layer.update({ 'lawn_mower.m': st('mowing') }, ctx);
+    const w = m.manifest.objects[0].node.getWorldPosition(new THREE.Vector3());
+    expect(w.x).toBeCloseTo(2); expect(w.z).toBeCloseTo(-4); expect(w.y).toBeCloseTo(3); // 2 + root offset 1
+    layer.setMowerPose(null);
+    const back = m.manifest.objects[0].node.position;
+    expect(back.x).toBeCloseTo(1); expect(back.y).toBeCloseTo(2);
+  });
+
+  it.each([['+x', 0], ['-x', 1], ['+z', 2], ['-z', 3]])('hints.front %s faces the direction of travel', (front, k) => {
+    const m = model([{ id: 'mw', x: 1, type: 'mower', hints: { front } }]);
+    m.root.rotation.y = 0.4;
+    layer.setModel(m);
+    layer.setBindings(bind([['mw', 'lawn_mower.m']]), {});
+    layer.update({ 'lawn_mower.m': st('mowing') }, ctx);
+    const axis = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1)][k];
+    for (const h of [0, 1, 2.5, -2]) {
+      layer.setMowerPose({ x: 0, y: 0, floorId: 'ground', heading: h });
+      const f = axis.clone().applyQuaternion(m.manifest.objects[0].node.getWorldQuaternion(new THREE.Quaternion()));
+      expect(f.x).toBeCloseTo(Math.cos(h)); expect(f.z).toBeCloseTo(-Math.sin(h));
+    }
+  });
+
   it('mower glow takes the status colour', () => {
     const m = model([{ id: 'mw', x: 1, type: 'mower' }]);
     layer.setModel(m);

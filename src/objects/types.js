@@ -173,7 +173,7 @@ const ledName = (obj) => (obj.hints && obj.hints.led) || obj.glow || 'led';
 
 function prepareStatus(obj, ctx, glowName, withLabel) {
   const glow = obj.node ? findGlow(obj.node, glowName) : null;
-  const part = { obj, glow, hints: hintDefaults(obj.hints), pool: false, level: 0, color: null, anchor: null, root: ctx.root, view: ctx.view, label: null, text: null };
+  const part = { obj, glow, hints: hintDefaults(obj.hints), pool: false, level: 0, color: null, anchor: null, root: ctx.root, view: ctx.view, levels: ctx.levels || [], label: null, text: null };
   claimGlow(part, glow);
   part.anchor = obj.node ? anchorOf(obj, glow, ctx.root, part.hints.offset) : new THREE.Vector3();
   if (withLabel && ctx.view && typeof document !== 'undefined') {
@@ -197,7 +197,9 @@ function updateStatus(part, color) {
 }
 
 function setLabel(part, text) {
-  part.text = text || null;
+  const next = text || null;
+  if (next === part.text) return; // no DOM writes when nothing changed
+  part.text = next;
   if (part.label) {
     part.label.element.textContent = part.text || '';
     part.label.visible = !!part.text;
@@ -219,6 +221,10 @@ function disposeStatus(part) {
   }
 }
 
+// hints.front: which local axis of the node is its front; the yaw offset that turns it to the heading.
+const FRONT_YAW = { '+x': 0, '-x': Math.PI, '+z': Math.PI / 2, '-z': -Math.PI / 2 };
+const frontOf = (obj) => (obj.hints && Object.prototype.hasOwnProperty.call(FRONT_YAW, obj.hints.front) ? obj.hints.front : '+x');
+
 // Mower node: world position from the plan point (x, floorElevation + own y offset, -y), turned to its heading.
 // The node's own transform is remembered and restored on dispose / pose null.
 function placeMower(part, pose) {
@@ -226,19 +232,21 @@ function placeMower(part, pose) {
   if (!node || !node.parent) return;
   if (!part.origin) {
     node.updateWorldMatrix(true, false);
-    part.origin = { position: node.position.clone(), quaternion: node.quaternion.clone(), worldY: node.getWorldPosition(new THREE.Vector3()).y };
+    const lv = part.levels.find((l) => l.id === part.obj.level);
+    const base = lv && Number.isFinite(lv.elevation) ? lv.elevation : 0; // elevation of the floor the node stands on
+    part.origin = { position: node.position.clone(), quaternion: node.quaternion.clone(), localY: node.getWorldPosition(new THREE.Vector3()).y - base };
   }
   if (!pose) { restoreMower(part); return; }
   const parent = node.parent;
   parent.updateWorldMatrix(true, false);
   const elev = part.view ? part.view.floorElevation(pose.floorId) : 0;
-  const world = new THREE.Vector3(pose.x, elev + part.origin.worldY, -pose.y);
+  const world = new THREE.Vector3(pose.x, elev + part.origin.localY, -pose.y);
   node.position.copy(parent.worldToLocal(world));
   if (Number.isFinite(pose.heading)) {
     // heading is an absolute plan angle: the node's own forward (+x of the model) turns to it, whatever the model alignment
     const pq = parent.getWorldQuaternion(new THREE.Quaternion());
     const rq = part.root.getWorldQuaternion(new THREE.Quaternion());
-    const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), pose.heading);
+    const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), pose.heading + FRONT_YAW[frontOf(part.obj)]);
     node.quaternion.copy(pq.clone().invert().multiply(yaw).multiply(rq.invert()).multiply(pq).multiply(part.origin.quaternion));
   }
   node.updateMatrixWorld(true);

@@ -53,7 +53,7 @@ export class ObjectLayer {
     this._placeSig = null;
     this._poseSig = null;
     if (model) {
-      const ctx = { root: model.root, view: this.view };
+      const ctx = { root: model.root, view: this.view, levels: model.manifest.levels || [] };
       for (const obj of model.manifest.objects || []) {
         const type = typeOf(obj.type);
         try {
@@ -91,8 +91,14 @@ export class ObjectLayer {
   _applyPose() {
     if (!this.model) return;
     this.model.root.updateWorldMatrix(true, false);
-    this._poseSig = this.model.root.matrixWorld.elements.map((v) => v.toFixed(5)).join();
-    for (const p of this.parts.values()) if (p.type.place) p.type.place(p.part, this._pose);
+    const sig = this.model.root.matrixWorld.elements.map((v) => v.toFixed(5)).join();
+    const moved = this._poseSig && sig !== this._poseSig;
+    this._poseSig = sig;
+    for (const p of this.parts.values()) {
+      if (!p.type.place) continue;
+      if (moved) p.type.place(p.part, null); // restore, so the origin is captured again in the new alignment
+      p.type.place(p.part, this._pose);
+    }
   }
 
   setBindings(bindings, groups) {

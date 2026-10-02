@@ -480,6 +480,17 @@ try {
   check('mower node moves with the live position', Math.hypot(a.x - b.x, a.z - b.z) > 0.01, JSON.stringify([a, b]));
   check('the mower marker is replaced by the object', !a.marker && !b.marker);
   check('mower glow takes the mowing colour', b.em > 0.1, JSON.stringify(b));
+  // a climate object shows its temperature as a label
+  await page.evaluate(`(() => { const c = ${card}, v = c._view, m = v.model;
+    const lv = v.modelManifest().levels.find((l) => l.id === 'level0');
+    const node = new (lv.node.constructor)(); node.name = 'test_climate'; lv.node.add(node);
+    m.manifest.objects = m.manifest.objects.concat([{ id: 'test_climate', type: 'climate', label: 'Climate', node, level: 'level0', suggest: { entity: 'climate.bedroom' } }]);
+    c._objects.setModel(null); c._objects.setModel(m);
+    c._bindKey = null; c._syncBindings(); c._buildMarkers(); c._refreshStates(); c._refreshMower(); c._updateObjects();
+    v.dirty = true; return true; })()`);
+  await sleep(500); // the CSS2D renderer attaches the element on the next frame
+  const lbl = await page.evaluate(`(() => { const e = [...${card}.shadowRoot.querySelectorAll('.fp-obj-label')].find((x) => x.textContent.includes('20.5')); return e ? e.textContent : null; })()`);
+  check('climate object shows a temperature label', !!lbl, String(lbl));
   allErrors.push(...s.errors);
 } finally {
   await s.close();
