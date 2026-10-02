@@ -255,6 +255,7 @@ export class FloorplanView {
             mat.userData.wasTransparent = mat.transparent;
           }
         });
+        this._modelVisibility = null;
         this.model = { id, root, manifest };
         this.modelGroup.add(root);
         root.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
@@ -321,6 +322,7 @@ export class FloorplanView {
 
   _disposeModel() {
     this._modelId = null;
+    this._modelVisibility = null;
     if (!this.model) return;
     this.highlightModelNode(null);
     this._clearGroup(this.modelGroup);
@@ -625,7 +627,8 @@ export class FloorplanView {
     this.setVisibleFloors(id === 'all' ? 'all' : [id]);
   }
 
-  // ids: floor id array or 'all'. visibleFloor keeps the first id (or 'all') for existing callers.
+  // ids: floor id array or 'all'. [] means 'none': all floor-bound markers/groups are hidden
+  // (callers then set model flags + setCut). visibleFloor keeps the first id (or 'all') for existing callers.
   setVisibleFloors(ids) {
     const list = ids === 'all' || !Array.isArray(ids) ? null : ids;
     this._visibleSet = list ? new Set(list) : null;
@@ -636,6 +639,7 @@ export class FloorplanView {
 
   // flags[i] -> index.nodes[i].node.visible; null returns to the level rules.
   applyModelVisibility(index, flags) {
+    this._restoreModelVisibility();
     if (flags && index) {
       index.nodes.forEach((n, i) => { n.node.visible = !!flags[i]; });
       this._modelVisibility = { index, flags };
@@ -646,7 +650,14 @@ export class FloorplanView {
     this.dirty = true;
   }
 
-  // states: Map<markerId, {shown, faded}> or null (floor visibility rules).
+  // Set every node of the previously flagged index visible again.
+  _restoreModelVisibility() {
+    if (this._modelVisibility) for (const n of this._modelVisibility.index.nodes) n.node.visible = true;
+    this._modelVisibility = null;
+  }
+
+  // states: Map<markerId, {shown, faded}> or null (floor visibility rules). A marker (or glow)
+  // whose id is missing from the map follows the floor rules.
   setMarkerStates(states) {
     this._markerStates = states || null;
     this._applyFloorVisibility();
@@ -661,13 +672,19 @@ export class FloorplanView {
   }
 
   getCamera() {
+    if (this.mode === 'top' && this._lastCam3d) return this._lastCam3d;
     const r = (a) => a.toArray().map((x) => Math.round(x * 100) / 100);
     return { position: r(this.persp.position), target: r(this.controls.target) };
   }
 
   setCamera(cam, { instant = false } = {}) {
     if (this.mode !== '3d' || !cam) return;
-    this._moveCamera(new THREE.Vector3(...cam.position), new THREE.Vector3(...cam.target), instant);
+    const pos = new THREE.Vector3(...cam.position), target = new THREE.Vector3(...cam.target);
+    // saved cameras must not be clamped by the zoom limits; relaxed until the next fit()
+    const d = pos.distanceTo(target);
+    this.controls.minDistance = Math.min(this.controls.minDistance, d);
+    this.controls.maxDistance = Math.max(this.controls.maxDistance, d);
+    this._moveCamera(pos, target, instant);
   }
 
   // cam: {position, target} or null for the default framing.
@@ -694,7 +711,7 @@ export class FloorplanView {
   meshTriangles(mesh) {
     const g = mesh.geometry;
     if (!g || !g.attributes.position) return [];
-    mesh.updateMatrixWorld(true);
+    mesh.updateWorldMatrix(true, false);
     const pos = g.attributes.position, idx = g.index, out = [], v = new THREE.Vector3();
     const n = idx ? idx.count : pos.count;
     for (let i = 0; i < n; i++) {
@@ -756,6 +773,7 @@ export class FloorplanView {
 
   setMode(mode) {
     if (mode === this.mode) return;
+    if (this.mode === '3d') this._lastCam3d = this.getCamera();
     this.mode = mode;
     this.camera = mode === 'top' ? this.ortho : this.persp;
     this._makeControls();
@@ -796,7 +814,7 @@ export class FloorplanView {
     const aspect = this.size.w / this.size.h;
     const target = center.clone();
     this._minDistance = Math.max(size.x, size.z) < 10 ? 1 : 4;
-    if (this.mode === '3d') this.controls.minDistance = this._minDistance;
+    if (this.mode === '3d') { this.controls.minDistance = this._minDistance; this.controls.maxDistance = 130; }
     if (this.visibleFloor !== 'all') target.y = this.floorElevation(this.visibleFloor);
 
     if (this.mode === 'top') {
