@@ -57,7 +57,8 @@ const STYLE = `
   .fp-room-label { font-size: 11px; letter-spacing: .02em; color: var(--secondary-text-color, #727272);
     white-space: nowrap; pointer-events: none; opacity: .9; }
   .fp-room-label.outdoor { font-style: italic; }
-  .fp-marker { display: flex; flex-direction: column; align-items: center; gap: 2px; pointer-events: auto;
+  /* the marker box is just the dot (CSS2D centres the box on the 3D point); the value hangs below it */
+  .fp-marker { position: relative; display: flex; flex-direction: column; align-items: center; pointer-events: auto;
     cursor: pointer; transform-origin: center; }
   .fp-dot { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
     background: var(--card-background-color, #fff); color: var(--secondary-text-color, #727272);
@@ -69,7 +70,8 @@ const STYLE = `
   .fp-marker.active.light .fp-dot { background: var(--fp-light, var(--state-light-active-color, #ffb74d));
     border-color: var(--fp-light, var(--state-light-active-color, #ffb74d)); color: #fff; }
   .fp-marker.unavailable .fp-dot { opacity: .45; border-style: dashed; }
-  .fp-val { font-size: 10.5px; font-weight: 500; padding: 1px 5px; border-radius: 8px; white-space: nowrap;
+  .fp-val { position: absolute; top: calc(100% + 2px); left: 50%; transform: translateX(-50%);
+    font-size: 10.5px; font-weight: 500; padding: 1px 5px; border-radius: 8px; white-space: nowrap;
     background: var(--card-background-color, #fff); color: var(--primary-text-color);
     box-shadow: 0 1px 3px rgba(0,0,0,.2); }
   .fp-val:empty { display: none; }

@@ -57,11 +57,44 @@ const drag = async (from, to) => {
   await sleep(250);
 };
 
+// |dot centre - projected 3D point| in px for a marker that shows a value line (worst over all such markers)
+const dotOffset = () => ev(`(() => { const c = ${card}, v = c._view; const r = v.renderer.domElement.getBoundingClientRect();
+  let worst = -1, n = 0;
+  for (const [, m] of v.markerObjects) {
+    const val = m.obj.element.querySelector('.fp-val');
+    if (!m.obj.visible || !val || !val.textContent) continue;
+    const p = m.obj.position.clone().project(v.camera);
+    if (Math.abs(p.x) > 0.95 || Math.abs(p.y) > 0.95 || Math.abs(p.z) > 1) continue; // off screen or behind the camera
+    const sx = r.left + ((p.x + 1) / 2) * r.width, sy = r.top + ((1 - p.y) / 2) * r.height;
+    const d = m.obj.element.querySelector('.fp-dot').getBoundingClientRect();
+    worst = Math.max(worst, Math.hypot(d.x + d.width / 2 - sx, d.y + d.height / 2 - sy)); n++;
+  }
+  return { worst, n }; })()`);
+// stems: [stem count, visible stem discs, visible markers]
+const stems = () => ev(`(() => { const v = ${card}._view; return [v.stems.size, [...v.stems.values()].filter((s) => s.disc.visible).length,
+  [...v.markerObjects.values()].filter((m) => m.obj.visible).length, v.stemGroup.children.length]; })()`);
+
 try {
   await ev(`window.__demoMower = ${card}._layout.mower`);
+  // markers are anchored at their dot (the value line hangs below it), also after orbit and zoom
+  let off = await dotOffset();
+  check('value marker dot on its 3D point', off.n > 0 && off.worst <= 1, JSON.stringify(off));
+  await ev(`(() => { const v = ${card}._view; const t = v.controls.target; v.setCamera({ position: [t.x + 9, 7, t.z + 4], target: t.toArray() }, { instant: true }); })()`);
+  await sleep(300);
+  off = await dotOffset();
+  check('dot anchored after orbit', off.n > 0 && off.worst <= 1, JSON.stringify(off));
+  await ev(`(() => { const v = ${card}._view; // zoom in on a value marker
+    const m = [...v.markerObjects.values()].find((x) => x.obj.visible && x.obj.element.querySelector('.fp-val').textContent);
+    const t = m.obj.position; v.setCamera({ position: [t.x + 2.5, t.y + 2.5, t.z + 2], target: t.toArray() }, { instant: true }); })()`);
+  await sleep(300);
+  off = await dotOffset();
+  check('dot anchored after zoom', off.n > 0 && off.worst <= 1, JSON.stringify(off));
+  check('no stems in view mode', (await stems())[0] === 0);
   // enter edit mode
   await ev(`${card}.shadowRoot.querySelector("button.edit").click()`);
   await sleep(300);
+  const st = await stems();
+  check('edit mode: one stem per shown marker', st[0] > 0 && st[1] === st[2] && st[3] === st[0] * 2, JSON.stringify(st));
   check('panel shown', await ev(`getComputedStyle(${card}.shadowRoot.querySelector(".panel")).display !== "none"`));
   check('"All" chip hidden while editing', !(await ev(`[...${card}.shadowRoot.querySelectorAll(".chip")].some(b => b.textContent === "All")`)));
   check('garage listed as missing', await ev(`[...${card}.shadowRoot.querySelectorAll(".panel li")].some(li => li.textContent.includes("Garage") && li.textContent.includes("missing"))`));
@@ -202,6 +235,8 @@ try {
   await sleep(200);
   check('panel hidden after Done', await ev(`getComputedStyle(${card}.shadowRoot.querySelector(".panel")).display === "none"`));
   check('no handles left', (await ev(`${card}.shadowRoot.querySelectorAll(".fp-handle").length`)) === 0);
+  const st2 = await stems();
+  check('stems gone after Done', st2[0] === 0 && st2[3] === 0, JSON.stringify(st2));
 } catch (e) {
   failures.push(String(e && e.stack || e));
   console.error(e);

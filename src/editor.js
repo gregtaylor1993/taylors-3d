@@ -3,6 +3,7 @@
 
 import { snap } from './placement.js';
 import { normalise } from './storage.js';
+import { transformPoint, inverseTransformPoint } from './bindings.js';
 
 export const GRID = 0.05;
 export const SNAP_RADIUS = 0.25;
@@ -118,7 +119,28 @@ export function cleanPolygon(points) {
 // ---------- devices ----------
 export function setPin(layout, id, pin) {
   const p = { x: round(snap(pin.x, GRID)), y: round(snap(pin.y, GRID)), z: round(pin.z), floor_id: pin.floor_id };
+  if (pin.on_model) p.on_model = true; // placed on the model: follows its alignment (realignPins)
   return { ...layout, pins: { ...(layout.pins || {}), [id]: p } };
+}
+
+// The model was moved / rotated / scaled from oldAlign to newAlign: pins placed on the model
+// keep their spot on it (p' = T_new(T_old^-1(p)), height scales with the model). Other pins stay.
+export function realignPins(layout, oldAlign, newAlign) {
+  const pins = layout.pins || {};
+  const os = (oldAlign && oldAlign.scale) || 1, ns = (newAlign && newAlign.scale) || 1;
+  let changed = false;
+  const out = {};
+  for (const [id, p] of Object.entries(pins)) {
+    if (!p || !p.on_model) { out[id] = p; continue; }
+    const [x, y] = transformPoint(inverseTransformPoint([p.x, p.y], oldAlign), newAlign);
+    const z = p.z * (ns / os);
+    // micrometre precision: slider ticks realign step by step, mm rounding would accumulate drift
+    const r6 = (v) => Math.round(v * 1e6) / 1e6;
+    const q = { ...p, x: r6(x), y: r6(y), z: r6(z) };
+    if (q.x !== p.x || q.y !== p.y || q.z !== p.z) changed = true;
+    out[id] = q;
+  }
+  return changed ? { ...layout, pins: out } : layout;
 }
 
 export function clearPin(layout, id) {

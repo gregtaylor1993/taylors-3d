@@ -71,7 +71,11 @@ export class FloorplanView {
     this.glowGroup = new THREE.Group();
     this.overlayGroup = new THREE.Group(); // editor graphics, drawn on top
     this.mowerGroup = new THREE.Group(); // map image + trail
-    this.scene.add(this.staticGroup, this.mowerGroup, this.glowGroup, this.markerGroup, this.overlayGroup);
+    this.stemGroup = new THREE.Group(); // edit mode: marker -> floor stems
+    this.scene.add(this.staticGroup, this.mowerGroup, this.glowGroup, this.markerGroup, this.overlayGroup, this.stemGroup);
+    this.stems = new Map(); // id -> { line, disc }
+    this._stemsOn = false;
+    this._stemRes = null; // shared geometries + materials of the current stems
     this.mapPlane = null;
     this.trail = null;
     this.modelGroup = new THREE.Group();
@@ -493,6 +497,7 @@ export class FloorplanView {
     const m = this.markerObjects.get(id);
     if (!m) return;
     m.obj.position.copy(planToWorld(x, y, z, this.floorElevation(floorId)));
+    this._placeStem(id, m.obj.position, floorId);
     const g = this.glows.get(id);
     if (g) g.mesh.position.copy(planToWorld(x, y, 0.03, this.floorElevation(floorId)));
     this.dirty = true;
@@ -584,8 +589,69 @@ export class FloorplanView {
       this.markerObjects.set(m.id, { obj, floorId: m.floorId });
       this.cssObjects.push({ obj, floorId: m.floorId, kind: 'marker', id: m.id });
     }
+    if (this._stemsOn) this._buildStems();
     this._applyFloorVisibility();
     this.dirty = true;
+  }
+
+  // Edit mode: a thin vertical line from every shown marker down to its floor plus a small disc
+  // on the floor, so a marker at mounting height reads as standing over one spot while orbiting.
+  setStems(on) {
+    this._stemsOn = !!on;
+    if (on) this._buildStems();
+    else this._disposeStems();
+    this._applyFloorVisibility();
+    this.dirty = true;
+  }
+
+  _stemColor() {
+    const c = new THREE.Color('#03a9f4');
+    try {
+      const css = getComputedStyle(this.container).getPropertyValue('--primary-color').trim();
+      if (/^(#|rgba?\(|hsla?\()/i.test(css)) c.setStyle(css);
+    } catch { /* detached or unparsable: keep the fallback */ }
+    return c;
+  }
+
+  _buildStems() {
+    this._disposeStems();
+    const color = this._stemColor();
+    const res = {
+      lineGeo: new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 1, 0)]),
+      discGeo: new THREE.CircleGeometry(0.08, 24).rotateX(-Math.PI / 2),
+      lineMat: new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.6, depthWrite: false }),
+      discMat: new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide }),
+    };
+    this._stemRes = res;
+    for (const [id, m] of this.markerObjects) {
+      const line = new THREE.Line(res.lineGeo, res.lineMat);
+      const disc = new THREE.Mesh(res.discGeo, res.discMat);
+      line.renderOrder = disc.renderOrder = 3;
+      line.userData.stemId = disc.userData.stemId = id;
+      this.stemGroup.add(line, disc);
+      this.stems.set(id, { line, disc });
+      this._placeStem(id, m.obj.position, m.floorId);
+    }
+  }
+
+  _placeStem(id, world, floorId) {
+    const st = this.stems.get(id);
+    if (!st) return;
+    const floor = this.floorElevation(floorId);
+    const h = Math.max(world.y - floor, 0);
+    st.line.position.set(world.x, floor, world.z);
+    st.line.scale.set(1, Math.max(h, 1e-4), 1);
+    st.line.userData.height = h;
+    st.disc.position.set(world.x, floor + 0.05, world.z); // above room fills (+0.02), glows, trail
+  }
+
+  _disposeStems() {
+    for (const { line, disc } of this.stems.values()) this.stemGroup.remove(line, disc);
+    this.stems.clear();
+    if (this._stemRes) {
+      for (const r of Object.values(this._stemRes)) r.dispose();
+      this._stemRes = null;
+    }
   }
 
   // glows: [{id, x, y, floorId, rgb, strength}] (lights that are on)
@@ -751,6 +817,12 @@ export class FloorplanView {
     for (const [id, g] of this.glows) {
       const st = stateOf(id);
       g.mesh.visible = st ? !!st.shown : this._shows(g.floorId);
+    }
+    for (const [id, st] of this.stems) {
+      const m = this.markerObjects.get(id);
+      const shown = !!(m && m.obj.visible);
+      st.disc.visible = shown;
+      st.line.visible = shown && st.line.userData.height > 0.01;
     }
     for (const o of this.overlayGroup.children) if (!o.isCSS2DObject) o.visible = this._shows(o.userData.floorId);
     if (this.trail) this.trail.visible = this._shows(this.trail.userData.floorId);
@@ -945,6 +1017,7 @@ export class FloorplanView {
     this._clearGroup(this.markerGroup);
     this._clearGroup(this.glowGroup);
     this._clearGroup(this.overlayGroup);
+    this._disposeStems();
     this._disposeModel();
     this.setMapOverlay(null);
     this.setTrail(null);

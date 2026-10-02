@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { openDemo, newPage, root } from './lib/demo-browser.mjs';
+import { inverseTransformPoint } from '../src/bindings.js';
 
 const failures = [];
 const check = (name, ok, detail = '') => {
@@ -240,6 +241,57 @@ try {
   check('rotation moves rooms', (await page.evaluate(`JSON.stringify(${card}._modelRooms.find((r) => r.id === 'm:kitchen').polygon[1])`)) !== k0);
   await page.evaluate(`(() => { const s = ${panel('[data-field=md-rotation]')}; s.value = '0'; s.dispatchEvent(new Event('input', { bubbles: true })); })()`);
   await sleep(300);
+  // a marker dropped on the model follows the model's alignment
+  {
+    await page.evaluate(`${card}._setMode('3d'); ${card}._setFloor('ground'); ${card}._view.fit({ model: true, instant: true })`);
+    await clickText('Devices'); // markers are draggable here (the Model tab picks the model instead)
+    await sleep(400);
+    const kp = await page.evaluate(`${card}._modelRooms.find((r) => r.id === 'm:kitchen').polygon`);
+    const tx = kp.reduce((a, p) => a + p[0], 0) / kp.length, ty = kp.reduce((a, p) => a + p[1], 0) / kp.length;
+    const pick = await page.evaluate(`(() => { const c = ${card}, v = c._view;
+      for (const m of c._markers) {
+        const p = c._positions.get(m.id), o = v.markerObjects.get(m.id);
+        if (!p || !o || !o.obj.visible || p.floorId !== 'ground' || m.id === c._mowerMarkerId) continue;
+        const r = o.obj.element.querySelector('.fp-dot').getBoundingClientRect();
+        if (r.width) return { id: m.id, z: p.z, from: [r.x + r.width / 2, r.y + r.height / 2] };
+      }
+      return null; })()`);
+    const to = await page.evaluate(`${card}._view.screenPoint(${tx}, ${ty}, ${pick.z}, 'ground')`);
+    await page.mouse.move(...pick.from);
+    await page.mouse.down();
+    await page.mouse.move(to[0], to[1], { steps: 8 });
+    await page.mouse.up();
+    await sleep(300);
+    const pin0 = await page.evaluate(`${card}._layout.pins[${JSON.stringify(pick.id)}]`);
+    await clickText('Model'); // alignment sliders
+    await sleep(200);
+    check('pin dropped on the model has on_model', !!(pin0 && pin0.on_model), JSON.stringify(pin0));
+    const align = () => page.evaluate(`(() => { const m = ${card}._layout.model; return { position: m.position || [0, 0, 0], rotation: m.rotation || 0, scale: m.scale || 1 }; })()`);
+    const a0 = await align();
+    await page.evaluate(`(() => { const s = ${panel('[data-field=md-rotation]')}; s.value = "30"; s.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+    await sleep(300);
+    const a1 = await align();
+    const pin1 = await page.evaluate(`${card}._layout.pins[${JSON.stringify(pick.id)}]`);
+    const r = (a0.rotation - a1.rotation) * Math.PI / 180; // rotated old position about the model origin
+    const ox = pin0.x - a0.position[0], oy = pin0.y - a0.position[1];
+    const want = [a1.position[0] + ox * Math.cos(-r) - oy * Math.sin(-r), a1.position[1] + ox * Math.sin(-r) + oy * Math.cos(-r)];
+    check('rotating the model 30° rotates the pin with it', a1.rotation === 30 && Math.hypot(pin1.x - want[0], pin1.y - want[1]) <= 0.01,
+      `${JSON.stringify(pin0)} -> ${JSON.stringify(pin1)}, want ${want}`);
+    const l0 = inverseTransformPoint([pin0.x, pin0.y], a0), l1 = inverseTransformPoint([pin1.x, pin1.y], a1);
+    check('pin keeps its spot in model coordinates', Math.hypot(l0[0] - l1[0], l0[1] - l1[1]) <= 0.01, `${l0} vs ${l1}`);
+    const w = await page.evaluate(`${card}._view.markerObjects.get(${JSON.stringify(pick.id)}).obj.position.toArray()`);
+    check('marker world position follows the pin', Math.hypot(w[0] - pin1.x, w[2] + pin1.y) <= 0.01, `${w} vs ${pin1.x},${pin1.y}`);
+    const inside = await page.evaluate(`(() => { const poly = ${card}._modelRooms.find((r) => r.id === 'm:kitchen').polygon, x = ${pin1.x}, y = ${pin1.y};
+      let ins = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const [xi, yi] = poly[i], [xj, yj] = poly[j];
+        if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) ins = !ins; } return ins; })()`);
+    check('pin still inside the rotated model room', inside);
+    // back to 0°: the pin returns; then drop it so the checks below see the original layout
+    await page.evaluate(`(() => { const s = ${panel('[data-field=md-rotation]')}; s.value = "0"; s.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+    await sleep(200);
+    const pin2 = await page.evaluate(`${card}._layout.pins[${JSON.stringify(pick.id)}]`);
+    check('rotating back restores the pin', Math.hypot(pin2.x - pin0.x, pin2.y - pin0.y) <= 0.001, JSON.stringify(pin2));
+    await page.evaluate(`(() => { const c = ${card}; const pins = { ...c._layout.pins }; delete pins[${JSON.stringify(pick.id)}]; c._commit({ ...c._layout, pins }); })()`);
+  }
   // assign a room to no area
   await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-room][data-id=kitchen]'); s.value = ''; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   await sleep(200);

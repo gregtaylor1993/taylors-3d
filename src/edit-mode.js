@@ -111,6 +111,7 @@ export class EditMode {
 
   enter() {
     window.addEventListener('keydown', this._onKey);
+    this.view.setStems(true);
     this.render();
     this.refreshOverlay();
     this._syncStageClasses();
@@ -131,6 +132,7 @@ export class EditMode {
     this.vwSel = null;
     this._closeMenu();
     this.view.highlightModelNode(null);
+    this.view.setStems(false);
     this.view.setOverlay({});
     this._syncStageClasses();
     this.card._applyMarkerSelection(null);
@@ -658,7 +660,7 @@ export class EditMode {
     if (d.kind === 'overlay') {
       this.render();
     } else if (d.kind === 'marker') {
-      this.commit(E.setPin(this.layout, d.id, { x: d.pos.x, y: d.pos.y, z: d.pos.z, floor_id: d.pos.floorId }));
+      this.commit(E.setPin(this.layout, d.id, { x: d.pos.x, y: d.pos.y, z: d.pos.z, floor_id: d.pos.floorId, on_model: this._onModel(d.id) }));
     } else if (d.preview) {
       this.commit(E.upsertRoom(this.layout, d.preview));
     } else {
@@ -1252,9 +1254,21 @@ export class EditMode {
     this.setModelProps({ known: { levels: man.manifest.levels.map((l) => l.id), rooms: man.manifest.rooms.map((r) => r.id) } });
   }
 
+  // A pin placed while a model is loaded sits on the model and follows its alignment.
+  _onModel(id) {
+    const pin = (this.layout.pins || {})[id];
+    return !!this.view.model || !!(pin && pin.on_model);
+  }
+
   setModelProps(patch, rerender = true) {
     const cur = this.layout.model || {};
-    this.card._commit({ ...this.layout, model: { ...cur, ...patch } });
+    let layout = { ...this.layout, model: { ...cur, ...patch } };
+    // alignment change of an uploaded model (YAML alignment overrides win): pins on the model follow it
+    if (!this.card._config.model && ('position' in patch || 'rotation' in patch || 'scale' in patch)) {
+      const align = (m) => ({ position: m.position || [0, 0, 0], rotation: m.rotation || 0, scale: m.scale || 1 });
+      layout = E.realignPins(layout, align(cur), align(layout.model));
+    }
+    this.card._commit(layout);
     if (rerender) this.render();
   }
 
@@ -1514,7 +1528,7 @@ export class EditMode {
         const fid = this.activeFloor();
         const t = this.view.controls.target;
         this.selectedMarker = id;
-        this.commit(E.setPin(this.layout, id, { x: t.x, y: -t.z, z: 1.2, floor_id: fid }));
+        this.commit(E.setPin(this.layout, id, { x: t.x, y: -t.z, z: 1.2, floor_id: fid, on_model: this._onModel(id) }));
         return;
       }
       case 'export': this._export(); return;
@@ -1569,7 +1583,7 @@ export class EditMode {
       const v = Number(el.value);
       const pos = this.card._positions.get(this.selectedMarker);
       if (!Number.isFinite(v) || !pos) return;
-      this.commit(E.setPin(this.layout, this.selectedMarker, { x: pos.x, y: pos.y, z: v, floor_id: pos.floorId }));
+      this.commit(E.setPin(this.layout, this.selectedMarker, { x: pos.x, y: pos.y, z: v, floor_id: pos.floorId, on_model: this._onModel(this.selectedMarker) }));
     } else if (f === 'mower-entity') {
       this.setMower({ entity: el.value.trim() });
     } else if (f === 'mower-source') {

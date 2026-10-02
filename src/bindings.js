@@ -115,6 +115,15 @@ export function transformPoint([x, y], { position = [0, 0, 0], rotation = 0, sca
   return [px * c - py * s + (position[0] || 0), px * s + py * c + (position[1] || 0)];
 }
 
+// Inverse of transformPoint: world plan point -> model plan point.
+export function inverseTransformPoint([x, y], { position = [0, 0, 0], rotation = 0, scale = 1 } = {}) {
+  const a = (rotation * Math.PI) / 180;
+  const c = Math.cos(a), s = Math.sin(a);
+  const dx = x - (position[0] || 0), dy = y - (position[1] || 0);
+  const k = scale || 1;
+  return [(dx * c + dy * s) / k, (-dx * s + dy * c) / k];
+}
+
 export function modelRooms(rooms, levelAssign, roomAreas, align) {
   const safeLevelAssign = isPlainObject(levelAssign) ? levelAssign : {};
   const safeRoomAreas = isPlainObject(roomAreas) ? roomAreas : {};
