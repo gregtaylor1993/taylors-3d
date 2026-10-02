@@ -452,6 +452,39 @@ try {
   await s.close();
 }
 
+// 1c. mower object: the model node follows the live position, the mower marker is gone (a mower injected into the demo model)
+s = await openDemo({ model: '1', view: '3d' }, { width: 1400, height: 560 });
+try {
+  const { page } = s;
+  await page.waitForFunction(`!!${card}._view.model && !!${card}._hass`, { timeout: 10000 });
+  await settle(page, card);
+  const injected = await page.evaluate(`(() => { const c = ${card}, v = c._view, m = v.model;
+    const lv = v.modelManifest().levels.find((l) => l.id === 'level0');
+    let mesh = null;
+    lv.node.traverse((n) => { if (!mesh && n.isMesh && n.name) mesh = n; });
+    if (!mesh) return null;
+    const node = new mesh.parent.constructor(); node.name = 'test_mower';
+    const g = mesh.clone(); g.name = 'glow'; node.add(g);
+    mesh.parent.add(node);
+    m.manifest.objects = (m.manifest.objects || []).concat([{ id: 'test_mower', type: 'mower', label: 'Mower', node, level: 'level0', suggest: { entity: 'lawn_mower.sunseeker' } }]);
+    c._objects.setModel(null); c._objects.setModel(m);
+    c._bindKey = null; c._syncBindings(); c._buildMarkers(); c._refreshStates(); c._refreshMower(); c._updateObjects();
+    return true; })()`);
+  check('test mower injected into the demo model', !!injected);
+  const pos = () => page.evaluate(`(() => { const c = ${card}; const o = c._objects.objectAt('test_mower');
+    const w = o.obj.node.getWorldPosition(new c._view.camera.position.constructor());
+    const g = o.part.glow && o.part.glow.material; return { x: w.x, z: w.z, marker: !!c._mowerMarkerId, live: !!c._mowerLive && !!c._mowerLive.x, em: g ? g.emissive.g : -1 }; })()`);
+  const a = await pos();
+  await sleep(2500);
+  const b = await pos();
+  check('mower node moves with the live position', Math.hypot(a.x - b.x, a.z - b.z) > 0.01, JSON.stringify([a, b]));
+  check('the mower marker is replaced by the object', !a.marker && !b.marker);
+  check('mower glow takes the mowing colour', b.em > 0.1, JSON.stringify(b));
+  allErrors.push(...s.errors);
+} finally {
+  await s.close();
+}
+
 // 2. missing model
 s = await openDemo({ model: '/demo/missing.glb' });
 try {

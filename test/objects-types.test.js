@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { hintDefaults, findGlow, TYPES, typeOf } from '../src/objects/types.js';
+import { hintDefaults, findGlow, TYPES, typeOf, statusColor, objectLabel } from '../src/objects/types.js';
 
 const DEF = { beam: 'point', max: 5, distance: 0, decay: 2, angle: 24, penumbra: 0.6, target: null, castShadow: true, offset: null };
 
@@ -178,5 +178,59 @@ describe('types', () => {
     expect(glow.material).toBe(mat);
     expect(part.pool).toBe(false);
     expect(TYPES.generic.update(part, { lit: true, source: null }).lit).toBe(false);
+  });
+});
+
+describe('statusColor', () => {
+  it('mower: mowing green, returning amber, error red, rest dim', () => {
+    expect(statusColor('mower', 'mowing')).toEqual([76, 175, 80]);
+    expect(statusColor('mower', 'returning')).toEqual([255, 179, 0]);
+    expect(statusColor('mower', 'error')).toEqual([244, 67, 54]);
+    for (const s of ['docked', 'paused', 'unavailable', '', null, undefined, 'toString']) expect(statusColor('mower', s)).toBeNull();
+  });
+  it('ev_charger: charging green, ready / available blue, error red, else null', () => {
+    expect(statusColor('ev_charger', 'charging')).toEqual([76, 175, 80]);
+    expect(statusColor('ev_charger', 'ready')).toEqual([33, 150, 243]);
+    expect(statusColor('ev_charger', 'available')).toEqual([33, 150, 243]);
+    expect(statusColor('ev_charger', 'error')).toEqual([244, 67, 54]);
+    expect(statusColor('ev_charger', 'off')).toBeNull();
+  });
+  it('dock is green only while docked; climate by hvac_action', () => {
+    expect(statusColor('dock', 'docked')).toEqual([76, 175, 80]);
+    expect(statusColor('dock', 'mowing')).toBeNull();
+    expect(statusColor('climate', 'heating')).toEqual([255, 120, 60]);
+    expect(statusColor('climate', 'cooling')).toEqual([80, 160, 255]);
+    expect(statusColor('climate', 'idle')).toBeNull();
+    expect(statusColor('light', 'on')).toBeNull();
+  });
+  it('returns a copy', () => {
+    statusColor('mower', 'mowing')[0] = 0;
+    expect(statusColor('mower', 'mowing')[0]).toBe(76);
+  });
+});
+
+describe('objectLabel', () => {
+  const st = (state, attributes = {}) => ({ state, attributes });
+  it('charger charging shows the power attribute with unit', () => {
+    expect(objectLabel('ev_charger', { 'sensor.ev': st('charging', { power: 7.2 }) }, 'sensor.ev')).toBe('7.2 kW');
+    expect(objectLabel('ev_charger', { 'sensor.ev': st('charging', { charging_power: 3.7, power_unit: 'kW' }) }, 'sensor.ev')).toBe('3.7 kW');
+  });
+  it('charger falls back to a power sensor next to the entity', () => {
+    const states = { 'sensor.ev': st('charging'), 'sensor.ev_power': st('7200', { unit_of_measurement: 'W' }) };
+    expect(objectLabel('ev_charger', states, 'sensor.ev')).toBe('7200 W');
+  });
+  it('charger not charging or no power: null', () => {
+    expect(objectLabel('ev_charger', { 'sensor.ev': st('ready', { power: 7.2 }) }, 'sensor.ev')).toBeNull();
+    expect(objectLabel('ev_charger', { 'sensor.ev': st('charging') }, 'sensor.ev')).toBeNull();
+  });
+  it('climate shows current_temperature', () => {
+    expect(objectLabel('climate', { 'climate.x': st('heat', { current_temperature: 21.5 }) }, 'climate.x')).toBe('21.5 \u00b0C');
+    expect(objectLabel('climate', { 'climate.x': st('heat', { current_temperature: 70, temperature_unit: '\u00b0F' }) }, 'climate.x')).toBe('70 \u00b0F');
+    expect(objectLabel('climate', { 'climate.x': st('heat') }, 'climate.x')).toBeNull();
+  });
+  it('missing entity or other types: null', () => {
+    expect(objectLabel('climate', {}, 'climate.x')).toBeNull();
+    expect(objectLabel('climate', {}, null)).toBeNull();
+    expect(objectLabel('mower', { 'lawn_mower.m': st('mowing') }, 'lawn_mower.m')).toBeNull();
   });
 });

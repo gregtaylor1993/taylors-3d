@@ -9,6 +9,7 @@ function fakeView() {
     objectsGroup: new THREE.Group(),
     dirty: 0, shadow: 0,
     markDirty() { this.dirty++; },
+    floorElevation: (f) => (f === 'up' ? 3 : 0),
     requestShadowUpdate() { this.shadow++; this.dirty++; },
   };
 }
@@ -241,5 +242,54 @@ describe('ObjectLayer', () => {
   it('dispose removes the pool from the view', () => {
     layer.dispose();
     expect(view.objectsGroup.children).toHaveLength(0);
+  });
+
+  it('mower node follows the pose in world space and is restored afterwards', () => {
+    const m = model([{ id: 'mw', x: 1, type: 'mower' }]);
+    m.root.position.set(10, 0, 5);
+    m.root.rotation.y = 0.7;
+    layer.setModel(m);
+    layer.setBindings(bind([['mw', 'lawn_mower.m']]), {});
+    layer.update({ 'lawn_mower.m': st('mowing') }, ctx);
+    expect(layer.mowerBound()).toBe(true);
+    const node = m.manifest.objects[0].node;
+    const p0 = node.position.clone(), q0 = node.quaternion.clone();
+    layer.setMowerPose({ x: 2, y: 4, floorId: 'up', heading: Math.PI / 2 });
+    const w = node.getWorldPosition(new THREE.Vector3());
+    expect(w.x).toBeCloseTo(2); expect(w.z).toBeCloseTo(-4); expect(w.y).toBeCloseTo(3 + 2);
+    const fwd = new THREE.Vector3(1, 0, 0).applyQuaternion(node.getWorldQuaternion(new THREE.Quaternion()));
+    expect(fwd.z).toBeCloseTo(-1); // heading north (plan +y = world -z)
+    expect(layer.anchorOf('mw').x).toBeCloseTo(2, 1);
+    layer.setMowerPose(null);
+    expect(node.position.distanceTo(p0)).toBeCloseTo(0);
+    expect(node.quaternion.angleTo(q0)).toBeCloseTo(0);
+    layer.setMowerPose({ x: 1, y: 1, floorId: 'up', heading: 0 });
+    layer.setModel(null);
+    expect(node.position.distanceTo(p0)).toBeCloseTo(0);
+  });
+
+  it('mower glow takes the status colour', () => {
+    const m = model([{ id: 'mw', x: 1, type: 'mower' }]);
+    layer.setModel(m);
+    layer.setBindings(bind([['mw', 'lawn_mower.m']]), {});
+    layer.update({ 'lawn_mower.m': st('error') }, ctx);
+    const mat = m.manifest.objects[0].node.children[0].material;
+    expect(mat.emissive.r).toBeGreaterThan(0.5);
+    layer.update({ 'lawn_mower.m': st('docked') }, ctx);
+    expect(mat.emissiveIntensity).toBe(0);
+  });
+
+  it('dock LED follows the bound mower state', () => {
+    const m = model([{ id: 'mw', x: 1, type: 'mower' }, { id: 'dk', x: 2, type: 'dock', hints: { led: 'glow' } }]);
+    layer.setModel(m);
+    layer.setBindings(bind([['mw', 'lawn_mower.m'], ['dk', null]]), {});
+    const mat = m.manifest.objects[1].node.children[0].material;
+    expect(mat.emissiveIntensity).toBe(0);
+    layer.update({ 'lawn_mower.m': st('docked') }, ctx);
+    const led = m.manifest.objects[1].node.children[0].material;
+    expect(led.emissiveIntensity).toBe(3);
+    expect(led.emissive.g).toBeGreaterThan(led.emissive.r);
+    layer.update({ 'lawn_mower.m': st('mowing') }, ctx);
+    expect(led.emissiveIntensity).toBe(0);
   });
 });

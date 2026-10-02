@@ -1,6 +1,7 @@
 // Object types: how a model object looks for its HA state. prepare() once per model load,
 // update() when the object's state changed. Real lights come from the layer's fixed pool.
 import * as THREE from 'three';
+import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { lightColor, lightLevel } from './logic.js';
 
 const fin = (v) => typeof v === 'number' && Number.isFinite(v);
@@ -60,27 +61,31 @@ function anchorOf(obj, glow, root, offset) {
 // cloned once; every owner writes its level and the mesh shows the strongest owner.
 const shared = new WeakMap(); // mesh -> { original, clones: Material[], owners: Set<part> }
 
+// Claim a glow mesh for a part: clones its material once, shared between owners.
+function claimGlow(part, glow) {
+  if (!glow) return;
+  let entry = shared.get(glow);
+  if (!entry) {
+    const original = glow.material;
+    const clones = matsOf(glow).map((m) => {
+      const c = m.clone();
+      c.userData = { ...m.userData, baseEmissive: m.emissive ? m.emissive.getHex() : 0 };
+      if (c.emissive) c.emissive.setRGB(0, 0, 0);
+      c.emissiveIntensity = 0;
+      return c;
+    });
+    glow.material = Array.isArray(original) ? clones : clones[0];
+    entry = { original, clones, owners: new Set() };
+    shared.set(glow, entry);
+  }
+  entry.owners.add(part);
+}
+
 function prepareLight(obj, { root }, pool) {
   const hints = hintDefaults(obj.hints);
   const glow = obj.node ? findGlow(obj.node, obj.glow || 'glow') : null;
   const part = { obj, glow, hints, pool, level: 0, color: null, anchor: null };
-  if (glow) {
-    let entry = shared.get(glow);
-    if (!entry) {
-      const original = glow.material;
-      const clones = matsOf(glow).map((m) => {
-        const c = m.clone();
-        c.userData = { ...m.userData, baseEmissive: m.emissive ? m.emissive.getHex() : 0 };
-        if (c.emissive) c.emissive.setRGB(0, 0, 0);
-        c.emissiveIntensity = 0;
-        return c;
-      });
-      glow.material = Array.isArray(original) ? clones : clones[0];
-      entry = { original, clones, owners: new Set() };
-      shared.set(glow, entry);
-    }
-    entry.owners.add(part);
-  }
+  claimGlow(part, glow);
   part.anchor = obj.node ? anchorOf(obj, glow, root, hints.offset) : new THREE.Vector3();
   return part;
 }
@@ -115,6 +120,146 @@ function disposeLight(part) {
   shared.delete(part.glow);
 }
 
+
+// ---- status looks: mower / dock / ev_charger / climate ----
+const MOWER_COLORS = { mowing: [76, 175, 80], returning: [255, 179, 0], error: [244, 67, 54] };
+const CHARGER_COLORS = { charging: [76, 175, 80], ready: [33, 150, 243], available: [33, 150, 243], error: [244, 67, 54], faulted: [244, 67, 54] };
+const CLIMATE_COLORS = { heating: [255, 120, 60], cooling: [80, 160, 255] };
+
+// Status colour [r,g,b] or null (dim). For dock the value is the mower state; for climate the hvac_action.
+export function statusColor(type, state) {
+  const s = typeof state === 'string' ? state : '';
+  const tables = { mower: MOWER_COLORS, ev_charger: CHARGER_COLORS, climate: CLIMATE_COLORS };
+  if (type === 'dock') return s === 'docked' ? MOWER_COLORS.mowing.slice() : null;
+  const t = tables[type];
+  return t && Object.prototype.hasOwnProperty.call(t, s) ? t[s].slice() : null;
+}
+
+const num = (v) => (typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
+const fmt = (v) => String(Math.round(v * 10) / 10);
+
+// Text shown beside an object (CSS2D label) or null: charger power while charging, climate current temperature.
+export function objectLabel(type, states, entity) {
+  const s = entity && states ? states[entity] : null;
+  if (!s) return null;
+  const a = s.attributes || {};
+  if (type === 'climate') {
+    const t = num(a.current_temperature);
+    return Number.isFinite(t) ? `${fmt(t)} ${a.temperature_unit || '\u00b0C'}` : null;
+  }
+  if (type === 'ev_charger') {
+    if (s.state !== 'charging') return null;
+    const unit = a.power_unit || a.unit_of_measurement || 'kW';
+    for (const k of Object.keys(a)) {
+      if (!/power/i.test(k) || /unit/i.test(k)) continue;
+      const v = num(a[k]);
+      if (Number.isFinite(v)) return `${fmt(v)} ${unit}`;
+    }
+    const base = entity.replace(/^[^.]*\./, '');
+    for (const e of [entity, `sensor.${base}_power`, `sensor.${base}_charging_power`]) {
+      const p = states[e];
+      const v = p ? num(p.state) : NaN;
+      if (Number.isFinite(v) && p.attributes && p.attributes.unit_of_measurement) return `${fmt(v)} ${p.attributes.unit_of_measurement}`;
+    }
+  }
+  return null;
+}
+
+const stateOf = (ctx, entity) => {
+  const s = entity && ctx && ctx.states ? ctx.states[entity] : null;
+  return s ? s.state : null;
+};
+const ledName = (obj) => (obj.hints && obj.hints.led) || obj.glow || 'led';
+
+function prepareStatus(obj, ctx, glowName, withLabel) {
+  const glow = obj.node ? findGlow(obj.node, glowName) : null;
+  const part = { obj, glow, hints: hintDefaults(obj.hints), pool: false, level: 0, color: null, anchor: null, root: ctx.root, view: ctx.view, label: null, text: null };
+  claimGlow(part, glow);
+  part.anchor = obj.node ? anchorOf(obj, glow, ctx.root, part.hints.offset) : new THREE.Vector3();
+  if (withLabel && ctx.view && typeof document !== 'undefined') {
+    const el = document.createElement('div');
+    el.className = 'fp-room-label fp-obj-label';
+    const label = new CSS2DObject(el);
+    label.center.set(0.5, 1.2);
+    label.visible = false;
+    ctx.view.objectsGroup.add(label);
+    part.label = label;
+    relayout(part);
+  }
+  return part;
+}
+
+function updateStatus(part, color) {
+  part.color = color;
+  part.level = color ? 1 : 0;
+  paint(part.glow);
+  return { lit: false, level: part.level, color };
+}
+
+function setLabel(part, text) {
+  part.text = text || null;
+  if (part.label) {
+    part.label.element.textContent = part.text || '';
+    part.label.visible = !!part.text;
+  }
+}
+
+// The model moved: labels follow their anchor.
+function relayout(part) {
+  if (part.label && part.root) part.label.position.copy(part.root.localToWorld(part.anchor.clone()));
+}
+
+function disposeStatus(part) {
+  disposeLight(part);
+  if (part.label) {
+    const el = part.label.element;
+    if (part.label.parent) part.label.parent.remove(part.label);
+    if (el && el.parentNode) el.parentNode.removeChild(el); // removing the object leaves its element behind
+    part.label = null;
+  }
+}
+
+// Mower node: world position from the plan point (x, floorElevation + own y offset, -y), turned to its heading.
+// The node's own transform is remembered and restored on dispose / pose null.
+function placeMower(part, pose) {
+  const node = part.obj.node;
+  if (!node || !node.parent) return;
+  if (!part.origin) {
+    node.updateWorldMatrix(true, false);
+    part.origin = { position: node.position.clone(), quaternion: node.quaternion.clone(), worldY: node.getWorldPosition(new THREE.Vector3()).y };
+  }
+  if (!pose) { restoreMower(part); return; }
+  const parent = node.parent;
+  parent.updateWorldMatrix(true, false);
+  const elev = part.view ? part.view.floorElevation(pose.floorId) : 0;
+  const world = new THREE.Vector3(pose.x, elev + part.origin.worldY, -pose.y);
+  node.position.copy(parent.worldToLocal(world));
+  if (Number.isFinite(pose.heading)) {
+    // heading is an absolute plan angle: the node's own forward (+x of the model) turns to it, whatever the model alignment
+    const pq = parent.getWorldQuaternion(new THREE.Quaternion());
+    const rq = part.root.getWorldQuaternion(new THREE.Quaternion());
+    const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), pose.heading);
+    node.quaternion.copy(pq.clone().invert().multiply(yaw).multiply(rq.invert()).multiply(pq).multiply(part.origin.quaternion));
+  }
+  node.updateMatrixWorld(true);
+  part.anchor = anchorOf(part.obj, part.glow, part.root, part.hints.offset);
+}
+
+function restoreMower(part) {
+  const node = part.obj.node;
+  if (!part.origin || !node) return;
+  node.position.copy(part.origin.position);
+  node.quaternion.copy(part.origin.quaternion);
+  node.updateMatrixWorld(true);
+  part.origin = null;
+  part.anchor = anchorOf(part.obj, part.glow, part.root, part.hints.offset);
+}
+
+function disposeMower(part) {
+  restoreMower(part);
+  disposeStatus(part);
+}
+
 const generic = {
   prepare: (obj, ctx) => ({ obj, glow: null, hints: hintDefaults(obj.hints), pool: false, anchor: obj.node ? anchorOf(obj, null, ctx.root, null) : new THREE.Vector3() }),
   update: () => ({ lit: false, level: 0, color: null }),
@@ -134,11 +279,38 @@ export const TYPES = {
     update: updateLight, dispose: disposeLight,
     defaults: { tap: 'toggle', hold: 'popup', popup: ['toggle', 'brightness', 'color'] },
   },
-  // mower / dock / ev_charger / climate get their looks in later steps; until then generic
-  mower: { ...generic, defaults: { tap: 'popup', hold: 'more-info', popup: ['state', 'battery', 'start', 'dock'] } },
-  dock: { ...generic, defaults: { tap: 'more-info', hold: 'more-info', popup: ['state'] } },
-  ev_charger: { ...generic, defaults: { tap: 'more-info', hold: 'popup', popup: ['state', 'power', 'energy'] } },
-  climate: { ...generic, defaults: { tap: 'more-info', hold: 'popup', popup: ['temperature', 'mode'] } },
+  mower: {
+    prepare: (obj, ctx) => prepareStatus(obj, ctx, obj.glow || 'glow', false),
+    update: (part, chain, ctx) => updateStatus(part, statusColor('mower', stateOf(ctx, ctx.entity))),
+    place: placeMower, dispose: disposeMower,
+    defaults: { tap: 'popup', hold: 'more-info', popup: ['state', 'battery', 'start', 'dock'] },
+  },
+  dock: {
+    prepare: (obj, ctx) => prepareStatus(obj, ctx, ledName(obj), false),
+    update: (part, chain, ctx) => updateStatus(part, statusColor('dock', stateOf(ctx, ctx.mowerEntity))),
+    dispose: disposeStatus,
+    defaults: { tap: 'more-info', hold: 'more-info', popup: ['state'] },
+  },
+  ev_charger: {
+    prepare: (obj, ctx) => prepareStatus(obj, ctx, ledName(obj), true),
+    update: (part, chain, ctx) => {
+      const st = stateOf(ctx, ctx.entity);
+      setLabel(part, objectLabel('ev_charger', ctx.states, ctx.entity));
+      return updateStatus(part, statusColor('ev_charger', st));
+    },
+    relayout, dispose: disposeStatus,
+    defaults: { tap: 'more-info', hold: 'popup', popup: ['state', 'power', 'energy'] },
+  },
+  climate: {
+    prepare: (obj, ctx) => prepareStatus(obj, ctx, obj.glow || 'glow', true),
+    update: (part, chain, ctx) => {
+      const s = ctx.entity && ctx.states ? ctx.states[ctx.entity] : null;
+      setLabel(part, objectLabel('climate', ctx.states, ctx.entity));
+      return updateStatus(part, statusColor('climate', s && s.attributes ? s.attributes.hvac_action : null));
+    },
+    relayout, dispose: disposeStatus,
+    defaults: { tap: 'more-info', hold: 'popup', popup: ['temperature', 'mode'] },
+  },
   generic,
 };
 

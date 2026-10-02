@@ -51,8 +51,9 @@ export class ObjectLayer {
     this.model = model || null;
     this._budgetSig = null;
     this._placeSig = null;
+    this._poseSig = null;
     if (model) {
-      const ctx = { root: model.root };
+      const ctx = { root: model.root, view: this.view };
       for (const obj of model.manifest.objects || []) {
         const type = typeOf(obj.type);
         try {
@@ -63,7 +64,35 @@ export class ObjectLayer {
       }
     }
     this.view.objectsGroup.visible = !!model;
+    this._applyPose();
     this.view.markDirty();
+  }
+
+  // The mower object (bound and not hidden) or null.
+  _mower() {
+    for (const [id, p] of this.parts) {
+      const b = this.bindings.get(id);
+      if (p.obj.type === 'mower' && b && b.entity && !b.hidden) return { id, p, entity: b.entity };
+    }
+    return null;
+  }
+
+  mowerBound() {
+    return !!this._mower();
+  }
+
+  // { x, y, floorId, heading } (plan metres, radians ccw from east) or null: moves the mower node.
+  setMowerPose(pose) {
+    this._pose = pose || null;
+    this._applyPose();
+    this.view.markDirty();
+  }
+
+  _applyPose() {
+    if (!this.model) return;
+    this.model.root.updateWorldMatrix(true, false);
+    this._poseSig = this.model.root.matrixWorld.elements.map((v) => v.toFixed(5)).join();
+    for (const p of this.parts.values()) if (p.type.place) p.type.place(p.part, this._pose);
   }
 
   setBindings(bindings, groups) {
@@ -80,11 +109,13 @@ export class ObjectLayer {
     let changed = false;
     const fixtures = [];
     const recolour = [];
+    const mw = this._mower();
+    const mowerEntity = mw ? mw.entity : null;
     for (const [id, p] of this.parts) {
       const binding = this.bindings.get(id);
       const hidden = !!(binding && binding.hidden); // hidden = ignored as a control: dark, no pool light
       const ctrl = !hidden && p.obj.group && this.groups[p.obj.group] && this.groups[p.obj.group].entity;
-      const ents = hidden ? [] : [binding && binding.entity, ctrl];
+      const ents = hidden ? [] : [binding && binding.entity, ctrl, p.obj.type === 'dock' ? mowerEntity : null];
       // HA replaces a state object when it changes: same objects, nothing to do
       const inputs = ents.map((e) => (e ? states[e] : null));
       if (!p.inputs || inputs.length !== p.inputs.length || inputs.some((x, i) => x !== p.inputs[i]) || ents.some((e, i) => e !== p.ents[i])) {
@@ -93,10 +124,11 @@ export class ObjectLayer {
         p.ents = ents;
         p.chain = hidden ? { lit: false, unavailable: false, source: null, entities: [], reason: null }
           : chainState(p.obj, binding, this.groups, states);
-        p.result = p.type.update(p.part, p.chain, ctx);
+        p.result = p.type.update(p.part, p.chain, { ...ctx, states, entity: hidden ? null : (binding && binding.entity) || null, mowerEntity });
         changed = true;
         if (prev && (prev.level !== p.result.level || colorKey(prev.color) !== colorKey(p.result.color))) recolour.push(id);
       }
+      if (p.part.label) p.part.label.visible = !!p.part.text && !hidden && visibleLevel(p.obj.level) && shown(p.obj.node);
       if (!p.part.pool || hidden) continue;
       const h = p.part.hints;
       fixtures.push({
@@ -108,6 +140,11 @@ export class ObjectLayer {
     const root = this.model.root;
     root.updateWorldMatrix(true, false);
     const placeSig = root.matrixWorld.elements.map((v) => v.toFixed(5)).join();
+    if (this._pose && placeSig !== this._poseSig) this._applyPose(); // the model was re-aligned
+    if (placeSig !== this._labelSig) {
+      this._labelSig = placeSig;
+      for (const p of this.parts.values()) if (p.type.relayout) p.type.relayout(p.part);
+    }
     const sig = placeSig + '|' + fixtures.filter((f) => f.lit && f.visible).map((f) => f.id).join();
     if (sig !== this._budgetSig) {
       this._budgetSig = sig;

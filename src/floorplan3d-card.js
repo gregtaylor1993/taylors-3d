@@ -688,6 +688,7 @@ class Floorplan3dCard extends HTMLElement {
     const reading = readSource(this._hass.states[cfg.entity], cfg);
     const p = reading && this._mowerFn ? this._mowerFn(reading) : null;
     this._mowerLive = p ? { x: p[0], y: p[1], floorId, reading } : (reading ? { reading } : null);
+    this._poseMowerObject(p, floorId);
     const id = this._mowerMarkerId;
     if (p && id) {
       const pos = { x: p[0], y: p[1], z: MOWER_Z, floorId, auto: false, live: true };
@@ -715,6 +716,20 @@ class Floorplan3dCard extends HTMLElement {
       this._view.setTrail(null);
     }
     this._refreshMapOverlay();
+  }
+
+  // A bound mower object follows the live position; heading from the last real movement (> 5 cm).
+  _poseMowerObject(p, floorId) {
+    const layer = this._objects;
+    if (!layer || !layer.mowerBound()) { this._mowerHeadFrom = null; layer && layer.setMowerPose(null); return; }
+    if (!p) return;
+    const from = this._mowerHeadFrom;
+    if (!from) this._mowerHeadFrom = [p[0], p[1]];
+    else if (Math.hypot(p[0] - from[0], p[1] - from[1]) > 0.05) {
+      this._mowerHeading = Math.atan2(p[1] - from[1], p[0] - from[0]);
+      this._mowerHeadFrom = [p[0], p[1]];
+    }
+    layer.setMowerPose({ x: p[0], y: p[1], floorId, heading: this._mowerHeading });
   }
 
   clearTrail() {
@@ -1277,20 +1292,27 @@ class Floorplan3dCard extends HTMLElement {
     // the mower's device marker follows the live position instead of being auto placed
     const cfg = this._layout.mower;
     this._mowerMarkerId = null;
+    const mowerObject = !!(this._objects && this._objects.mowerBound());
     if (cfg && cfg.entity) {
       const reg = h.entities && h.entities[cfg.entity];
       const devId = reg && reg.device_id;
       let mm = this._markers.find((m) => (devId ? m.deviceId === devId : m.entityId === cfg.entity));
-      if (!mm) {
+      if (mowerObject) {
+        // the mower model replaces the mower marker
+        if (mm) { this._markers = this._markers.filter((m) => m !== mm); this._positions.delete(mm.id); }
+        mm = null;
+      } else if (!mm) {
         const st = h.states[cfg.entity];
         mm = { id: 'mower:' + cfg.entity, entityId: cfg.entity, domain: cfg.entity.split('.')[0],
           name: (st && st.attributes.friendly_name) || cfg.entity, entities: [], secondaryId: null };
         this._markers.push(mm);
       }
-      this._mowerMarkerId = mm.id;
-      const live = this._mowerLive;
-      if (live && live.floorId) this._positions.set(mm.id, { x: live.x, y: live.y, z: MOWER_Z, floorId: live.floorId, auto: false, live: true });
-      else this._positions.delete(mm.id);
+      if (mm) {
+        this._mowerMarkerId = mm.id;
+        const live = this._mowerLive;
+        if (live && live.floorId) this._positions.set(mm.id, { x: live.x, y: live.y, z: MOWER_Z, floorId: live.floorId, auto: false, live: true });
+        else this._positions.delete(mm.id);
+      }
     }
 
     this._markerEls.clear();
