@@ -6,10 +6,16 @@ import { EditMode } from './edit-mode.js';
 import './card-editor.js';
 import { LayoutStore } from './storage.js';
 import { buildMarkers, registrySignature, iconFor, isActive, displayValue, areaName } from './registry.js';
-import { mergeFloors, roomFloorId, markerPositions, lightGlow } from './layout.js';
+import { mergeFloors, roomFloorId, markerPositions, lightGlow, roomLabel } from './layout.js';
 import {
   resolveLevels, resolveRoomAreas, modelRooms, combineRooms, levelFloorOverrides, bindingDiff, snapshotDiff, levelsFromFloorMap,
+  measuredElevations,
 } from './bindings.js';
+import { threeAdapter } from './manifest.js';
+import {
+  nodeIndex, resolveViews, resolveVisibility, primaryLevel, defaultFloors, levelOrders, isOverview, floorLevels, deviceState,
+  defaultViewId, viewCut,
+} from './views.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 
 const VERSION = '0.2.1';
@@ -134,6 +140,9 @@ const STYLE = `
     border: 1px solid var(--divider-color, rgba(0,0,0,.12)); background: var(--card-background-color, #fff);
     color: var(--primary-text-color); display: flex; align-items: center; gap: 4px; --mdc-icon-size: 16px; }
   button.edit[hidden], button.daynight[hidden] { display: none; }
+  button.reset { font: inherit; line-height: 1; cursor: pointer; padding: 5px 8px; border-radius: 16px; display: flex;
+    align-items: center; border: 1px solid var(--divider-color, rgba(0,0,0,.12)); background: var(--card-background-color, #fff);
+    color: var(--primary-text-color); --mdc-icon-size: 17px; }
   button.daynight { font: inherit; font-size: 15px; line-height: 1; cursor: pointer; padding: 5px 10px; border-radius: 16px;
     border: 1px solid var(--divider-color, rgba(0,0,0,.12)); background: var(--card-background-color, #fff);
     color: var(--primary-text-color); }
@@ -198,6 +207,11 @@ class Floorplan3dCard extends HTMLElement {
     this._markers = [];
     this._markerEls = new Map();
     this._floor = null;
+    this._views = [];
+    this._viewId = null;
+    this._viewState = null;
+    this._viewStates = new Map();
+    this._index = null;
     this._mode = '3d';
     this._daylight = true;
   }
@@ -253,13 +267,11 @@ class Floorplan3dCard extends HTMLElement {
         };
       }
     }
-    const firstLoad = opts && !this._view.model;
     const prevModel = this._view.model;
     this._view.setModel(opts).then((err) => {
       this._notice.textContent = err || '';
       this._notice.hidden = !err;
-      // nothing drawn yet: show the model instead of an empty plan
-      if (!err && firstLoad && this._view.model && !this._allRooms().length) this._view.fit({ instant: true });
+      // a new model resets the views; the first view applied frames it (see _resolveViewList)
       this._stage.classList.toggle('has-model', !!this._view.model);
       if (this._view.model) this._view.setDaylight(this._daylight);
       else { this._daylight = true; this._view.setDaylight(true); } // no model: the toggle is hidden, so always day
@@ -350,6 +362,7 @@ class Floorplan3dCard extends HTMLElement {
             <div class="toolbar">
               <div class="chips"></div>
               <div class="seg"><button data-mode="3d">3D</button><button data-mode="top">Top</button></div>
+              <button class="reset" title="Reset view"><ha-icon icon="mdi:crosshairs-gps"></ha-icon></button>
               <button class="daynight" hidden title="Day / night">\u2600</button>
               <button class="edit" hidden title="Edit floorplan"><ha-icon icon="mdi:pencil"></ha-icon><span>Edit</span></button>
             </div>
@@ -369,9 +382,10 @@ class Floorplan3dCard extends HTMLElement {
       if (mode) this._setMode(mode);
     });
     this._chips.addEventListener('click', (e) => {
-      const id = e.target.dataset && e.target.dataset.floor;
-      if (id) this._setFloor(id);
+      const id = e.target.dataset && e.target.dataset.view;
+      if (id) this._setView(id);
     });
+    root.querySelector('button.reset').addEventListener('click', () => this._resetCamera());
     this._body = root.querySelector('.body');
     this._editBtn = root.querySelector('button.edit');
     this._dayBtn = root.querySelector('button.daynight');
@@ -400,7 +414,7 @@ class Floorplan3dCard extends HTMLElement {
     this._editing = !this._editing;
     this._body.classList.toggle('editing', this._editing);
     if (this._editing) {
-      if (this._floor === 'all') this._setFloor(this._floors[0].id);
+      if (!this._view.model && this._floor === 'all') this._setFloor(this._floors[0].id);
       this._edit.enter();
     } else {
       this._edit.exit();
@@ -434,10 +448,7 @@ class Floorplan3dCard extends HTMLElement {
     const r = this._stage.getBoundingClientRect();
     if (!r.width || !r.height) return;
     this._view.resize(r.width, r.height);
-    if (!this._fitted && this._built.rooms) {
-      this._fitted = true;
-      this._view.fit({ instant: true });
-    }
+    if (!this._fitted && this._roomList) this._initialCamera();
   }
 
   _schedule() {
@@ -463,12 +474,14 @@ class Floorplan3dCard extends HTMLElement {
       structure = true;
     }
     const mb = this.modelBindings();
+    this._mb = mb;
+    const viewsChanged = this._resolveViewList(mb);
     const modelKey = mb ? JSON.stringify([mb.levels, mb.rooms, this._modelAlign()]) : '';
-    if (structure || l.rooms !== b.rooms || l.floors !== b.lfloors || h.floors !== b.floors || h.areas !== b.areas
+    if (structure || viewsChanged || l.rooms !== b.rooms || l.floors !== b.lfloors || h.floors !== b.floors || h.areas !== b.areas
       || (mb && mb.manifest) !== b.manifest || modelKey !== b.modelKey) {
       b.manifest = mb && mb.manifest;
       b.modelKey = modelKey;
-      this._buildStructure(mb);
+      this._buildStructure(mb, viewsChanged);
       markers = true;
     }
     const sig = registrySignature(h);
@@ -600,45 +613,228 @@ class Floorplan3dCard extends HTMLElement {
     this._view.setTheme(this._built.theme);
   }
 
-  _buildStructure(mb) {
+  _buildStructure(mb, viewsChanged = false) {
     const h = this._hass, b = this._built;
     b.rooms = this._layout.rooms;
     b.lfloors = this._layout.floors;
     b.floors = h.floors;
     b.areas = h.areas;
     const align = this._modelAlign();
-    // a level bound to an HA floor gives that floor its elevation and height (user overrides win)
-    const overrides = mb ? levelFloorOverrides(mb.manifest.levels, mb.levels, align) : [];
+    // a level bound to an HA floor gives that floor its elevation and height (user overrides win);
+    // untagged levels use their measured geometry
+    let overrides = [];
+    if (mb) {
+      const meas = measuredElevations(mb.manifest.levels);
+      const levels = mb.manifest.levels.map((lv) => (meas[lv.id] ? { ...lv, elevation: meas[lv.id].elevation, height: lv.height ?? meas[lv.id].height } : lv));
+      overrides = levelFloorOverrides(levels, mb.levels, align);
+    }
     this._floors = mergeFloors(h, { ...this._layout, floors: [...overrides, ...(this._layout.floors || [])] });
     this._modelRooms = mb ? modelRooms(mb.manifest.rooms, mb.levels, mb.rooms, align) : [];
-    if (mb) this._view.setModelLevels(mb.levels);
-    const rooms = this._allRooms().map((room) => ({
-      room,
-      floorId: roomFloorId(room, h, this._floors),
-      label: room.name || (room.area_id ? areaName(h, room.area_id) : room.label || ''),
-    }));
-    const hasModel = !!this._view.model;
-    this._view.setStructure(this._floors, rooms, {
-      wallHeight: Number(this._config.wall_height) || 1.0,
-      walls: !hasModel, fills: !hasModel, outlines: !hasModel || !!this._editing, labels: !hasModel || !!this._editing,
-    });
-    this._stage.classList.toggle('has-model', hasModel);
-
-    const withRooms = this._floors.filter((f) => rooms.some((r) => r.floorId === f.id));
-    if (!this._floor || (this._floor !== 'all' && !this._floors.some((f) => f.id === this._floor))) {
-      const wanted = this._config.floor;
-      this._floor = wanted && (wanted === 'all' || this._floors.some((f) => f.id === wanted))
-        ? wanted : (withRooms[0] || this._floors[0]).id;
+    if (mb) {
+      this._view.setModelLevels(mb.levels);
+      const levelOrder = levelOrders(mb.manifest.levels);
+      const levelFloor = {};
+      for (const [id, a] of Object.entries(mb.levels || {})) if (a && a.floor) levelFloor[id] = a.floor;
+      this._levels = { levelOrder, levelFloor, floorLevel: floorLevels(levelFloor, levelOrder) };
+    } else {
+      this._levels = null;
     }
-    this._view.setVisibleFloor(this._floor);
-    this._empty.hidden = rooms.length > 0 || !!this._editing;
+    const roomLevel = new Map(mb ? mb.manifest.rooms.map((r) => [r.id, r.level]) : []);
+    this._roomList = this._allRooms().map((room) => {
+      const floorId = roomFloorId(room, h, this._floors);
+      return {
+        room, floorId,
+        name: room.name || (room.area_id ? areaName(h, room.area_id) : room.label || ''),
+        levelId: room.modelId ? roomLevel.get(room.modelId) : this._levels ? this._levels.floorLevel[floorId] : undefined,
+      };
+    });
+
+    // the active view: kept while it exists, else the configured / first one
+    this._viewStates = new Map();
+    const fresh = !!this._viewFresh;
+    this._viewFresh = false;
+    if (!this._views.some((v) => v.id === this._viewId && !v.hidden)) {
+      const withRooms = this._floors.find((f) => this._roomList.some((r) => r.floorId === f.id)) || this._floors[0];
+      this._viewId = defaultViewId(this._views, {
+        viewId: this._config.view_id, floor: this._config.floor, fallback: this._view.model ? null : withRooms.id,
+      }, (v) => this._stateFor(v).floors);
+      this._floorOnly = null;
+    }
+    if (viewsChanged) this._floorOnly = null;
+    const cur = this.currentView();
+    this._viewState = cur ? this._stateFor(cur) : null;
+    this._pushStructure();
+    if (!this._floorOnly) this._applyViewVisibility();
+    this._empty.hidden = this._roomList.length > 0 || !!this._editing;
     this._empty.textContent = 'No rooms drawn yet. Open edit mode to draw rooms for your areas.';
     this._syncToolbar();
-    // frame once; later rebuilds (edits, registry changes) keep the user's camera
-    if (!this._fitted && this._view.size.w > 1) {
-      this._fitted = true;
-      this._view.fit({ instant: true });
+    // frame once per load / model; later rebuilds (edits, registry changes) keep the user's camera
+    if (fresh) {
+      this._fitted = false;
+      this._initialCamera();
     }
+  }
+
+  // Rooms, walls and labels into the view. Labels with a model: edit mode, or storey views for
+  // rooms on the view's primary level.
+  _pushStructure() {
+    const hasModel = !!this._view.model;
+    const st = this._viewState;
+    const mode = this._config.room_labels || 'size';
+    this._labelKey = this._labelKeyNow();
+    const labelled = (r) => !hasModel || !!this._editing || (!!st && !st.overview && !!st.primary && r.levelId === st.primary);
+    const rooms = (this._roomList || []).map((r) => ({
+      room: r.room, floorId: r.floorId, label: labelled(r) ? roomLabel(r.name, r.room.polygon, mode) : '',
+    }));
+    this._view.setStructure(this._floors, rooms, {
+      wallHeight: Number(this._config.wall_height) || 1.0,
+      walls: !hasModel, fills: !hasModel, outlines: !hasModel || !!this._editing, labels: true,
+    });
+    this._stage.classList.toggle('has-model', hasModel);
+  }
+
+  _labelKeyNow() {
+    const st = this._viewState;
+    if (!this._view.model || this._editing) return '*';
+    return st && !st.overview && st.primary ? 'p:' + st.primary : '';
+  }
+
+  // Views from the model (or HA floors without one) merged with layout + YAML overrides.
+  // Returns true when they changed. A new model resets the node index and re-frames.
+  _resolveViewList(mb) {
+    const l = this._layout, b = this._built;
+    const manifest = mb ? mb.manifest : null;
+    const haFloors = mergeFloors(this._hass, manifest ? { floors: [] } : l);
+    const savedLevels = { ...(this._config.model ? levelsFromFloorMap(this._config.model_floors) : {}), ...((l.model && l.model.levels) || {}) };
+    const key = JSON.stringify([haFloors.map((f) => [f.id, f.name]), l.views || null, this._config.views || null, savedLevels, mb ? mb.levels : null]);
+    if (manifest === b.viewManifest && key === b.viewKey) return false;
+    if (manifest !== b.viewManifest) {
+      this._index = manifest && this._view.model ? nodeIndex(threeAdapter(this._view.model.root), manifest) : null;
+      this._viewFresh = true;
+    }
+    b.viewManifest = manifest;
+    b.viewKey = key;
+    this._views = resolveViews({ manifest, haFloors, layoutViews: l.views, yamlViews: this._config.views, savedLevels });
+    return true;
+  }
+
+  // Per view: effective node visibility, primary storey, linked HA floors (cached until the next rebuild).
+  _stateFor(v) {
+    let st = this._viewStates.get(v.id);
+    if (st) return st;
+    const allIds = (this._floors || []).map((f) => f.id);
+    const mb = this._mb;
+    if (!mb || !this._index || !this._levels) {
+      const allFloors = v.id === 'all' && !Array.isArray(v.floors);
+      st = { effective: null, primary: null, floors: Array.isArray(v.floors) ? [...v.floors] : allFloors ? allIds : [], allFloors, overview: allFloors };
+    } else {
+      const effective = resolveVisibility(this._index, v.rules);
+      const primary = primaryLevel(this._index, effective, mb.manifest.levels);
+      const allFloors = !Array.isArray(v.floors) && v.id === 'all' && v.source !== 'model';
+      const floors = Array.isArray(v.floors) ? [...v.floors] : allFloors ? allIds : defaultFloors(primary, this._levels.levelFloor);
+      st = { effective, primary, floors, allFloors, overview: isOverview(this._index, effective, mb.manifest.levels) };
+    }
+    this._viewStates.set(v.id, st);
+    return st;
+  }
+
+  currentView() {
+    return this._views.find((v) => v.id === this._viewId) || null;
+  }
+
+  viewIndex() {
+    return this._index || null;
+  }
+
+  // Floors, model node visibility and cut for the active view.
+  _applyViewVisibility() {
+    const vw = this._view, v = this.currentView(), st = this._viewState;
+    if (!v || !st) {
+      this._floor = 'all';
+      vw.setVisibleFloors('all');
+      vw.applyModelVisibility(null, null);
+      vw.setCut(undefined);
+      return;
+    }
+    const visible = st.allFloors || (!st.floors.length && v.id === 'all') ? 'all' : st.floors;
+    this._floor = visible === 'all' ? 'all' : st.floors[0] || 'all';
+    vw.setVisibleFloors(visible);
+    if (this._index && vw.model && st.effective) {
+      vw.applyModelVisibility(this._index, st.effective);
+      const elevations = st.floors.map((id) => (this._floors.find((f) => f.id === id) || {}).elevation).filter(Number.isFinite);
+      vw.setCut(viewCut(v, { tagged: vw.isTagged(), elevations, wallHeight: Number(this._config.wall_height) || 1.0 }));
+    } else {
+      vw.applyModelVisibility(null, null);
+      vw.setCut(undefined);
+    }
+  }
+
+  // Devices follow the view's visible rooms / linked floors (model only; without one the floor rules apply).
+  _applyMarkerStates() {
+    const vw = this._view, mb = this._mb, st = this._viewState, L = this._levels;
+    if (!mb || !this._index || !vw.model || !st || !st.effective || !L || this._floorOnly || !this._positions) {
+      vw.setMarkerStates(null);
+      return;
+    }
+    const roomByArea = new Map();
+    for (const r of this._modelRooms || []) if (r.area_id && !roomByArea.has(r.area_id)) roomByArea.set(r.area_id, r.modelId);
+    const roomLevel = new Map(mb.manifest.rooms.map((r) => [r.id, r.level]));
+    const visibleRooms = new Set();
+    this._index.nodes.forEach((n, i) => {
+      if (st.effective[i] && n.tag && (n.tag.kind === 'room' || n.tag.kind === 'zone')) visibleRooms.add(n.tag.id);
+    });
+    const ctx = {
+      levelOrder: L.levelOrder, primaryOrder: st.primary ? L.levelOrder[st.primary] ?? null : null,
+      visibleRooms, viewFloors: new Set(st.floors), overview: st.overview,
+    };
+    const byId = new Map(this._markers.map((m) => [m.id, m]));
+    const states = new Map();
+    for (const [id, p] of this._positions) {
+      const m = byId.get(id);
+      // pins and the live mower are roomless: they follow their HA floor
+      const roomId = !m || p.auto === false || p.live ? null : roomByArea.get(m.areaId) || null;
+      states.set(id, deviceState({
+        roomId, roomLevelId: roomId ? roomLevel.get(roomId) : undefined, markerFloorId: p.floorId, floorLevelId: L.floorLevel[p.floorId],
+      }, ctx));
+    }
+    vw.setMarkerStates(states);
+  }
+
+  // Chip switch. The camera moves only for a view with its own camera (no model: frame the floor, as before).
+  _setView(id, { instant = false } = {}) {
+    const v = this._views.find((x) => x.id === id);
+    if (!v) return;
+    this._viewId = id;
+    this._floorOnly = null;
+    this._viewState = this._stateFor(v);
+    this._applyViewVisibility();
+    if (this._labelKeyNow() !== this._labelKey) this._pushStructure();
+    this._applyMarkerStates();
+    if (v.camera) this._view.setCamera(v.camera, { instant });
+    else if (!this._view.model) this._view.fit({ instant });
+    this._syncToolbar();
+  }
+
+  // First view after load / model change: its saved camera, else frame it.
+  _initialCamera() {
+    if (this._view.size.w <= 1) return; // _resize retries once the card has a size
+    this._fitted = true;
+    const v = this.currentView();
+    if (v && v.camera && this._mode === '3d') this._view.setCamera(v.camera, { instant: true });
+    else this._view.fit({ instant: true });
+  }
+
+  _resetCamera() {
+    const v = this.currentView();
+    if (this._mode === 'top') this._view.fit();
+    else this._view.resetCamera((v && v.camera) || null);
+  }
+
+  // Merge a patch into layout.views[id] and save (rules replace the stored list).
+  saveViewPatch(id, patch) {
+    const l = this._layout;
+    const views = l.views || {};
+    this._commit({ ...l, views: { ...views, [id]: { ...(views[id] || {}), ...patch } } });
   }
 
   _buildMarkers() {
@@ -675,6 +871,7 @@ class Floorplan3dCard extends HTMLElement {
       list.push({ id: m.id, element, ...p });
     }
     this._view.setMarkers(list);
+    this._applyMarkerStates();
   }
 
   _markerElement(m) {
@@ -749,9 +946,23 @@ class Floorplan3dCard extends HTMLElement {
     this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId }, bubbles: true, composed: true }));
   }
 
+  // One HA floor (edit mode): the view linked to just that floor, else that floor on its own
+  // with the model's level rules. Frames the floor.
   _setFloor(id) {
+    const vis = this._views.filter((v) => !v.hidden);
+    const match = id === 'all' ? vis.find((v) => v.id === 'all')
+      : vis.find((v) => { const f = this._stateFor(v).floors; return f.length === 1 && f[0] === id; });
+    if (match) {
+      this._setView(match.id);
+      if (this._view.model && !match.camera) this._view.fit();
+      return;
+    }
+    this._floorOnly = id;
     this._floor = id;
     this._view.setVisibleFloor(id);
+    this._view.applyModelVisibility(null, null);
+    this._view.setCut(undefined);
+    this._view.setMarkerStates(null);
     this._view.fit();
     this._syncToolbar();
   }
@@ -763,20 +974,19 @@ class Floorplan3dCard extends HTMLElement {
   }
 
   _syncToolbar() {
-    const floors = this._floors || [];
-    if (floors.length > 1) {
-      // editing works on one floor at a time
-      const chips = [...floors.map((f) => [f.id, f.name]), ...(this._editing ? [] : [['all', 'All']])];
-      this._chips.innerHTML = '';
-      for (const [id, name] of chips) {
+    const hasModel = !!(this._view && this._view.model);
+    // without a model: one chip per floor plus All (not while editing), shown with 2+ floors
+    const views = this._views.filter((v) => !v.hidden && (hasModel || !this._editing || v.id !== 'all'));
+    const show = hasModel ? views.length > 1 : this._views.filter((v) => !v.hidden && v.id !== 'all').length > 1;
+    this._chips.innerHTML = '';
+    if (show) {
+      for (const v of views) {
         const btn = document.createElement('button');
-        btn.className = 'chip' + (id === this._floor ? ' on' : '');
-        btn.dataset.floor = id;
-        btn.textContent = name;
+        btn.className = 'chip' + (v.id === this._viewId && !this._floorOnly ? ' on' : '');
+        btn.dataset.view = v.id;
+        btn.textContent = v.label;
         this._chips.append(btn);
       }
-    } else {
-      this._chips.innerHTML = '';
     }
     for (const btn of this.shadowRoot.querySelectorAll('.seg button')) btn.classList.toggle('on', btn.dataset.mode === this._mode);
     this._dayBtn.hidden = !(this._view && this._view.model);

@@ -16,6 +16,13 @@ describe('card editor', () => {
       .toEqual({ type: 'custom:floorplan3d-card', view: 'top', wall_height: 1.2 });
   });
 
+  it('offers room_labels name / size / none (size is the default)', () => {
+    const field = mod.SCHEMA.flatMap((x) => x.schema || [x]).find((x) => x.name === 'room_labels');
+    expect(field.selector.select.options.map((o) => o.value).sort()).toEqual(['name', 'none', 'size']);
+    expect(mod.cleanConfig({ room_labels: 'size' })).toEqual({});
+    expect(mod.cleanConfig({ room_labels: 'none' })).toEqual({ room_labels: 'none' });
+  });
+
   it('renders ha-form with defaults and emits cleaned config', () => {
     const el = document.createElement('floorplan3d-card-editor');
     document.body.append(el);

@@ -1,7 +1,7 @@
 // Visual editor for the card options (Lovelace "Show visual editor"), built on HA's ha-form.
 // Rooms, devices, mower and model are edited on the card itself (its Edit button).
 
-const DEFAULTS = { layout_key: 'default', height: '520px', group_by: 'device', wall_height: 1.0, view: '3d' };
+const DEFAULTS = { layout_key: 'default', height: '520px', group_by: 'device', wall_height: 1.0, view: '3d', room_labels: 'size' };
 
 export const SCHEMA = [
   { name: 'height', selector: { text: {} } },
@@ -11,6 +11,7 @@ export const SCHEMA = [
       { name: 'floor', selector: { floor: {} } },
       { name: 'wall_height', selector: { number: { min: 0.2, max: 3, step: 0.05, mode: 'box', unit_of_measurement: 'm' } } },
       { name: 'group_by', selector: { select: { mode: 'dropdown', options: [{ value: 'device', label: 'One marker per device' }, { value: 'entity', label: 'One marker per entity' }] } } },
+      { name: 'room_labels', selector: { select: { mode: 'dropdown', options: [{ value: 'size', label: 'Name and size' }, { value: 'name', label: 'Name only' }, { value: 'none', label: 'None' }] } } },
     ],
   },
   { name: 'layout_key', selector: { text: {} } },
@@ -34,6 +35,7 @@ const LABELS = {
   floor: 'Start floor',
   wall_height: 'Cut-away wall height',
   group_by: 'Markers',
+  room_labels: 'Room labels',
   layout_key: 'Layout name',
   model: 'Model URL (.glb)',
   model_rotation: 'Model rotation',

@@ -40,6 +40,8 @@ try {
   fs.mkdirSync(path.join(root, 'screenshots'), { recursive: true });
   let v = await st();
   check('model loaded with level groups', JSON.stringify(v.floors) === '["level0","level1","exterior","roof"]', JSON.stringify(v.floors));
+  const chips = await page.evaluate(`[...${card}.shadowRoot.querySelectorAll('.chip')].map((b) => b.dataset.view + (b.classList.contains('on') ? '*' : ''))`);
+  check('chips are the model\'s generated views', JSON.stringify(chips) === '["level0*","level1","all"]', JSON.stringify(chips));
   check('ground: level0 + exterior shown, level1 + roof hidden, tagged model not cut',
     v.level0 === true && v.level1 === false && v.exterior === true && v.roof === false && v.cut > 1000, JSON.stringify(v));
   await sleep(500);
@@ -49,13 +51,19 @@ try {
   await sleep(300);
   v = await st();
   check('first: both storeys stack, exterior shown, roof hidden', v.level0 && v.level1 && v.exterior && !v.roof, JSON.stringify(v));
+  const shownMarkers = () => page.evaluate(`[...${card}._view.markerObjects.values()].filter((m) => m.obj.visible).length`);
+  const allMarkers = await page.evaluate(`${card}._view.markerObjects.size`);
+  const firstShown = await shownMarkers();
+  check('first: devices of the storey below are hidden, not faded', firstShown > 0 && firstShown < allMarkers
+    && (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-marker.fp-faded').length`)) === 0, `${firstShown}/${allMarkers}`);
   await sh('model-first.png');
   await page.evaluate(`${card}._setFloor('all')`);
   await sleep(300);
   v = await st();
   check('"All" shows everything uncut', v.level0 && v.level1 && v.exterior && v.roof && v.cut > 1000, JSON.stringify(v));
   const faded = () => page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-marker.fp-faded').length`);
-  check('"All": markers below the top floor are faded', (await faded()) > 0);
+  check('"All" (overview): every device shown, none faded', (await faded()) === 0 && (await shownMarkers()) === allMarkers);
+  check('"All" (overview): no room labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label').length`)) === 0);
   await page.evaluate(`${card}._setFloor('ground')`);
   await sleep(300);
   check('single floor: no faded markers', (await faded()) === 0);
@@ -69,14 +77,15 @@ try {
   check('ACES tone mapping with a model', look.tm === 4, String(look.tm));
   check('shadows on, shadow camera fitted to the model', look.sm === true && look.sr < 200 && look.sr < 40, `${look.sm} ${look.sr}`);
   check('pixel ratio capped', look.pr <= 1.5, String(look.pr));
-  check('no room fills and no labels outside edit mode', look.fills === 0 && look.labels === 0, JSON.stringify(look));
+  check('no room fills; ground view labels its own rooms with sizes', look.fills === 0 && look.labels > 0
+    && (await page.evaluate(`${card}.shadowRoot.querySelector('.fp-room-label').textContent`)).includes(' m'), JSON.stringify(look));
   check('stage has has-model, day/night button shown', look.hasModel && !look.dayHidden);
   await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
   await sleep(400);
   check('edit mode shows room labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label').length`)) > 0);
   await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
   await sleep(400);
-  check('leaving edit mode removes labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label').length`)) === 0);
+  check('leaving edit mode restores the view\'s labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label').length`)) === look.labels);
   // framing uses the room polygons even though no fills/outlines/walls are rendered with a model
   await page.evaluate(`${card}._setFloor('ground'); ${card}._view.setMode('3d'); ${card}._view.fit({ instant: true })`);
   await sleep(200);
@@ -90,6 +99,26 @@ try {
   await sleep(900);
   const d1 = await dist();
   check('edit mode on/off keeps the camera distance within 5 %', Math.abs(d1 - d0) / d0 < 0.05, `${d0.toFixed(2)} -> ${d1.toFixed(2)}`);
+  // chip switch keeps the camera; Reset view frames again
+  const camAt = () => page.evaluate(`${card}._view.persp.position.toArray().map((x) => x.toFixed(2)).join()`);
+  await page.evaluate(`${card}._view.setCamera({ position: [30, 30, 30], target: [0, 0, 0] }, { instant: true })`);
+  const c0 = await camAt();
+  await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=level1]').click()`);
+  await sleep(600);
+  check('chip switch keeps the camera', (await camAt()) === c0, `${c0} -> ${await camAt()}`);
+  await page.evaluate(`${card}.shadowRoot.querySelector('button.reset').click()`);
+  await sleep(700);
+  check('Reset view moves the camera', (await camAt()) !== c0);
+  await page.evaluate(`${card}.saveViewPatch('level1', { camera: { position: [20, 25, 20], target: [5, 0, -4] } })`);
+  await sleep(200);
+  await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=level0]').click()`);
+  await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=level1]').click()`);
+  await sleep(700);
+  check('saved view camera restored on chip switch', (await camAt()) === '20.00,25.00,20.00', await camAt());
+  await page.evaluate(`${card}.saveViewPatch('level1', { camera: null })`);
+  await sleep(200);
+  await page.evaluate(`${card}._setFloor('ground')`);
+  await sleep(600);
 
   const lights = () => page.evaluate(`({ sun: ${card}._view.sun.intensity, hemi: ${card}._view.hemi.intensity, cast: ${card}._view.sun.castShadow })`);
   const day = await lights();

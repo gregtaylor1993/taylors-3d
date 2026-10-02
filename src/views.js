@@ -198,3 +198,61 @@ export function markerState({ roomId, roomLevelId, markerFloorId }, ctx) {
   const shown = ctx.isAll || ctx.viewFloors.has(markerFloorId);
   return { shown, faded: shown && !!roomId && fade(order) };
 }
+
+// Storey/basement levels bottom-up: level id -> 0, 1, 2…; other roles have no order.
+export function levelOrders(levels) {
+  const out = {};
+  (levels || []).filter(isStorey).sort(byOrder).forEach((l, i) => { out[l.id] = i; });
+  return out;
+}
+
+// An overview view (Exterior / All) shows every storey/basement level and the roof; a top-storey
+// view that hides only the roof is still a storey view (prototype: "Attic shows only attic devices").
+export function isOverview(index, effective, levels) {
+  const storeys = new Set((levels || []).filter((l) => isStorey(l) || l.role === 'roof').map((l) => l.id));
+  return index.nodes.every((n, i) => !(n.tag && n.tag.kind === 'level' && storeys.has(n.tag.id)) || effective[i]);
+}
+
+// HA floor id -> the lowest storey level bound to it (inverse of levelFloor).
+export function floorLevels(levelFloor, levelOrder) {
+  const out = {};
+  for (const [lid, fid] of Object.entries(levelFloor || {})) {
+    if (!fid || levelOrder[lid] === undefined) continue;
+    if (out[fid] === undefined || levelOrder[lid] < levelOrder[out[fid]]) out[fid] = lid;
+  }
+  return out;
+}
+
+// markerState plus the view rules: an overview view shows everything markerState shows, unfaded;
+// a storey view hides devices below its primary storey (roomless ones by their HA floor's level).
+export function deviceState({ roomId, roomLevelId, markerFloorId, floorLevelId }, ctx) {
+  const s = markerState({ roomId, roomLevelId, markerFloorId }, { ...ctx, isAll: !!ctx.overview });
+  if (ctx.overview || !s.shown) return { shown: s.shown, faded: false };
+  const ord = ctx.levelOrder[roomId ? roomLevelId : floorLevelId];
+  const below = ord !== undefined && ctx.primaryOrder !== null && ctx.primaryOrder !== undefined && ord < ctx.primaryOrder;
+  return { shown: !below, faded: false };
+}
+
+// Start view: config view_id, else config floor as a view id, else a view linked to that floor
+// (only that floor first), else the fallback, else the first visible view.
+export function defaultViewId(views, { viewId, floor, fallback } = {}, floorsOf = () => []) {
+  const vis = (views || []).filter((v) => !v.hidden);
+  const has = (id) => !!id && vis.some((v) => v.id === id);
+  if (has(viewId)) return viewId;
+  if (has(floor)) return floor;
+  if (floor) {
+    const fl = (v) => floorsOf(v) || [];
+    const v = vis.find((x) => fl(x).length === 1 && fl(x)[0] === floor) || vis.find((x) => fl(x).includes(floor));
+    if (v) return v.id;
+  }
+  if (has(fallback)) return fallback;
+  return vis.length ? vis[0].id : null;
+}
+
+// Clip height for untagged models: the highest linked floor + the cut-away wall height. On by
+// default except for the default "All" view; tagged models are never cut.
+export function viewCut(view, { tagged, elevations, wallHeight }) {
+  const on = view.cut ?? view.id !== 'all';
+  if (tagged || !on || !elevations || !elevations.length) return null;
+  return Math.max(...elevations) + Math.max(Number(wallHeight) || 0, 0.3);
+}
