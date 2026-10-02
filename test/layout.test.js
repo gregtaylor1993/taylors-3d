@@ -126,4 +126,10 @@ describe('roomLabel', () => {
     expect(roomLabel('Hall', [[0, 0], [4, 0], [4, 2]], 'none')).toBe('');
     expect(roomLabel('', [[0, 0], [1, 0], [1, 1], [0, 1]], 'size')).toBe('1.0 × 1.0 m');
   });
+  it('rotated rectangle with right angles shows edge lengths', () => {
+    // 45° rotated 2×3 rectangle: v0=(1,0), v1=(1+√2,√2), v2=(1-1/√2,5/√2), v3=(1-3/√2,3/√2)
+    const s2 = Math.sqrt(2);
+    const poly = [[1, 0], [1 + s2, s2], [1 - 1/s2, 5/s2], [1 - 3/s2, 3/s2]];
+    expect(roomLabel('Bedroom', poly, 'size')).toBe('Bedroom · 2.0 × 3.0 m');
+  });
 });

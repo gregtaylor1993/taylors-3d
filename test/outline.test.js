@@ -38,4 +38,16 @@ describe('outlineFromTriangles', () => {
     expect(outlineFromTriangles(quad(0, 0, 4, 3), [10, 0, -10])).toBeNull();
     expect(outlineFromTriangles([], [0, 0, 0])).toBeNull();
   });
+  it('pinch vertices: two squares touching at a corner', () => {
+    const out1 = outlineFromTriangles([...quad(0, 0, 2, 2)], [1, 0, -1]);
+    expect(area(out1)).toBeCloseTo(4);
+    const out2 = outlineFromTriangles([...quad(2, 2, 4, 4)], [3, 0, -3]);
+    expect(area(out2)).toBeCloseTo(4);
+    const out12 = outlineFromTriangles([...quad(0, 0, 2, 2), ...quad(2, 2, 4, 4)], [3, 0, -3]);
+    expect(area(out12)).toBeCloseTo(4);
+  });
+  it('simplify collinear before snap: vertex 0.01 m off line removed even if snapping would move it', () => {
+    const out = outlineFromTriangles([...quad(0, 0, 2, 2.01), ...quad(2, 0, 4, 2.01)], [1, 0, -1]);
+    expect(out).toHaveLength(4);
+  });
 });

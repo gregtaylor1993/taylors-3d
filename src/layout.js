@@ -131,13 +131,36 @@ export function lightGlow(stateObj) {
 export function roomLabel(name, polygon, mode = 'size') {
   if (mode === 'none') return '';
   if (mode === 'name' || !polygon || polygon.length < 3) return name || '';
-  const xs = polygon.map((p) => p[0]), ys = polygon.map((p) => p[1]);
-  const w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys);
   const axis = polygon.length === 4 && polygon.every((p, i) => {
     const q = polygon[(i + 1) % 4];
     return Math.abs(p[0] - q[0]) < 0.01 || Math.abs(p[1] - q[1]) < 0.01;
   });
-  const one = (v) => (Math.round(v * 10) / 10).toFixed(1); // toFixed alone rounds 2.65 down to 2.6
-  const size = axis ? `${one(w)} × ${one(h)} m` : `${one(Math.abs(signedArea(polygon)))} m²`;
+  let rect = axis;
+  if (!rect && polygon.length === 4) {
+    // Check for rotated rectangle with right angles using normalized edge directions
+    const edges = [];
+    for (let i = 0; i < 4; i++) {
+      const p = polygon[i], q = polygon[(i + 1) % 4];
+      const dx = q[0] - p[0], dy = q[1] - p[1];
+      const len = Math.hypot(dx, dy) || 1;
+      edges.push([dx / len, dy / len]);
+    }
+    rect = edges.every((e, i) => {
+      const next = edges[(i + 1) % 4];
+      const dot = e[0] * next[0] + e[1] * next[1];
+      return Math.abs(dot) < 0.01;
+    });
+  }
+  let size;
+  if (rect && polygon.length === 4) {
+    // For rectangles, use edge lengths
+    const e0 = Math.hypot(polygon[1][0] - polygon[0][0], polygon[1][1] - polygon[0][1]);
+    const e1 = Math.hypot(polygon[2][0] - polygon[1][0], polygon[2][1] - polygon[1][1]);
+    const one = (v) => (Math.round(v * 10) / 10).toFixed(1);
+    size = `${one(e0)} × ${one(e1)} m`;
+  } else {
+    const one = (v) => (Math.round(v * 10) / 10).toFixed(1); // toFixed alone rounds 2.65 down to 2.6
+    size = `${one(Math.abs(signedArea(polygon)))} m²`;
+  }
   return name ? `${name} · ${size}` : size;
 }
