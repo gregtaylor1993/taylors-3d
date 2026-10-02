@@ -253,11 +253,19 @@ export function fitImport(layout, haFloors, haAreaIds) {
   return { layout: out, floorMap, unknownAreas };
 }
 
+const plainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
 // Parts a plan export may leave out are kept from the current layout: the uploaded model, the
-// mower setup, the view settings (rules, cameras, sections, order). raw: the parsed file as is.
+// mower setup, the view settings (rules, cameras, sections, order), the model object bindings and
+// group controllers (they belong to the kept model). raw: the parsed file as is.
 export function mergeImport(imported, raw, current) {
   const l = { ...imported };
   const cur = current || {};
+  for (const k of ['objects', 'groups']) {
+    if (plainObject(raw[k])) continue;
+    if (plainObject(cur[k])) l[k] = cur[k];
+    else delete l[k];
+  }
   if (!('model' in raw)) l.model = cur.model || null;
   if (!('mower' in raw) || raw.mower === null) l.mower = cur.mower || null;
   if (!('views' in raw)) l.views = cur.views;

@@ -84,7 +84,7 @@ export class LayoutStore {
 export function normalise(l) {
   const base = EMPTY_LAYOUT();
   if (!l || typeof l !== 'object') return base;
-  return {
+  const out = {
     ...base,
     ...l,
     floors: Array.isArray(l.floors) ? l.floors : [],
@@ -93,4 +93,9 @@ export function normalise(l) {
     hidden: Array.isArray(l.hidden) ? l.hidden : [],
     model: migrateModel(l.model || null),
   };
+  // object bindings / group controllers: plain objects or absent (readers default to none)
+  for (const k of ['objects', 'groups']) {
+    if (k in out && !(out[k] && typeof out[k] === 'object' && !Array.isArray(out[k]))) delete out[k];
+  }
+  return out;
 }
