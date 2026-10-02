@@ -144,6 +144,8 @@ try {
     await page.evaluate(`${card}._toggleEdit()`);
     await settle(page, card);
     await camAndOcclusion(page, { position: [occ.pos[0], occ.pos[1] + 2, occ.pos[2] + 12], target: occ.pos });
+    // edit mode rebuilds markers: wait until the (new) element is connected and classed
+    await page.waitForFunction(`(() => { const m = ${card}._view.markerObjects.get(${JSON.stringify(occ.id)}); return m && m.obj.element.isConnected && m.obj.element.classList.contains('fp-occluded') && getComputedStyle(m.obj.element).opacity === '0.5'; })()`, { timeout: 8000 }).catch(() => {});
     const es = await style(occ.id);
     check('occluded marker in edit mode: half opacity, still draggable', (await cls(occ.id)) && JSON.stringify(es) === '["0.5","auto"]', JSON.stringify(es));
     await page.evaluate(`${card}._toggleEdit()`);
@@ -289,7 +291,8 @@ try {
   await sleep(200);
   await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=ground]').click()`);
   await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=first]').click()`);
-  await sleep(700);
+  await sleep(100);
+  await settle(page, card);
   check('saved view camera restored on chip switch', (await camAt()) === '20.00,25.00,20.00', await camAt());
   await page.evaluate(`${card}.saveViewPatch('first', { camera: null })`);
   await sleep(200);
