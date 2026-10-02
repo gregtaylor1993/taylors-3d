@@ -54,7 +54,7 @@ export class FloorplanView {
     Object.assign(this.labelRenderer.domElement.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
     container.append(this.renderer.domElement, this.labelRenderer.domElement);
 
-    this.persp = new THREE.PerspectiveCamera(40, 1, 0.1, 500);
+    this.persp = new THREE.PerspectiveCamera(35, 1, 0.3, 500);
     this.ortho = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 500);
     this.ortho.up.set(0, 0, -1); // north up when looking straight down
     this.mode = '3d';
@@ -82,6 +82,10 @@ export class FloorplanView {
 
     this.floors = [];
     this.visibleFloor = 'all';
+    this._visibleSet = null; // Set of floor ids, null = all
+    this._markerStates = null;
+    this._modelVisibility = null;
+    this._cutOverride = undefined;
     this.cssObjects = []; // { obj, floorId }
     this.markerObjects = new Map(); // id -> { obj, floorId }
     this.glows = new Map(); // id -> { mesh, floorId }
@@ -98,14 +102,17 @@ export class FloorplanView {
     if (this.controls) this.controls.dispose();
     const c = new OrbitControls(this.camera, this.renderer.domElement);
     c.enableDamping = true;
-    c.dampingFactor = 0.12;
+    c.dampingFactor = 0.05;
     c.screenSpacePanning = true;
+    c.zoomToCursor = true;
     if (this.mode === 'top') {
       c.enableRotate = false;
       c.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
       c.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN };
     } else {
-      c.maxPolarAngle = Math.PI * 0.48;
+      c.maxPolarAngle = Math.PI * 0.47;
+      c.maxDistance = 130;
+      c.minDistance = this._minDistance || 4;
     }
     c.addEventListener('change', () => { this.dirty = true; });
     c.addEventListener('start', () => { this._tween = null; });
@@ -228,7 +235,7 @@ export class FloorplanView {
         // legacy levels without order/elevation stack bottom-up by their lowest point
         for (const l of manifest.levels) {
           const lb = new THREE.Box3().setFromObject(l.node);
-          l.minY = lb.isEmpty() ? 0 : lb.min.y;
+          l.minY = lb.isEmpty() ? 0 : lb.min.y; // set for every level
         }
         // rooms tagged without an outline: use their footprint (root is not placed yet, so world = model space)
         root.updateMatrixWorld(true);
@@ -288,11 +295,12 @@ export class FloorplanView {
     const hit = this.raycaster.intersectObject(this.model.root, true)
       .find((h) => h.object.isMesh && shown(h.object) && h.point.y <= this.modelClip.constant + 1e-6);
     if (!hit) return null;
+    const hitInfo = { point: hit.point.toArray(), object: hit.object };
     const owner = this.model.manifest.ownerOf(hit.object);
-    if (owner) return owner;
+    if (owner) return { ...owner, hit: hitInfo };
     const names = [];
     for (let p = hit.object; p && p !== this.model.root; p = p.parent) names.unshift((p.userData && p.userData.name) || p.name || '?');
-    return { kind: 'untagged', node: hit.object, path: names.join('/') };
+    return { kind: 'untagged', node: hit.object, path: names.join('/'), hit: hitInfo };
   }
 
   highlightModelNode(node) {
@@ -571,7 +579,7 @@ export class FloorplanView {
       obj.position.copy(planToWorld(m.x, m.y, m.z, this.floorElevation(m.floorId)));
       this.markerGroup.add(obj);
       this.markerObjects.set(m.id, { obj, floorId: m.floorId });
-      this.cssObjects.push({ obj, floorId: m.floorId, kind: 'marker' });
+      this.cssObjects.push({ obj, floorId: m.floorId, kind: 'marker', id: m.id });
     }
     this._applyFloorVisibility();
     this.dirty = true;
@@ -614,9 +622,86 @@ export class FloorplanView {
   }
 
   setVisibleFloor(id) {
-    this.visibleFloor = id;
+    this.setVisibleFloors(id === 'all' ? 'all' : [id]);
+  }
+
+  // ids: floor id array or 'all'. visibleFloor keeps the first id (or 'all') for existing callers.
+  setVisibleFloors(ids) {
+    const list = ids === 'all' || !Array.isArray(ids) ? null : ids;
+    this._visibleSet = list ? new Set(list) : null;
+    this.visibleFloor = list ? (list.length ? list[0] : 'none') : 'all';
     this._applyFloorVisibility();
     this.dirty = true;
+  }
+
+  // flags[i] -> index.nodes[i].node.visible; null returns to the level rules.
+  applyModelVisibility(index, flags) {
+    if (flags && index) {
+      index.nodes.forEach((n, i) => { n.node.visible = !!flags[i]; });
+      this._modelVisibility = { index, flags };
+    } else {
+      this._modelVisibility = null;
+    }
+    this._applyFloorVisibility();
+    this.dirty = true;
+  }
+
+  // states: Map<markerId, {shown, faded}> or null (floor visibility rules).
+  setMarkerStates(states) {
+    this._markerStates = states || null;
+    this._applyFloorVisibility();
+    this.dirty = true;
+  }
+
+  // Clip height override (metres, world); null = no cut; undefined = automatic.
+  setCut(height) {
+    this._cutOverride = height;
+    this._applyFloorVisibility();
+    this.dirty = true;
+  }
+
+  getCamera() {
+    const r = (a) => a.toArray().map((x) => Math.round(x * 100) / 100);
+    return { position: r(this.persp.position), target: r(this.controls.target) };
+  }
+
+  setCamera(cam, { instant = false } = {}) {
+    if (this.mode !== '3d' || !cam) return;
+    this._moveCamera(new THREE.Vector3(...cam.position), new THREE.Vector3(...cam.target), instant);
+  }
+
+  // cam: {position, target} or null for the default framing.
+  resetCamera(cam) {
+    if (cam) this.setCamera(cam);
+    else this.fit();
+  }
+
+  _moveCamera(pos, target, instant) {
+    if (instant || !this._framed) {
+      this._tween = null;
+      this.persp.position.copy(pos);
+      this.persp.lookAt(target);
+      this._framed = true;
+      this.controls.target.copy(target);
+      this.controls.update();
+    } else {
+      this._tween = { t0: performance.now(), from: { pos: this.persp.position.clone(), target: this.controls.target.clone() }, to: { pos, target } };
+    }
+    this.dirty = true;
+  }
+
+  // World-space triangle vertices of a mesh (flat x,y,z list).
+  meshTriangles(mesh) {
+    const g = mesh.geometry;
+    if (!g || !g.attributes.position) return [];
+    mesh.updateMatrixWorld(true);
+    const pos = g.attributes.position, idx = g.index, out = [], v = new THREE.Vector3();
+    const n = idx ? idx.count : pos.count;
+    for (let i = 0; i < n; i++) {
+      v.fromBufferAttribute(pos, idx ? idx.getX(i) : i).applyMatrix4(mesh.matrixWorld);
+      out.push(v.x, v.y, v.z);
+    }
+    return out;
   }
 
   floorElevation(floorId) {
@@ -625,22 +710,32 @@ export class FloorplanView {
   }
 
   _shows(floorId) {
-    return this.visibleFloor === 'all' || this.visibleFloor === floorId;
+    return this._visibleSet ? this._visibleSet.has(floorId) : this.visibleFloor === 'all' || this.visibleFloor === floorId;
   }
 
   _applyFloorVisibility() {
     for (const g of this.staticGroup.children) g.visible = this._shows(g.userData.floorId);
     // markers live in one group for all floors, so visibility is set per object
-    for (const c of this.cssObjects) c.obj.visible = this._shows(c.floorId);
-    for (const g of this.glows.values()) g.mesh.visible = this._shows(g.floorId);
+    const ms = this._markerStates;
+    const stateOf = (id) => (ms && id !== undefined ? ms.get(id) : null);
+    for (const c of this.cssObjects) {
+      const st = c.kind === 'marker' ? stateOf(c.id) : null;
+      c.obj.visible = st ? !!st.shown : this._shows(c.floorId);
+    }
+    for (const [id, g] of this.glows) {
+      const st = stateOf(id);
+      g.mesh.visible = st ? !!st.shown : this._shows(g.floorId);
+    }
     for (const o of this.overlayGroup.children) if (!o.isCSS2DObject) o.visible = this._shows(o.userData.floorId);
     if (this.trail) this.trail.visible = this._shows(this.trail.userData.floorId);
     if (this.model) {
       const assign = this.modelLevels || {};
-      for (const l of this.model.manifest.levels) l.node.visible = levelVisible(assign[l.id], this.visibleFloor, (id) => this.floors.find((f) => f.id === id)?.elevation);
+      if (!this._modelVisibility) {
+        for (const l of this.model.manifest.levels) l.node.visible = levelVisible(assign[l.id], this.visibleFloor, (id) => this.floors.find((f) => f.id === id)?.elevation);
+      }
       // everything above the cut-away height of the selected floor is clipped (roof, upper floors)
       const cut = this.visibleFloor === 'all' || this.isTagged() ? 1e6 : this.floorElevation(this.visibleFloor) + Math.max(this.wallHeight, 0.3);
-      this.modelClip.constant = cut;
+      this.modelClip.constant = this._cutOverride === undefined ? cut : (this._cutOverride ?? 1e6);
       if (this.pickHelper) this.pickHelper.update();
       this.renderer.shadowMap.needsUpdate = true;
     }
@@ -652,7 +747,9 @@ export class FloorplanView {
       if (e > topElev) { topElev = e; top = c.floorId; }
     }
     for (const c of this.cssObjects) {
-      if (c.kind === 'marker') c.obj.element.classList.toggle('fp-faded', !!this.model && this.visibleFloor === 'all' && c.floorId !== top);
+      if (c.kind !== 'marker') continue;
+      const st = stateOf(c.id);
+      c.obj.element.classList.toggle('fp-faded', st ? !!st.faded : !!this.model && this.visibleFloor === 'all' && c.floorId !== top);
     }
     if (this.mapPlane && this.mapPlane.material.map) this.mapPlane.visible = this._shows(this.mapPlane.userData.floorId);
   }
@@ -698,6 +795,8 @@ export class FloorplanView {
     const size = box.getSize(new THREE.Vector3());
     const aspect = this.size.w / this.size.h;
     const target = center.clone();
+    this._minDistance = Math.max(size.x, size.z) < 10 ? 1 : 4;
+    if (this.mode === '3d') this.controls.minDistance = this._minDistance;
     if (this.visibleFloor !== 'all') target.y = this.floorElevation(this.visibleFloor);
 
     if (this.mode === 'top') {
@@ -730,16 +829,8 @@ export class FloorplanView {
         dist *= extent / 0.85;
       }
       const to = { pos: target.clone().addScaledVector(dir, dist), target: target.clone() };
-      if (instant || !this._framed) {
-        this._tween = null;
-        this.persp.position.copy(to.pos);
-        this.persp.lookAt(target);
-        this._framed = true;
-      } else {
-        this._tween = { t0: performance.now(), from: { pos: this.persp.position.clone(), target: this.controls.target.clone() }, to };
-        this.dirty = true;
-        return;
-      }
+      this._moveCamera(to.pos, to.target, instant);
+      return;
     }
     this.controls.target.copy(target);
     this.controls.update();
