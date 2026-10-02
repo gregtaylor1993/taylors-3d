@@ -7,7 +7,8 @@ import { roomFloorId, LEVEL_SPACING } from './layout.js';
 import { pointInPolygon, signedArea } from './placement.js';
 import { buildMarkers, areaName } from './registry.js';
 import { readSource, calibrationError } from './mower.js';
-import { ruleState, setRuleState, nextEyeState, viewTree, pickSelector, nextViewId, unmatchedSelectors, legacyShowRules } from './views.js';
+import { ruleState, setRuleState, nextEyeState, viewTree, pickSelector, nextViewId, unmatchedSelectors, legacyShowRules,
+  SECTION_DIRS, sectionDir, sectionPos, sectionAt, sectionRange } from './views.js';
 import { levelsFromFloorMap } from './bindings.js';
 import { outlineLoops, pickLoop, rasterGrid, outlineFromGrid } from './outline.js';
 
@@ -984,6 +985,7 @@ export class EditMode {
       <p class="hint">${v.camera ? 'Opens with a saved camera.' : 'Opens framing the house.'}</p>
       <div class="row"><button data-act="vw-save-cam" ${v.hidden ? 'disabled' : ''}>Save current view as start</button>
         <button data-act="vw-reset-cam" ${lv.camera ? '' : 'disabled'}>Reset camera</button></div>`;
+    out += this._sectionHtml(v, lv);
     if (this.view.model && !this.view.isTagged()) {
       out += `<label class="check"><input type="checkbox" data-field="vw-cut" ${(v.cut ?? v.id !== 'all') ? 'checked' : ''}> Cut at wall height</label>`;
     }
@@ -1030,6 +1032,37 @@ export class EditMode {
     }
     out += `<div class="row"><button data-act="vw-reset" class="danger" ${rules.length || lv.camera ? '' : 'disabled'}>Reset this view</button></div>`;
     return out;
+  }
+
+  // "Side section" block: direction + position of the cut (layout.views[id].section, card world).
+  _sectionHtml(v, lv) {
+    const box = this.view.model && this.view.modelBox();
+    if (!box) return '';
+    const plane = this.card.sectionPlaneNow(v);
+    if (!plane) return '';
+    const dir = sectionDir(plane.normal);
+    const [lo, hi] = this._sectionRange(dir.normal, box);
+    const pos = Math.min(hi, Math.max(lo, sectionPos(plane)));
+    const opts = SECTION_DIRS.map((d) => `<option value="${d.id}" ${d.id === dir.id ? 'selected' : ''}>${d.label}</option>`).join('');
+    const src = lv.section ? 'Saved for this view.' : v.modelSection ? 'From the model.' : 'Default: through the middle of the house.';
+    return `<div class="sub">Side section</div>
+      <p class="hint">The Section button (box cutter) cuts the house here and looks at the cut face. ${src}</p>
+      <label>Direction <select data-field="vw-sec-dir">${opts}</select></label>
+      <label><span class="lab">Position (m ${dir.normal[0] ? 'east' : 'north'})<span class="val" data-val="vw-sec-pos">${fmt(pos)}</span></span>
+        <input type="range" data-field="vw-sec-pos" min="${lo}" max="${hi}" step="0.05" value="${pos}"></label>
+      <div class="row"><button data-act="vw-sec-reset" ${lv.section ? '' : 'disabled'}>Reset section</button></div>`;
+  }
+
+  // slider range: the model box along the axis, on the 0.05 m grid
+  _sectionRange(normal, box) {
+    const [a, b] = sectionRange(normal, box);
+    return [Math.floor(a / 0.05) * 0.05, Math.ceil(b / 0.05) * 0.05].map((x) => Math.round(x * 100) / 100);
+  }
+
+  _sectionFromPanel(v, pos) {
+    const sel = this.panel.querySelector('[data-field="vw-sec-dir"]');
+    const dir = SECTION_DIRS.find((d) => d.id === (sel && sel.value)) || SECTION_DIRS[0];
+    return sectionAt(dir.normal, Math.round(pos * 100) / 100);
   }
 
   _nodePos(idx, node) {
@@ -1194,6 +1227,9 @@ export class EditMode {
         this.render();
         return true;
       }
+      case 'vw-sec-reset':
+        card.saveViewPatch(v.id, { section: null });
+        return true;
       case 'vw-reset-cam':
       case 'vw-reset':
         card.saveViewPatch(v.id, act === 'vw-reset' ? { rules: [], camera: null } : { camera: null });
@@ -1227,7 +1263,19 @@ export class EditMode {
     }
     const v = this._vwView();
     if (!v) return;
-    if (f === 'vw-label') card.saveViewPatch(v.id, { label: el.value.trim() || undefined });
+    if (f === 'vw-sec-pos') card.saveViewPatch(v.id, { section: this._sectionFromPanel(v, Number(el.value)) });
+    else if (f === 'vw-sec-dir') {
+      // a new axis: start in the middle of the model along it
+      const box = this.view.modelBox();
+      const dir = SECTION_DIRS.find((d) => d.id === el.value);
+      if (!box || !dir) return;
+      const [lo, hi] = this._sectionRange(dir.normal, box);
+      const old = card.sectionPlaneNow(v);
+      const same = old && !!sectionDir(old.normal).normal[0] === !!dir.normal[0];
+      const section = sectionAt(dir.normal, same ? sectionPos(old) : Math.round(((lo + hi) / 2) * 20) / 20);
+      card.previewSection(v.id, section, { aim: true });
+      card.saveViewPatch(v.id, { section }); // drops the preview: the saved plane takes over
+    } else if (f === 'vw-label') card.saveViewPatch(v.id, { label: el.value.trim() || undefined });
     else if (f === 'vw-cut') card.saveViewPatch(v.id, { cut: el.checked });
     else if (f === 'vw-floor') {
       const cur = card._stateFor(v).floors;
@@ -1645,6 +1693,13 @@ export class EditMode {
   _onPanelInput(e) {
     const el = e.target;
     const f = el.dataset.field;
+    if (f === 'vw-sec-pos') {
+      const v = this._vwView();
+      const label = this.panel.querySelector('[data-val="vw-sec-pos"]');
+      if (label) label.textContent = fmt(Number(el.value));
+      if (v) this.card.previewSection(v.id, this._sectionFromPanel(v, Number(el.value)));
+      return;
+    }
     if (f && f.startsWith('md-') && el.type === 'range') {
       const key = f.slice(3);
       const v = Number(el.value);

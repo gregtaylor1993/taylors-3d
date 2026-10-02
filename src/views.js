@@ -193,7 +193,7 @@ export function resolveViews({ manifest, haFloors, layoutViews, yamlViews, saved
       { id: 'all', label: 'All', rules: [], floors: null, source: 'floors' }];
   } else if (manifest.views && manifest.views.length) {
     base = manifest.views.filter((v, i, a) => a.findIndex((x) => x.id === v.id) === i)
-      .map((v) => ({ id: v.id, label: v.label || v.id, rules: modelViewRules(v), camera: v.camera, floors: null, source: 'model' }));
+      .map((v) => ({ id: v.id, label: v.label || v.id, rules: modelViewRules(v), camera: v.camera, floors: null, source: 'model', section: v.section }));
   } else {
     const mig = migrateShowModes(savedLevels);
     base = generatedViews(mLevels).map((v) => ({
@@ -219,7 +219,9 @@ export function resolveViews({ manifest, haFloors, layoutViews, yamlViews, saved
     const camera = isCam(cam) ? { position: [...cam.position], target: [...cam.target] } : null;
     const fl = Array.isArray(y.floors) ? y.floors : Array.isArray(l.floors) ? l.floors : b.floors;
     const floors = Array.isArray(fl) ? [...fl] : null;
-    return { id: b.id, label: pick('label', b.label), rules, camera, floors, cut: pick('cut', null), source: b.source, hidden: !!pick('hidden', false) };
+    const section = normSection(y.section !== undefined ? y.section : l.section);
+    return { id: b.id, label: pick('label', b.label), rules, camera, floors, cut: pick('cut', null), source: b.source, hidden: !!pick('hidden', false),
+      section, modelSection: normSection(b.section) };
   });
 }
 
@@ -434,4 +436,86 @@ export function legacyShowRules(layoutViews, views, levelId, savedLevels, levels
     changed = true;
   }
   return changed ? out : layoutViews;
+}
+
+// ---------- side section: one vertical clipping plane ----------
+// A plane is { normal: [x, y, z], constant } in card world (three.js Plane: n·p + constant = 0);
+// points with n·p + constant >= 0 are kept, the rest is cut away.
+
+const z0 = (x) => x + 0; // no -0
+
+// A valid section (finite numbers, normal length > 0) with a unit normal, or null.
+export function normSection(s) {
+  if (!s || typeof s !== 'object' || !Array.isArray(s.normal) || s.normal.length !== 3) return null;
+  const n = s.normal, c = s.constant;
+  if (!n.every((x) => typeof x === 'number' && Number.isFinite(x)) || typeof c !== 'number' || !Number.isFinite(c)) return null;
+  const len = Math.hypot(...n);
+  if (!(len > 1e-9)) return null;
+  return { normal: n.map((x) => z0(x / len)), constant: z0(c / len) };
+}
+
+// box: { min: [x, y, z], max: [x, y, z] } (card world)
+const centre = (box) => box.min.map((v, i) => (v + box.max[i]) / 2);
+export const sectionSide = (plane, p) => plane.normal[0] * p[0] + plane.normal[1] * p[1] + plane.normal[2] * p[2] + plane.constant;
+
+// The view's cut: layout / YAML section (card world), else the model's (model space; toWorld maps it
+// into card world), else normal (-1,0,0) through the box centre x (keeps the west half).
+export function sectionPlane(view, box, toWorld = (p) => p) {
+  const own = normSection(view && view.section);
+  if (own) return own;
+  const m = normSection(view && view.modelSection);
+  if (m) return normSection(toWorld(m)) || m;
+  return { normal: [-1, 0, 0], constant: z0(centre(box)[0]) };
+}
+
+// Camera on the removed side looking back at the cut face: target = the box centre projected onto
+// the plane at 45 % of the box height, distance max(20, 1.3 × diagonal), slightly above the target.
+export function sectionCamera(plane, box) {
+  const c = centre(box);
+  c[1] = box.min[1] + 0.45 * (box.max[1] - box.min[1]);
+  const n = plane.normal, d = sectionSide(plane, c);
+  const target = c.map((v, i) => v - n[i] * d);
+  const diag = Math.hypot(...box.max.map((v, i) => v - box.min[i]));
+  const dist = Math.max(20, 1.3 * diag);
+  const position = target.map((v, i) => v - n[i] * dist);
+  position[1] += 0.11 * dist; // ~6° down: OrbitControls in 3D limit the polar angle to 0.47π (84.6°)
+  return { position, target };
+}
+
+// Views tab directions (world normals; world z = -plan y).
+export const SECTION_DIRS = [
+  { id: 'we', label: 'West→East', normal: [-1, 0, 0] },
+  { id: 'ew', label: 'East→West', normal: [1, 0, 0] },
+  { id: 'ns', label: 'North→South', normal: [0, 0, 1] },
+  { id: 'sn', label: 'South→North', normal: [0, 0, -1] },
+];
+
+export function sectionDir(normal) {
+  let best = SECTION_DIRS[0], bd = -Infinity;
+  for (const d of SECTION_DIRS) {
+    const dot = d.normal[0] * normal[0] + d.normal[1] * normal[1] + d.normal[2] * normal[2];
+    if (dot > bd) { bd = dot; best = d; }
+  }
+  return best;
+}
+
+// Slider axis: east (x) for east-west normals, north (-z) for north-south ones.
+const axisOf = (normal) => (Math.abs(normal[0]) >= Math.abs(normal[2]) ? [1, 0, 0] : [0, 0, -1]);
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+// Slider position (metres east, or north) of a plane: where it crosses its axis.
+export function sectionPos(plane) {
+  const u = axisOf(plane.normal), k = dot3(plane.normal, u);
+  return Math.abs(k) < 1e-9 ? 0 : z0(-plane.constant / k);
+}
+
+// The plane with this normal crossing its axis at pos.
+export function sectionAt(normal, pos) {
+  const n = normSection({ normal, constant: 0 }).normal;
+  return { normal: n, constant: z0(-pos * dot3(n, axisOf(n))) };
+}
+
+// Slider range: the box along the axis.
+export function sectionRange(normal, box) {
+  return axisOf(normal)[0] ? [box.min[0], box.max[0]] : [z0(-box.max[2]), z0(-box.min[2])];
 }

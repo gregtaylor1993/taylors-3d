@@ -116,6 +116,10 @@ house.userData.fp = { views: [
   Rules cascade to children, and a later rule wins over an earlier one.
 - `camera` (optional): `{ position, target }` in model world metres (Y up). The card tweens to
   it when the view is opened and on **Reset view**; without one the camera stays where it is.
+- `section` (optional): `{ normal: [x, y, z], constant }`, the view's **Side section** cut as a
+  three.js plane in model world (the side where `normal · p + constant ≥ 0` stays), e.g.
+  `{ normal: [-1, 0, 0], constant: 7 }` keeps x ≤ 7 m. Without one the card cuts West→East
+  through the middle of the model. Users can move it per view (Edit → Views → Side section).
   Use the prototype's presets as a starting point (see below).
 - A view that shows every storey and the roof is an **overview**: all devices are shown. In a
   storey view the top visible storey is the view's storey: devices of lower storeys are hidden,

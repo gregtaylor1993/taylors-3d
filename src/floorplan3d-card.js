@@ -14,7 +14,7 @@ import {
 import { threeAdapter } from './manifest.js';
 import {
   nodeIndex, resolveViews, resolveVisibility, primaryLevel, defaultFloors, levelOrders, isOverview, floorLevels, deviceState,
-  defaultViewId, viewCut, orderViews,
+  defaultViewId, viewCut, orderViews, sectionPlane, sectionCamera,
 } from './views.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 
@@ -141,8 +141,9 @@ const STYLE = `
   button.edit { font: inherit; font-size: 13px; line-height: 1; cursor: pointer; padding: 6px 10px; border-radius: 16px;
     border: 1px solid var(--divider-color, rgba(0,0,0,.12)); background: var(--card-background-color, #fff);
     color: var(--primary-text-color); display: flex; align-items: center; gap: 4px; --mdc-icon-size: 16px; }
-  button.edit[hidden], button.daynight[hidden] { display: none; }
-  button.reset { font: inherit; line-height: 1; cursor: pointer; padding: 5px 8px; border-radius: 16px; display: flex;
+  button.edit[hidden], button.daynight[hidden], button.section[hidden] { display: none; }
+  button.section.on { background: var(--primary-color); border-color: var(--primary-color); color: var(--text-primary-color, #fff); }
+  button.reset, button.section { font: inherit; line-height: 1; cursor: pointer; padding: 5px 8px; border-radius: 16px; display: flex;
     align-items: center; border: 1px solid var(--divider-color, rgba(0,0,0,.12)); background: var(--card-background-color, #fff);
     color: var(--primary-text-color); --mdc-icon-size: 17px; }
   button.daynight { font: inherit; font-size: 15px; line-height: 1; cursor: pointer; padding: 5px 10px; border-radius: 16px;
@@ -248,6 +249,8 @@ class Floorplan3dCard extends HTMLElement {
     this._index = null;
     this._mode = '3d';
     this._daylight = true;
+    this._section = false; // side section toggle
+    this._sectionPreview = null; // Views tab slider: plane shown while dragging
   }
 
   static getStubConfig() {
@@ -303,6 +306,7 @@ class Floorplan3dCard extends HTMLElement {
     }
     const prevModel = this._view.model;
     this._view.setModel(opts).then((err) => {
+      if (this._view.model !== prevModel && this._section) { this._section = false; this._sectionPreview = null; this._view.setSection(null); }
       this._notice.textContent = err || '';
       this._notice.hidden = !err;
       // a new model resets the views; the first view applied frames it (see _resolveViewList)
@@ -397,6 +401,7 @@ class Floorplan3dCard extends HTMLElement {
               <div class="chips"></div>
               <div class="seg"><button data-mode="3d">3D</button><button data-mode="top">Top</button></div>
               <button class="reset" title="Reset view"><ha-icon icon="mdi:crosshairs-gps"></ha-icon></button>
+              <button class="section" hidden title="Side section"><ha-icon icon="mdi:box-cutter"></ha-icon></button>
               <button class="daynight" hidden title="Day / night">\u2600</button>
               <button class="edit" hidden title="Edit floorplan"><ha-icon icon="mdi:pencil"></ha-icon><span>Edit</span></button>
             </div>
@@ -420,6 +425,8 @@ class Floorplan3dCard extends HTMLElement {
       if (id) this._setView(id);
     });
     root.querySelector('button.reset').addEventListener('click', () => this._resetCamera());
+    this._sectionBtn = root.querySelector('button.section');
+    this._sectionBtn.addEventListener('click', () => this.setSection(!this._section));
     this._body = root.querySelector('.body');
     this._editBtn = root.querySelector('button.edit');
     this._dayBtn = root.querySelector('button.daynight');
@@ -807,7 +814,10 @@ class Floorplan3dCard extends HTMLElement {
 
   // Floors, model node visibility and cut for the active view.
   _applyViewVisibility() {
-    const vw = this._view, v = this.currentView(), st = this._viewState;
+    const vw = this._view, v = this.currentView(), section = this._sectionActive();
+    const st = section ? this._sectionState() : this._viewState;
+    if (section) this._applySectionPlane();
+    else if (vw.sectionClip) vw.setSection(null);
     if (!v || !st) {
       this._floor = 'all';
       vw.setVisibleFloors('all');
@@ -820,6 +830,7 @@ class Floorplan3dCard extends HTMLElement {
     vw.setVisibleFloors(visible);
     if (this._index && vw.model && st.effective) {
       vw.applyModelVisibility(this._index, st.effective);
+      if (section) { vw.setCut(null); return; }
       const elevations = st.floors.map((id) => (this._floors.find((f) => f.id === id) || {}).elevation).filter(Number.isFinite);
       vw.setCut(viewCut(v, { tagged: vw.isTagged(), elevations, wallHeight: Number(this._config.wall_height) || 1.0 }));
     } else {
@@ -830,7 +841,8 @@ class Floorplan3dCard extends HTMLElement {
 
   // Devices follow the view's visible rooms / linked floors (model only; without one the floor rules apply).
   _applyMarkerStates() {
-    const vw = this._view, mb = this._mb, st = this._viewState, L = this._levels;
+    const vw = this._view, mb = this._mb, L = this._levels;
+    const st = this._sectionActive() ? this._sectionState() : this._viewState;
     if (!mb || !this._index || !vw.model || !st || !st.effective || !L || this._floorOnly || !this._positions) {
       vw.setMarkerStates(null);
       return;
@@ -863,6 +875,9 @@ class Floorplan3dCard extends HTMLElement {
   _setView(id, { instant = false } = {}) {
     const v = this._views.find((x) => x.id === id);
     if (!v) return;
+    const wasSection = this._section;
+    this._section = false;
+    this._sectionPreview = null;
     this._viewId = id;
     this._floorOnly = null;
     this._viewState = this._stateFor(v);
@@ -870,7 +885,7 @@ class Floorplan3dCard extends HTMLElement {
     if (this._labelKeyNow() !== this._labelKey) this._pushStructure();
     this._applyMarkerStates();
     if (v.camera) this._view.setCamera(v.camera, { instant });
-    else if (!this._view.model) this._view.fit({ instant });
+    else if (!this._view.model || wasSection) this._view.fit({ instant });
     this._syncToolbar();
     if (this._editing) this._edit.onViewChanged();
   }
@@ -885,13 +900,75 @@ class Floorplan3dCard extends HTMLElement {
   }
 
   _resetCamera() {
+    if (this._section) this.setSection(false, { camera: false });
     const v = this.currentView();
     if (this._mode === 'top') this._view.fit();
     else this._view.resetCamera((v && v.camera) || null);
   }
 
+  // ---------- side section ----------
+  _sectionActive() {
+    return this._section && this._mode === '3d' && !!this._view.model && !!this._index && !!this._mb && !this._floorOnly;
+  }
+
+  // "Show all" while the section is on: every node, all floors, overview device rules.
+  _sectionState() {
+    const effective = this._index.nodes.map(() => true);
+    return {
+      effective, primary: primaryLevel(this._index, effective, this._mb.manifest.levels),
+      floors: (this._floors || []).map((f) => f.id), allFloors: true, overview: true,
+    };
+  }
+
+  // A view's cut plane in card world (the active view: the Views tab preview while sliding wins).
+  sectionPlaneNow(v = this.currentView()) {
+    const box = this._view.modelBox();
+    if (!box || !v) return null;
+    if (this._sectionPreview && v.id === this._viewId) return this._sectionPreview;
+    return sectionPlane(v, box, (p) => this._view.modelPlaneToWorld(p));
+  }
+
+  _applySectionPlane() {
+    const plane = this.sectionPlaneNow();
+    this._view.setSection(plane);
+  }
+
+  // Toggle the side section. Off returns to the view's visibility and (camera: true) its camera.
+  setSection(on, { camera = true } = {}) {
+    if (on) {
+      if (this._mode !== '3d' || !this._view.model || !this._index) return;
+      const was = this._section;
+      this._section = true;
+      this._applyViewVisibility();
+      this._applyMarkerStates();
+      const plane = this.sectionPlaneNow(), box = this._view.modelBox();
+      if (!was && plane && box) this._view.setCamera(sectionCamera(plane, box));
+    } else {
+      if (!this._section) return;
+      this._section = false;
+      this._sectionPreview = null;
+      this._applyViewVisibility();
+      this._applyMarkerStates();
+      if (camera) this._resetCamera();
+    }
+    this._syncToolbar();
+  }
+
+  // Views tab: show this plane while the slider moves (turns the section on); null drops the preview.
+  // aim: also move the camera to look at the new cut.
+  previewSection(id, plane, { aim = false } = {}) {
+    if (id !== this._viewId || this._mode !== '3d') return;
+    this._sectionPreview = plane || null;
+    if (!plane) { if (this._section) this._applySectionPlane(); return; }
+    if (!this._section) { this.setSection(true); return; }
+    this._view.setSection(plane);
+    const box = this._view.modelBox();
+    if (aim && box) this._view.setCamera(sectionCamera(plane, box));
+  }
+
   // Merge a patch into layout.views[id] and save (rules replace the stored list).
   saveViewPatch(id, patch) {
+    if ('section' in patch && id === this._viewId) this._sectionPreview = null; // the saved plane takes over
     const l = this._layout;
     const views = l.views || {};
     this._commit({ ...l, views: { ...views, [id]: { ...(views[id] || {}), ...patch } } });
@@ -1019,6 +1096,7 @@ class Floorplan3dCard extends HTMLElement {
       if (this._view.model && !match.camera) this._view.fit();
       return;
     }
+    if (this._section) { this._section = false; this._sectionPreview = null; this._view.setSection(null); }
     this._floorOnly = id;
     this._floor = id;
     this._view.setVisibleFloor(id);
@@ -1030,6 +1108,7 @@ class Floorplan3dCard extends HTMLElement {
   }
 
   _setMode(mode) {
+    if (mode !== '3d' && this._section) this.setSection(false, { camera: false });
     this._mode = mode;
     this._view.setMode(mode);
     this._syncToolbar();
@@ -1052,6 +1131,10 @@ class Floorplan3dCard extends HTMLElement {
     }
     for (const btn of this.shadowRoot.querySelectorAll('.seg button')) btn.classList.toggle('on', btn.dataset.mode === this._mode);
     this._dayBtn.hidden = !(this._view && this._view.model);
+    if (this._sectionBtn) {
+      this._sectionBtn.hidden = !(this._view && this._view.model && this._mode === '3d');
+      this._sectionBtn.classList.toggle('on', !!this._section);
+    }
     this._dayBtn.textContent = this._daylight ? '\u2600' : '\u263e';
     this._editBtn.hidden = !(this._hass && this._hass.user && this._hass.user.is_admin);
     this._editBtn.querySelector('span').textContent = this._editing ? 'Done' : 'Edit';

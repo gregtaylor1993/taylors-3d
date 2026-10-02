@@ -82,6 +82,7 @@ export class FloorplanView {
     this.scene.add(this.modelGroup);
     this.model = null; // { id, root, manifest }
     this.modelClip = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
+    this.sectionClip = null; // side section: global clipping plane (card world) or null
     this.raycaster = new THREE.Raycaster();
 
     this.floors = [];
@@ -500,6 +501,7 @@ export class FloorplanView {
     this._placeStem(id, m.obj.position, floorId);
     const g = this.glows.get(id);
     if (g) g.mesh.position.copy(planToWorld(x, y, 0.03, this.floorElevation(floorId)));
+    if (this.sectionClip) this._applyFloorVisibility(); // it may have crossed the cut
     this.dirty = true;
   }
 
@@ -739,6 +741,65 @@ export class FloorplanView {
     this.dirty = true;
   }
 
+  // Side section: plane {normal, constant} (card world) clips everything (renderer.clippingPlanes);
+  // model materials turn double-sided so cut walls read solid; markers and glows on the removed side
+  // are hidden. null restores everything.
+  setSection(plane) {
+    if (plane) {
+      if (!this.sectionClip) this.sectionClip = new THREE.Plane();
+      this.sectionClip.normal.set(...plane.normal);
+      this.sectionClip.constant = plane.constant;
+      this.sectionClip.normalize();
+      this.renderer.clippingPlanes = [this.sectionClip];
+    } else {
+      this.sectionClip = null;
+      this.renderer.clippingPlanes = [];
+    }
+    this._sectionMaterials();
+    this._applyFloorVisibility();
+    this.dirty = true;
+  }
+
+  // double-sided model materials while the section is on (original side remembered in userData)
+  _sectionMaterials() {
+    if (!this.model) return;
+    const on = !!this.sectionClip;
+    this.model.root.traverse((o) => {
+      if (!o.isMesh) return;
+      for (const mat of Array.isArray(o.material) ? o.material : [o.material]) {
+        if (on && mat.userData.sectionSide === undefined) {
+          mat.userData.sectionSide = mat.side;
+          mat.side = THREE.DoubleSide;
+          mat.needsUpdate = true;
+        } else if (!on && mat.userData.sectionSide !== undefined) {
+          mat.side = mat.userData.sectionSide;
+          delete mat.userData.sectionSide;
+          mat.needsUpdate = true;
+        }
+      }
+    });
+  }
+
+  // world-space bounding box of the placed model ({min, max} arrays) or null
+  modelBox() {
+    if (!this.model) return null;
+    this.modelGroup.updateMatrixWorld(true);
+    const b = new THREE.Box3().setFromObject(this.model.root);
+    return b.isEmpty() ? null : { min: b.min.toArray(), max: b.max.toArray() };
+  }
+
+  // a plane given in model space (glTF scene coordinates) -> card world
+  modelPlaneToWorld(plane) {
+    if (!this.model) return plane;
+    this.modelGroup.updateMatrixWorld(true);
+    const p = new THREE.Plane(new THREE.Vector3(...plane.normal), plane.constant).applyMatrix4(this.model.root.matrixWorld);
+    return { normal: p.normal.toArray(), constant: p.constant };
+  }
+
+  _cutAway(pos) {
+    return !!this.sectionClip && this.sectionClip.distanceToPoint(pos) < 0;
+  }
+
   getCamera() {
     if (this.mode === 'top' && this._lastCam3d) return this._lastCam3d;
     const r = (a) => a.toArray().map((x) => Math.round(x * 100) / 100);
@@ -813,11 +874,11 @@ export class FloorplanView {
     const stateOf = (id) => (ms && id !== undefined ? ms.get(id) : null);
     for (const c of this.cssObjects) {
       const st = c.kind === 'marker' ? stateOf(c.id) : null;
-      c.obj.visible = st ? !!st.shown : this._shows(c.floorId);
+      c.obj.visible = (st ? !!st.shown : this._shows(c.floorId)) && !(c.kind !== 'handle' && this._cutAway(c.obj.position));
     }
     for (const [id, g] of this.glows) {
       const st = stateOf(id);
-      g.mesh.visible = st ? !!st.shown : this._shows(g.floorId);
+      g.mesh.visible = (st ? !!st.shown : this._shows(g.floorId)) && !this._cutAway(g.mesh.position);
     }
     for (const [id, st] of this.stems) {
       const m = this.markerObjects.get(id);

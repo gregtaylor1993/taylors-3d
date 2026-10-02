@@ -187,6 +187,18 @@ of the model in 3D for a menu: **Hide in this view**, **Show in this view**, **H
 views**, **Reveal in tree**. Your changes are stored per view id in the layout and survive model
 re-exports; parts no longer in the model are listed for removal.
 
+#### Side section
+
+The **Section** button (box cutter, 3D view with a model) cuts the house with one vertical plane
+and turns the camera to look at the cut face: every storey and the roof are shown while it is on,
+devices beyond the cut are hidden, and cut walls read solid. Turning it off, switching views,
+**Reset view** or **Top** clears the cut and returns to the view. Where the cut runs is set per
+view in **Edit → Views → Side section**: a direction (West→East, East→West, North→South,
+South→North) and a **Position** slider across the model (0.05 m steps, the cut follows the slider
+live). Without a setting the model's `fp.views[*].section` is used
+(`{ "normal": [-1, 0, 0], "constant": 7 }`, a three.js plane in model coordinates: the side where
+`normal · p + constant ≥ 0` stays), else a West→East cut through the middle of the house.
+
 Per-card overrides in YAML (same keys, they win over the stored ones):
 
 ```yaml
@@ -198,6 +210,7 @@ views:
       - hide: layer:furniture
       - hide: node:house/level0/sofa
     camera: { position: [18, 22, 16], target: [6, 0, -4] }
+    section: { normal: [-1, 0, 0], constant: 7 }   # card world: keeps x <= 7 m
   exterior:
     hidden: true
 ```

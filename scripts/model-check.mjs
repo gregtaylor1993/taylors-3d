@@ -92,6 +92,48 @@ try {
   check('single floor: no faded markers', (await faded()) === 0);
   check('no notice', await page.evaluate(`${card}.shadowRoot.querySelector('.notice').hidden`));
 
+  // side section: show all + one global clipping plane, camera looks at the cut, markers beyond it hidden
+  const secBtn = `${card}.shadowRoot.querySelector('button.section')`;
+  const sides = () => page.evaluate(`(() => { const out = []; ${card}._view.model.root.traverse((o) => { if (o.isMesh) for (const m of [].concat(o.material)) out.push(m.side); }); return out.join(','); })()`);
+  check('Section button shown in 3D with a model', (await page.evaluate(`${secBtn}.hidden`)) === false);
+  const sides0 = await sides();
+  const cam0 = await page.evaluate(`${card}._view.getCamera()`);
+  await page.evaluate(`${secBtn}.click()`);
+  await sleep(700);
+  const secState = () => page.evaluate(`(() => { const c = ${card}, v = c._view, p = v.sectionClip;
+    let removedHidden = 0, removedShown = 0, keptShown = 0;
+    for (const m of v.markerObjects.values()) {
+      if (!p) break;
+      if (p.distanceToPoint(m.obj.position) < 0) { if (m.obj.visible) removedShown++; else removedHidden++; } else if (m.obj.visible) keptShown++;
+    }
+    let dbl = 0, n = 0;
+    v.model.root.traverse((o) => { if (o.isMesh) { n++; if ([].concat(o.material).every((x) => x.side === 2)) dbl++; } });
+    const roof = v.modelManifest().levels.find((l) => l.id === 'roof').node;
+    let roofShown = true; for (let o = roof; o; o = o.parent) if (!o.visible) roofShown = false;
+    return { planes: v.renderer.clippingPlanes.length, roofShown, removedHidden, removedShown, keptShown, dbl, n, cam: v.getCamera(),
+      on: c.shadowRoot.querySelector('button.section').classList.contains('on') }; })()`);
+  let sec = await secState();
+  check('Section on: one global clipping plane, roof shown, button on', sec.planes === 1 && sec.roofShown && sec.on, JSON.stringify(sec));
+  check('Section on: model materials double-sided', sec.n > 0 && sec.dbl === sec.n, `${sec.dbl}/${sec.n}`);
+  check('Section on: camera moved to the cut', JSON.stringify(sec.cam) !== JSON.stringify(cam0), JSON.stringify([cam0, sec.cam]));
+  check('Section on: markers on the removed side hidden, kept side shown', sec.removedHidden > 0 && sec.removedShown === 0 && sec.keptShown > 0, JSON.stringify(sec));
+  await sh('model-section.png');
+  await page.evaluate(`${secBtn}.click()`);
+  await sleep(600);
+  sec = await secState();
+  v = await st();
+  check('Section off: planes cleared, roof hidden again in the storey view', sec.planes === 0 && !v.roof && !sec.on, JSON.stringify({ planes: sec.planes, roof: v.roof }));
+  check('Section off: model materials\' side restored', (await sides()) === sides0);
+  d = await devs();
+  check('Section off: ground-floor devices back to the view rules', d.level0.shown > 0 && d.level1.shown === 0, JSON.stringify(d));
+  await page.evaluate(`${secBtn}.click()`);
+  await sleep(200);
+  await page.evaluate(`${card}.shadowRoot.querySelector('.seg button[data-mode=top]').click()`);
+  await sleep(200);
+  check('Top view clears the section and hides the button', (await page.evaluate(`${card}._view.renderer.clippingPlanes.length === 0 && ${secBtn}.hidden && !${card}._section`)));
+  await page.evaluate(`${card}.shadowRoot.querySelector('.seg button[data-mode="3d"]').click()`);
+  await sleep(300);
+
   const look = await page.evaluate(`(() => { const v = ${card}._view; return { tm: v.renderer.toneMapping, sm: v.renderer.shadowMap.enabled,
     sr: v.sun.shadow.camera.right, pr: v.renderer.getPixelRatio(),
     fills: (() => { let n = 0; v.staticGroup.traverse((o) => { if (o.isMesh && o.userData.roomId) n++; }); return n; })(),
@@ -672,6 +714,28 @@ try {
   await sleep(200);
   check('Esc cancels picking', !(await page.evaluate(`${card}._edit.picking`)));
   await page.evaluate(`${card}._setMode('3d')`);
+
+  // Views tab: side section position slider (live while dragging, saved on release)
+  await clickText('Views');
+  await sleep(300);
+  const secPos = `${sr}.querySelector('.panel [data-field=vw-sec-pos]')`;
+  check('Views tab: side section direction + position', await page.evaluate(`!!${secPos} && !!${sr}.querySelector('.panel [data-field=vw-sec-dir]')`));
+  const live = await page.evaluate(`(() => { const el = ${secPos}, c = ${card}, v = c._view; const pos = Math.round((Number(el.min) + 1) * 100) / 100;
+    el.value = String(pos); el.dispatchEvent(new Event('input', { bubbles: true }));
+    return { pos, planes: v.renderer.clippingPlanes.length, c: v.sectionClip && v.sectionClip.constant, n: v.sectionClip && v.sectionClip.normal.toArray(),
+      saved: ((c._layout.views || {})[c._viewId] || {}).section || null }; })()`);
+  check('Views tab: dragging the slider cuts live, nothing saved yet', live.planes === 1 && Math.abs(live.c - live.pos) < 1e-6 && live.n[0] === -1 && !live.saved, JSON.stringify(live));
+  await page.evaluate(`${secPos}.dispatchEvent(new Event('change', { bubbles: true }))`);
+  await sleep(500);
+  const secSaved = await page.evaluate(`(() => { const c = ${card}; return { s: ((c._layout.views || {})[c._viewId] || {}).section, c: c._view.sectionClip && c._view.sectionClip.constant,
+    slider: Number(${secPos}.value) }; })()`);
+  check('Views tab: release saves layout.views[id].section, the cut stays', !!secSaved.s && secSaved.s.constant === live.pos && secSaved.c === live.pos && secSaved.slider === live.pos, JSON.stringify(secSaved));
+  await page.evaluate(`${sr}.querySelector('button.section').click()`);
+  await sleep(200);
+  check('Section button off clears the cut', await page.evaluate(`${card}._view.renderer.clippingPlanes.length === 0`));
+  check('Reset section clears the saved cut', await clickText('Reset section'));
+  await sleep(300);
+  check('Reset section: nothing saved', await page.evaluate(`(() => { const c = ${card}; return !((c._layout.views || {})[c._viewId] || {}).section; })()`));
 
   // fully untagged copy (no extras, no legacy names): one generated "All" view, an overview
   const untagged = path.join(root, 'screenshots', 'untagged-views.glb');

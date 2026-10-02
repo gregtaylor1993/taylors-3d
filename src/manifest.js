@@ -1,5 +1,6 @@
 // Reads the fp tags of a house model (docs/model-builder-guide.md). Works on any node tree
 // through an adapter, so the card (three.js nodes) and tools/check-model.mjs (glTF JSON) share it.
+import { normSection } from './views.js';
 
 export const KINDS = ['level', 'room', 'zone', 'object'];
 export const ROLES = ['storey', 'basement', 'exterior', 'roof'];
@@ -54,7 +55,11 @@ export function buildManifest(adapter) {
     if (!v || typeof v.id !== 'string' || !ID_RE.test(v.id)) { m.warnings.push(`view "${v && v.id}": invalid id`); continue; }
     if (m.views.some((x) => x.id === v.id)) { m.warnings.push(`view "${v.id}": duplicate id`); continue; }
     const cam = v.camera && isNum3(v.camera.position) && isNum3(v.camera.target) ? { position: v.camera.position, target: v.camera.target } : null;
-    m.views.push({ id: v.id, label: typeof v.label === 'string' ? v.label : v.id, show: strs(v.show), hide: strs(v.hide), camera: cam });
+    const view = { id: v.id, label: typeof v.label === 'string' ? v.label : v.id, show: strs(v.show), hide: strs(v.hide), camera: cam };
+    const section = normSection(v.section);
+    if (section) view.section = section;
+    else if (v.section !== undefined) m.warnings.push(`view "${v.id}": invalid section (needs normal [x, y, z] and a constant)`);
+    m.views.push(view);
   }
 
   const add = (node, tag, ctx, path) => {
