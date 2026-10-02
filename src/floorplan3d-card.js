@@ -18,7 +18,7 @@ import {
 } from './views.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 import { ObjectLayer } from './objects/layer.js';
-import { bindObjects, nightFactor, sunVector } from './objects/logic.js';
+import { bindObjects, nightFactor, sunVector, sunStrength, clampSunDir } from './objects/logic.js';
 
 const VERSION = '0.3.1';
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
@@ -1290,12 +1290,12 @@ class Floorplan3dCard extends HTMLElement {
       const a = this._hass && this._hass.states && this._hass.states['sun.sun'];
       const el = a ? Number(a.attributes.elevation) : NaN, az = a ? Number(a.attributes.azimuth) : NaN;
       if (Number.isFinite(el) && Number.isFinite(az)) {
-        const rot = Number(this._layout && this._layout.model && this._layout.model.rotation) || Number(this._config && this._config.model_rotation) || 0;
-        sky = { night: nightFactor(el), sunDir: sunVector(az, el, v.model.north || 0, rot) };
+        const rot = this._modelAlign().rotation || 0;
+        sky = { night: nightFactor(el), sunDir: clampSunDir(sunVector(az, el, v.model.north || 0, rot)), sun: sunStrength(el) };
       }
     }
     const l = this._skyLast;
-    if (!force && l && Math.abs(l.night - sky.night) <= 0.01 && !!l.sunDir === !!sky.sunDir
+    if (!force && l && Math.abs(l.night - sky.night) <= 0.01 && Math.abs((l.sun ?? 1) - (sky.sun ?? 1)) <= 0.01 && !!l.sunDir === !!sky.sunDir
       && (!sky.sunDir || Math.acos(Math.max(-1, Math.min(1, l.sunDir[0] * sky.sunDir[0] + l.sunDir[1] * sky.sunDir[1] + l.sunDir[2] * sky.sunDir[2]))) <= Math.PI / 180)) return;
     this._skyLast = sky;
     this._daylight = sky.night < 0.5;

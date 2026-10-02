@@ -103,6 +103,24 @@ export function sunVector(azimuth, elevation, north = 0, alignRotation = 0) {
   return [px, Math.sin(e), -py];
 }
 
+// Sun strength factor 0..1: smoothstep(-2, +4 degrees) so the sun is off at / under the horizon.
+export function sunStrength(elevation) {
+  if (!Number.isFinite(elevation)) return 1;
+  const t = Math.max(0, Math.min(1, (elevation + 2) / 6));
+  return t * t * (3 - 2 * t);
+}
+
+// Never light from underneath: y >= minY, renormalised.
+export function clampSunDir(v, minY = 0.05) {
+  if (!v) return v;
+  let [x, y, z] = v;
+  if (y >= minY) return [x, y, z];
+  const h = Math.hypot(x, z);
+  if (h < 1e-9) return [0, 1, 0];
+  const k = Math.sqrt(1 - minY * minY) / h;
+  return [x * k, minY, z * k];
+}
+
 export function screenNearest(points, x, y, radius) {
   let best = null, bd = radius;
   for (const p of points) {

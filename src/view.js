@@ -89,7 +89,7 @@ export class FloorplanView {
     this.sun.position.set(-12, 30, 18);
     this.scene.add(this.hemi, this.sun, this.sun.target);
     this.daylight = true;
-    this.sky = { night: 0, sunDir: null };
+    this.sky = { night: 0, sunDir: null, sun: 1 };
 
     this.staticGroup = new THREE.Group();
     this.markerGroup = new THREE.Group();
@@ -500,9 +500,9 @@ export class FloorplanView {
   // night 0..1 and the unit vector toward the sun (world) or null (fixed bearing from fp.north).
   // With a model only the light values change; shadows are re-rendered when the sun moved > 1 degree
   // or night entered / left 1 (sun.castShadow stays true, so no shader recompile).
-  setSky({ night = 0, sunDir = null } = {}) {
+  setSky({ night = 0, sunDir = null, sun = 1 } = {}) {
     const old = this.sky;
-    this.sky = { night, sunDir };
+    this.sky = { night, sunDir, sun };
     this.daylight = night < 0.5;
     if (!this.model) { this._applyLook(); return; }
     this._applyLights();
@@ -519,7 +519,7 @@ export class FloorplanView {
     hemi.groundColor.setHex(0x2a2520);
     hemi.intensity = 0.9 + (0.14 - 0.9) * t;
     sun.color.setHex(0xfff0dc);
-    sun.intensity = 2.6 * (1 - t);
+    sun.intensity = 2.6 * (1 - t) * (this.sky.sun ?? 1);
     const day = new THREE.Color(0x2a2d30), night = new THREE.Color(0x0e0f10);
     this.renderer.setClearColor(day.lerp(night, t), 1);
   }

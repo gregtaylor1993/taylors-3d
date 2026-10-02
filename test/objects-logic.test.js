@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bindObjects, chainState, lightColor, lightLevel, lightBudget, nightFactor, sunVector, screenNearest } from '../src/objects/logic.js';
+import { bindObjects, chainState, lightColor, lightLevel, lightBudget, nightFactor, sunVector, screenNearest, sunStrength, clampSunDir } from '../src/objects/logic.js';
 
 const st = (entity_id, state, attributes = {}) => ({ entity_id, state, attributes });
 
@@ -150,5 +150,24 @@ describe('screenNearest', () => {
   it('exact tie: first point wins', () => {
     const tied = [{ id: 'first', x: 100, y: 100 }, { id: 'second', x: 100, y: 100 }];
     expect(screenNearest(tied, 100, 100, 10)).toBe('first');
+  });
+});
+
+describe('sun below the horizon', () => {
+  it('sunStrength is 0 at -2 and below, 1 from +4', () => {
+    expect(sunStrength(-10)).toBe(0);
+    expect(sunStrength(-2)).toBe(0);
+    expect(sunStrength(0)).toBeGreaterThan(0);
+    expect(sunStrength(0)).toBeLessThan(1);
+    expect(sunStrength(4)).toBe(1);
+    expect(sunStrength(NaN)).toBe(1);
+  });
+  it('clampSunDir lifts y to 0.05 and keeps unit length and bearing', () => {
+    const v = clampSunDir(sunVector(90, -10));
+    expect(v[1]).toBeCloseTo(0.05);
+    expect(Math.hypot(...v)).toBeCloseTo(1);
+    expect(v[0]).toBeGreaterThan(0.99);
+    expect(clampSunDir([0, 0.5, 0.5])).toEqual([0, 0.5, 0.5]);
+    expect(clampSunDir([0, -1, 0])).toEqual([0, 1, 0]);
   });
 });

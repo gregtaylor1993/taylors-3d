@@ -332,6 +332,12 @@ try {
   await page.evaluate(`${btn}.click()`);
   await page.evaluate(`${btn}.click()`);
   await tint(60, 180);
+  await sleep(200);
+  check('auto again after the cycle: sun at +60 deg is day', (await page.evaluate(`${card}._skyMode`)) === 'auto' && (await lights()).sun > 2.5);
+  await tint(-3, 180);
+  await sleep(200);
+  const horizon = await page.evaluate(`({ y: ${card}._view.sun.position.y - ${card}._view.sun.target.position.y, i: ${card}._view.sun.intensity })`);
+  check('sun below the horizon lights nothing and never from below', horizon.i < 0.3 && horizon.y > 0, JSON.stringify(horizon));
   allErrors.push(...s.errors);
 } finally {
   await s.close();
@@ -612,7 +618,7 @@ try {
   check('remove clears model', (await page.evaluate(`${card}._layout.model`)) === null && !(await page.evaluate(`${card}._view.model`)));
   check('removal resets the look', await page.evaluate(`(() => { const c = ${card}; return !c._stage.classList.contains('has-model')
     && c.shadowRoot.querySelector('button.daynight').hidden && c._view.renderer.toneMapping === 0 && c._view.renderer.shadowMap.enabled === false; })()`));
-  const dayLook = await page.evaluate(`(() => { const v = ${card}._view; return { hemi: v.hemi.intensity, sun: v.sun.intensity, tm: v.renderer.toneMapping, glyph: 0 }; })()`);
+  const dayLook = await page.evaluate(`(() => { const v = ${card}._view; return { hemi: v.hemi.intensity, sun: v.sun.intensity, tm: v.renderer.toneMapping }; })()`);
   check('removing the model at night restores the day look', dayLook.hemi === 2.2 && dayLook.sun === 1.4 && dayLook.tm === 0, JSON.stringify(dayLook));
   allErrors.push(...s.errors);
 } finally {
