@@ -1098,6 +1098,7 @@ export class EditMode {
   // controls target; saved with the camera (3D) or as the top-view centre (top).
   _setPivot(e) {
     const card = this.card, v = card.currentView();
+    card.leaveSection();
     const point = this.view.pivotPoint(e.clientX, e.clientY, this.view.floorElevation(card._floor));
     if (!point || !v) {
       this.message = { text: 'Click on the model or the floor', warn: true };
@@ -1265,6 +1266,7 @@ export class EditMode {
         return true;
       }
       case 'vw-save-cam':
+        card.leaveSection();
         if (card._mode === 'top') {
           this.message = { text: `Saved the current top view as the start of "${v.label}".` };
           card.saveViewPatch(v.id, { camera_top: this.view.getTopCamera() });
@@ -1275,6 +1277,7 @@ export class EditMode {
         this.render();
         return true;
       case 'vw-pivot':
+        card.leaveSection();
         this.pivoting = true;
         this._syncStageClasses();
         this.render();

@@ -963,6 +963,16 @@ class Floorplan3dCard extends HTMLElement {
     this._view.setSection(plane);
   }
 
+  // Section off and back at the view's camera at once (before saving or re-centring the camera).
+  leaveSection() {
+    if (!this._section) return false;
+    this.setSection(false, { camera: false });
+    const v = this.currentView();
+    if (v && v.camera) this._view.setCamera(v.camera, { instant: true });
+    else this._view.fit({ instant: true });
+    return true;
+  }
+
   // Toggle the side section. Off returns to the view's visibility and (camera: true) its camera.
   setSection(on, { camera = true } = {}) {
     if (on) {
@@ -1141,8 +1151,10 @@ class Floorplan3dCard extends HTMLElement {
     if (mode !== '3d' && this._section) this.setSection(false, { camera: false });
     this._mode = mode;
     this._view.setMode(mode);
-    const v = this.currentView();
-    if (mode === 'top' && v && v.camera_top && !this._floorOnly) this._view.setTopCamera(v.camera_top, { instant: true });
+    const v = this.currentView(), own = v && !this._floorOnly ? v : null;
+    if (mode === 'top' && own && own.camera_top) this._view.setTopCamera(own.camera_top, { instant: true });
+    // back in 3D: the view's saved camera, else the camera before Top (setMode framed it otherwise)
+    else if (mode === '3d' && ((own && own.camera) || this._view._lastCam3d)) this._view.setCamera((own && own.camera) || this._view._lastCam3d, { instant: true });
     this._syncToolbar();
     if (this._editing && this._edit.tab === 'views') this._edit.render();
   }

@@ -197,8 +197,8 @@ re-exports; parts no longer in the model are listed for removal.
 - **Zoom towards**: card option `zoom_to` (`center` by default, or `cursor`), per view in the
   Views tab (or `views.<id>.zoom_to` in YAML).
 - **Top view camera**: in **Top**, *Save current view as start* stores the view's own top camera
-  (`camera_top: { center: [x, y], zoom }`, plan metres; zoom 1 shows about 20 m from top to
-  bottom) instead of the 3D one. Switching views in Top uses it, else keeps the current top camera;
+  (`camera_top: { center: [x, y], zoom }`, plan metres; zoom 1 shows 20 m vertically, the
+  horizontal extent follows the card width) instead of the 3D one. Switching views in Top uses it, else keeps the current top camera;
   *Set rotation centre* in Top recentres the top camera. Models may give `fp.views[*].camera_top`.
 - **Reset view** returns to the saved camera (3D: incl. its rotation centre; Top: `camera_top`),
   else frames the view. *Reset camera* in the Views tab drops the camera of the current mode.

@@ -816,6 +816,33 @@ try {
   await page.screenshot({ path: path.join(root, 'screenshots', 'model-camera-top.png') });
   await page.evaluate(`${card}._setMode('3d')`);
   await sleep(300);
+  const cam3 = await page.evaluate(`(() => { const v = ${card}._view; return { target: v.controls.target.toArray(), pos: v.persp.position.toArray() }; })()`);
+  check('Top -> 3D restores the view camera (±0.1 m)', near(cam3.target, piv.saved.target, 0.1) && near(cam3.pos, piv.saved.position, 0.1), JSON.stringify({ cam3, saved: piv.saved }));
+  // no saved camera: back to the camera before Top
+  await page.evaluate(`${card}._setView('first', { instant: true })`);
+  await page.evaluate(`${card}._view.setCamera({ position: [21, 19, 23], target: [4, 0, -3] }, { instant: true })`);
+  await page.evaluate(`${card}._setMode('top')`);
+  await sleep(200);
+  await page.evaluate(`${card}._setMode('3d')`);
+  await sleep(300);
+  check('Top -> 3D without a saved camera returns to the previous 3D camera', near(await page.evaluate(`${card}._view.persp.position.toArray()`), [21, 19, 23], 0.1));
+  await page.evaluate(`${card}._setView('ground', { instant: true })`);
+  await sleep(300);
+  // section on: Save / Set rotation centre leave the section first
+  await page.evaluate(`${card}.setSection(true)`);
+  await sleep(500);
+  check('section on before save', await page.evaluate(`${card}._section === true`));
+  await clickText('Save current view as start');
+  await sleep(300);
+  const secCam = await page.evaluate(`(() => { const c = ${card}; return { on: c._section, planes: c._view.renderer.clippingPlanes.length, cam: c._layout.views.ground.camera }; })()`);
+  check('Save current view with the section on: section off first, the view camera saved', !secCam.on && secCam.planes === 0
+    && near(secCam.cam.target, piv.saved.target, 0.1) && near(secCam.cam.position, piv.saved.position, 0.1), JSON.stringify(secCam));
+  await page.evaluate(`${card}.setSection(true)`);
+  await sleep(500);
+  await clickText('Set rotation centre');
+  check('Set rotation centre with the section on: section off first', await page.evaluate(`!${card}._section && ${card}._view.renderer.clippingPlanes.length === 0 && ${card}._edit.pivoting === true`));
+  await page.keyboard.press('Escape');
+  await sleep(150);
   await clickText('Reset this view');
   await sleep(300);
   check('Reset this view drops camera and camera_top', await page.evaluate(`(() => { const v = ${card}._layout.views.ground || {}; return !v.camera && !v.camera_top; })()`));
