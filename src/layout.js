@@ -1,7 +1,7 @@
 // Pure layout helpers shared by the view and the editor: floors, room floors, walls, positions.
 // Plan metres: x = east, y = north, z = height above the floor.
 
-import { autoPlace } from './placement.js';
+import { autoPlace, signedArea } from './placement.js';
 import { floorsFromHA } from './registry.js';
 
 export const DEFAULT_FLOOR_HEIGHT = 2.7;
@@ -125,4 +125,19 @@ export function lightGlow(stateObj) {
   const rgb = Array.isArray(a.rgb_color) && a.rgb_color.length === 3 ? a.rgb_color : [255, 196, 120];
   const b = Number.isFinite(a.brightness) ? a.brightness / 255 : 1;
   return { rgb, strength: 0.25 + 0.75 * Math.max(0, Math.min(1, b)) };
+}
+
+// Room label text: name plus size (bounding width × depth for rectangles, area otherwise).
+export function roomLabel(name, polygon, mode = 'size') {
+  if (mode === 'none') return '';
+  if (mode === 'name' || !polygon || polygon.length < 3) return name || '';
+  const xs = polygon.map((p) => p[0]), ys = polygon.map((p) => p[1]);
+  const w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys);
+  const axis = polygon.length === 4 && polygon.every((p, i) => {
+    const q = polygon[(i + 1) % 4];
+    return Math.abs(p[0] - q[0]) < 0.01 || Math.abs(p[1] - q[1]) < 0.01;
+  });
+  const one = (v) => (Math.round(v * 10) / 10).toFixed(1); // toFixed alone rounds 2.65 down to 2.6
+  const size = axis ? `${one(w)} × ${one(h)} m` : `${one(Math.abs(signedArea(polygon)))} m²`;
+  return name ? `${name} · ${size}` : size;
 }

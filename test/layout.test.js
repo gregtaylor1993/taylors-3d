@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeFloors, roomFloorId, wallSegments, markerPositions, lightGlow } from '../src/layout.js';
+import { mergeFloors, roomFloorId, wallSegments, markerPositions, lightGlow, roomLabel } from '../src/layout.js';
 import { pointInPolygon } from '../src/placement.js';
 
 const hass = {
@@ -115,5 +115,15 @@ describe('lightGlow', () => {
   it('uses rgb_color and brightness', () => {
     expect(lightGlow({ state: 'on', attributes: { rgb_color: [255, 0, 0], brightness: 255 } })).toEqual({ rgb: [255, 0, 0], strength: 1 });
     expect(lightGlow({ state: 'on', attributes: { brightness: 0 } })).toEqual({ rgb: [255, 196, 120], strength: 0.25 });
+  });
+});
+
+describe('roomLabel', () => {
+  it('rectangles show width × depth, others the area', () => {
+    expect(roomLabel('Kitchen', [[0, 0], [2.65, 0], [2.65, 3.75], [0, 3.75]], 'size')).toBe('Kitchen · 2.7 × 3.8 m');
+    expect(roomLabel('Hall', [[0, 0], [4, 0], [4, 2], [2, 2], [2, 5], [0, 5]], 'size')).toBe('Hall · 14.0 m²');
+    expect(roomLabel('Hall', [[0, 0], [4, 0], [4, 2]], 'name')).toBe('Hall');
+    expect(roomLabel('Hall', [[0, 0], [4, 0], [4, 2]], 'none')).toBe('');
+    expect(roomLabel('', [[0, 0], [1, 0], [1, 1], [0, 1]], 'size')).toBe('1.0 × 1.0 m');
   });
 });
