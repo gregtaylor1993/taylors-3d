@@ -31,15 +31,17 @@ describe('chainState', () => {
     'light.f': st('light.f', 'on', { brightness: 128 }),
     'switch.g': st('switch.g', 'off'),
     'switch.on': st('switch.on', 'on'),
+    'switch.x': st('switch.x', 'home'),
+    'climate.y': st('climate.y', 'heat'),
     'light.u': st('light.u', 'unavailable'),
   };
   it('own entity only', () => {
     const r = chainState({ group: null }, { entity: 'light.f' }, {}, states);
     expect(r.lit).toBe(true); expect(r.source.entity_id).toBe('light.f'); expect(r.reason).toBe(null);
   });
-  it('group controller off makes it dark with a reason', () => {
+  it('group controller off makes it dark with reason entity name', () => {
     const r = chainState({ group: 'facade' }, { entity: 'light.f' }, { facade: { entity: 'switch.g' } }, states);
-    expect(r.lit).toBe(false); expect(r.reason).toBe('group switch is off'); expect(r.entities).toEqual(['light.f', 'switch.g']);
+    expect(r.lit).toBe(false); expect(r.reason).toBe('switch.g is off'); expect(r.entities).toEqual(['light.f', 'switch.g']);
   });
   it('group controller only (no own entity)', () => {
     const r = chainState({ group: 'facade' }, { entity: null }, { facade: { entity: 'switch.on' } }, states);
@@ -51,6 +53,18 @@ describe('chainState', () => {
   });
   it('no entity at all is dark without reason', () => {
     expect(chainState({ group: null }, { entity: null }, {}, states)).toMatchObject({ lit: false, reason: null });
+  });
+  it('switch.x in home state is dark (isOn is on only)', () => {
+    const r = chainState({ group: null }, { entity: 'switch.x' }, {}, states);
+    expect(r.lit).toBe(false);
+  });
+  it('climate heat as own entity is dark', () => {
+    const r = chainState({ group: null }, { entity: 'climate.y' }, {}, states);
+    expect(r.lit).toBe(false);
+  });
+  it('no own entity + controller off gives reason with entity name', () => {
+    const r = chainState({ group: 'facade' }, { entity: null }, { facade: { entity: 'switch.g' } }, states);
+    expect(r.lit).toBe(false); expect(r.reason).toBe('switch.g is off');
   });
 });
 
@@ -82,6 +96,11 @@ describe('lightBudget', () => {
     expect(r.real.get('g2').factor).toBe(1.5);
     expect(r.shadows.size).toBe(0);
   });
+  it('group middle fixture with numeric collation (lamp2/lamp10/lamp3 → lamp3)', () => {
+    const fx = ['lamp2', 'lamp10', 'lamp3'].map((id) => f(id, { group: 'facade', max: 5 }));
+    const r = lightBudget(fx);
+    expect([...r.real.keys()]).toEqual(['lamp3']);
+  });
   it('at most N shadows, only castShadow !== false singles', () => {
     const fx = [1, 2, 3, 4, 5, 6].map((i) => f('p' + i, { max: i })).concat([f('n', { max: 100, castShadow: false })]);
     const r = lightBudget(fx);
@@ -95,11 +114,21 @@ describe('lightBudget', () => {
     expect(r.real.has('spot1')).toBe(true);
     expect(r.shadows.has('spot1')).toBe(false);
   });
+  it('tie-break equal max by id (alphabetical)', () => {
+    const fx = [f('z', { max: 10 }), f('a', { max: 10 })];
+    const r = lightBudget(fx, { points: 1 });
+    expect([...r.real.keys()]).toEqual(['a']);
+  });
 });
 
 describe('nightFactor / sunVector', () => {
   it('smoothstep between +6 and -6 degrees', () => {
     expect(nightFactor(30)).toBe(0); expect(nightFactor(-20)).toBe(1); expect(nightFactor(0)).toBeCloseTo(0.5);
+  });
+  it('non-finite input returns 0', () => {
+    expect(nightFactor(NaN)).toBe(0);
+    expect(nightFactor(Infinity)).toBe(0);
+    expect(nightFactor(-Infinity)).toBe(0);
   });
   it('east sun with north 0 points to +x', () => {
     const [x, y, z] = sunVector(90, 0, 0, 0); expect(x).toBeCloseTo(1); expect(y).toBeCloseTo(0); expect(z).toBeCloseTo(0);
@@ -118,4 +147,8 @@ describe('nightFactor / sunVector', () => {
 describe('screenNearest', () => {
   const pts = [{ id: 'a', x: 100, y: 100 }, { id: 'b', x: 130, y: 100 }];
   it('nearest within radius', () => { expect(screenNearest(pts, 118, 100, 30)).toBe('b'); expect(screenNearest(pts, 300, 300, 52)).toBe(null); });
+  it('exact tie: first point wins', () => {
+    const tied = [{ id: 'first', x: 100, y: 100 }, { id: 'second', x: 100, y: 100 }];
+    expect(screenNearest(tied, 100, 100, 10)).toBe('first');
+  });
 });

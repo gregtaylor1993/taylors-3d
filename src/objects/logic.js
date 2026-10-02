@@ -1,6 +1,5 @@
 // Pure logic for model objects: binding, chains, colour, budget, sun. No Three.js here.
-const ON = new Set(['on', 'open', 'home', 'charging', 'heat', 'cool', 'mowing']);
-const isOn = (s) => !!s && ON.has(s.state);
+const isOn = (s) => !!s && s.state === 'on';
 const bad = (s) => !s || s.state === 'unavailable' || s.state === 'unknown';
 
 export function bindObjects(objects, layoutObjects = {}, states = {}) {
@@ -19,6 +18,9 @@ export function bindObjects(objects, layoutObjects = {}, states = {}) {
   return out;
 }
 
+/**
+ * Chain object state through group controller. Callers gate on `lit`; `source` may be an off light.
+ */
 export function chainState(obj, binding, groups = {}, states = {}) {
   const ctrl = obj.group && groups[obj.group] && groups[obj.group].entity;
   const entities = [binding && binding.entity, ctrl].filter(Boolean);
@@ -27,7 +29,8 @@ export function chainState(obj, binding, groups = {}, states = {}) {
   const unavailable = sts.some(bad);
   const lit = !unavailable && sts.every(isOn);
   let reason = null;
-  if (!lit && !unavailable && ctrl && !isOn(states[ctrl]) && entities[0] !== ctrl) reason = 'group switch is off';
+  if (!lit && !unavailable && ctrl && !isOn(states[ctrl])) reason = `${ctrl} is off`;
+  else if (!lit && !unavailable && binding && binding.entity && !isOn(states[binding.entity])) reason = null;
   const source = sts.find((s, i) => s && entities[i].startsWith('light.')) || null;
   return { lit, unavailable, source, entities, reason };
 }
@@ -67,10 +70,10 @@ export function lightBudget(fixtures, { points = 8, spots = 4, shadows = 4 } = {
     if (f.group) { if (!groups.has(f.group)) groups.set(f.group, []); groups.get(f.group).push(f); } else cand.push({ f, factor: 1 });
   }
   for (const list of groups.values()) {
-    const sorted = list.slice().sort((a, b) => (a.id < b.id ? -1 : 1));
+    const sorted = list.slice().sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
     cand.push({ f: sorted[Math.floor((sorted.length - 1) / 2)], factor: 1.5, grouped: true });
   }
-  cand.sort((a, b) => (b.f.max || 0) - (a.f.max || 0));
+  cand.sort((a, b) => (b.f.max || 0) - (a.f.max || 0) || (a.f.id < b.f.id ? -1 : 1));
   const real = new Map(), shadowSet = new Set();
   let p = 0, s = 0;
   for (const c of cand) {
@@ -84,6 +87,7 @@ export function lightBudget(fixtures, { points = 8, spots = 4, shadows = 4 } = {
 }
 
 export function nightFactor(elevation) {
+  if (!Number.isFinite(elevation)) return 0;
   const t = Math.max(0, Math.min(1, (6 - elevation) / 12));
   return t * t * (3 - 2 * t);
 }
@@ -101,6 +105,9 @@ export function sunVector(azimuth, elevation, north = 0, alignRotation = 0) {
 
 export function screenNearest(points, x, y, radius) {
   let best = null, bd = radius;
-  for (const p of points) { const d = Math.hypot(p.x - x, p.y - y); if (d <= bd) { bd = d; best = p.id; } }
+  for (const p of points) {
+    const d = Math.hypot(p.x - x, p.y - y);
+    if (best === null ? d <= radius : d < bd) { bd = d; best = p.id; }
+  }
   return best;
 }
