@@ -118,6 +118,7 @@ const STYLE = `
   .stage.picking .fp-marker, .stage.picking .fp-handle { pointer-events: none; opacity: .45; }
   .panel details.report { margin: 6px 0; font-size: 12px; }
   .panel details.report summary { cursor: pointer; color: var(--secondary-text-color); }
+  .panel details.report ul, .panel .msg { user-select: text; -webkit-user-select: text; cursor: text; }
   .panel .pill.missing { background: rgba(255,152,0,.16); color: var(--warning-color, #ef8a00); }
   .panel table.floors { width: 100%; border-collapse: collapse; font-size: 12px; }
   .panel table.floors th { font-weight: normal; color: var(--secondary-text-color); text-align: left; font-size: 11px; }

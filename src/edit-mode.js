@@ -11,6 +11,22 @@ const CLICK_SLOP_PX = 5;
 const SNAP_PX = 10; // snap radius never smaller than this many screen pixels
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+// Clipboard API needs a secure context (HA over plain http has none): fall back to a hidden textarea.
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
+  } catch { /* fall through */ }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+  document.body.appendChild(ta);
+  ta.select();
+  let ok;
+  try { ok = document.execCommand('copy'); } catch { ok = false; }
+  ta.remove();
+  return ok;
+}
 const fmt = (v) => (Math.round(v * 100) / 100).toString();
 
 export class EditMode {
@@ -519,6 +535,8 @@ export class EditMode {
     const scroll = oldBody && this._renderedTab === this.tab ? oldBody.scrollTop : 0;
     const active = this.panel.contains(this.panel.getRootNode().activeElement) ? this.panel.getRootNode().activeElement : null;
     const focusKey = active && active.dataset && active.dataset.field ? [active.dataset.field, active.dataset.id || ''] : null;
+    const report = this.panel.querySelector('details.report');
+    if (report) this._reportOpen = report.open;
     this._renderedTab = this.tab;
     const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ['mower', 'Mower'], ['model', 'Model'], ['data', 'Data']];
     const body = { rooms: () => this._roomsTab(), devices: () => this._devicesTab(), mower: () => this._mowerTab(), model: () => this._modelTab(), data: () => this._dataTab() }[this.tab]();
@@ -860,7 +878,8 @@ export class EditMode {
       ${s(manifest.rooms.filter((r) => r.kind === 'room').length, 'room')}, ${s(manifest.rooms.filter((r) => r.kind === 'zone').length, 'zone')},
       ${s(objCount, 'object')}${objCount ? ' (object controls come in a later version)' : ''}. Click a part of the model to find it here.</p>`;
     if (manifest.errors.length || manifest.warnings.length) {
-      out += `<details class="report"><summary>${manifest.errors.length} error(s), ${manifest.warnings.length} warning(s)</summary><ul class="plain">`
+      out += `<details class="report" ${this._reportOpen ? 'open' : ''}><summary>${manifest.errors.length} error(s), ${manifest.warnings.length} warning(s)</summary>
+        <button class="link" data-act="md-copy-report">Copy to clipboard</button><ul class="plain">`
         + manifest.errors.map((e) => `<li class="bad">${esc(e)}</li>`).join('')
         + manifest.warnings.map((w) => `<li class="dim">${esc(w)}</li>`).join('') + '</ul></details>';
     }
@@ -941,6 +960,18 @@ export class EditMode {
         this._syncStageClasses();
         break;
       case 'md-ack': this._snapshotKnown(); return;
+      case 'md-copy-report': {
+        const mb = this.card.modelBindings();
+        if (!mb) return;
+        const { errors, warnings } = mb.manifest;
+        const text = [...errors.map((t) => `Error: ${t}`), ...warnings.map((t) => `Warning: ${t}`)].join('\n');
+        copyText(text).then((ok) => {
+          this.message = ok ? { text: `Copied ${errors.length + warnings.length} line(s).` }
+            : { text: 'Copy is blocked here; select the lines and copy them by hand.', error: true };
+          this.render();
+        });
+        return;
+      }
       case 'md-forget': {
         const m = this.layout.model || {};
         const k = btn.dataset.kind;
