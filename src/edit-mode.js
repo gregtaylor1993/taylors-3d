@@ -7,7 +7,8 @@ import { roomFloorId, LEVEL_SPACING } from './layout.js';
 import { pointInPolygon, signedArea } from './placement.js';
 import { buildMarkers, areaName } from './registry.js';
 import { readSource, calibrationError } from './mower.js';
-import { ruleState, setRuleState, nextEyeState, viewTree, pickSelector, nextViewId, unmatchedSelectors } from './views.js';
+import { ruleState, setRuleState, nextEyeState, viewTree, pickSelector, nextViewId, unmatchedSelectors, legacyShowRules } from './views.js';
+import { levelsFromFloorMap } from './bindings.js';
 
 const CLICK_SLOP_PX = 5;
 const SNAP_PX = 10; // snap radius never smaller than this many screen pixels
@@ -66,6 +67,7 @@ export class EditMode {
     this._handles = new Map();
     this.vwSel = null; // a hidden view chosen in the Views tab (visible views follow the chips)
     this.vwPick = null; // { sel, idx } last part clicked in 3D on the Views tab
+    this.vwExpanded = new Set(); // room/zone rows showing their objects
     this.menu = null;
     this._onMenuAway = (e) => { if (this.menu && !e.composedPath().includes(this.menu)) this._closeMenu(); };
   }
@@ -868,19 +870,31 @@ export class EditMode {
     const rules = this._layoutRules(v.id);
     if (idx && tree && this.view.model) {
       const eff = st.effective;
+      // fully shown = the node and everything below it visible (nodes are in pre-order)
+      const full = new Array(idx.nodes.length);
+      for (let k = idx.nodes.length - 1; k >= 0; k--) full[k] = !eff || (!!eff[k] && idx.nodes[k].children.every((c) => full[c]));
+      const yamlRules = ((card._config.views || {})[v.id] || {}).rules;
+      const yamlSels = new Set((Array.isArray(yamlRules) ? yamlRules : []).map((r) => r && (r.show ?? r.hide)));
       const eyeTitle = { default: 'Default (from the model); click: show', shown: 'Shown here; click: hide', hidden: 'Hidden here; click: back to default' };
       const eyeIcon = { default: 'mdi:eye-outline', shown: 'mdi:eye', hidden: 'mdi:eye-off' };
       const row = (r, cls = '') => {
         const on = eff ? r.nodes.some((n) => eff[n]) : true;
+        const part = on && !r.nodes.every((n) => full[n]);
         const state = ruleState(rules, r.sel);
         const picked = this.vwPick && this.vwPick.sel === r.sel ? ' picked' : '';
-        return `<li data-sel="${esc(r.sel)}" class="${cls}${on ? '' : ' off'}${picked}" style="--d:${r.depth}" title="${esc(r.path || r.sel)}">
-          <span class="state" title="${on ? 'Visible' : 'Hidden'} in this view"><ha-icon icon="${on ? 'mdi:cube-outline' : 'mdi:cube-off-outline'}"></ha-icon></span>
-          <span class="name">${esc(r.label)}</span>
+        const vis = part ? ['Partly shown', 'mdi:circle-half-full'] : on ? ['Visible', 'mdi:cube-outline'] : ['Hidden', 'mdi:cube-off-outline'];
+        const open = this.vwExpanded.has(r.sel);
+        const toggle = r.children && !r.sel.startsWith('level:')
+          ? `<button class="link expand" data-act="vw-expand" data-sel="${esc(r.sel)}" title="${open ? 'Hide' : 'Show'} its ${r.children} object(s)">${open ? '\u25be' : '\u25b8'}</button>` : '';
+        return `<li data-sel="${esc(r.sel)}" class="${cls}${on ? '' : ' off'}${part ? ' part' : ''}${picked}" style="--d:${r.depth}" title="${esc(r.path || r.sel)}">
+          <span class="state" title="${vis[0]} in this view"><ha-icon icon="${vis[1]}"></ha-icon></span>
+          <span class="name">${esc(r.label)}${part ? ' <span class="dim">partly</span>' : ''}</span>${toggle}
+          ${yamlSels.has(r.sel) ? '<span class="yaml" title="The card YAML has a rule for this part; it wins over this setting">YAML</span>' : ''}
           <button class="eye ${state}" data-act="vw-eye" data-sel="${esc(r.sel)}" title="${eyeTitle[state]}"><ha-icon icon="${eyeIcon[state]}"></ha-icon></button></li>`;
       };
+      const shownRows = tree.tree.filter((r) => !r.parent || r.parent.startsWith('level:') || this.vwExpanded.has(r.parent));
       out += '<div class="sub">Model</div>';
-      out += tree.tree.length ? '<ul class="vtree">' + tree.tree.map((r) => row(r, r.sel.startsWith('level:') ? 'lvl' : '')).join('') + '</ul>'
+      out += tree.tree.length ? '<ul class="vtree">' + shownRows.map((r) => row(r, r.sel.startsWith('level:') ? 'lvl' : '')).join('') + '</ul>'
         : '<p class="dim">No tagged levels or rooms.</p>';
       if (tree.layers.length) out += '<div class="sub">Layers</div><ul class="vtree">' + tree.layers.map((r) => row(r)).join('') + '</ul>';
       if (tree.groups.length) out += '<div class="sub">Model groups</div><ul class="vtree">' + tree.groups.map((r) => row(r)).join('') + '</ul>';
@@ -911,10 +925,12 @@ export class EditMode {
     if (!p) {
       this.vwPick = null;
       this.view.highlightModelNode(null);
+      this.message = { text: 'Click on a part of the model', warn: true };
       this.render();
       return;
     }
     this.vwPick = { sel: p.sel, idx: p.idx };
+    this.message = null;
     this.view.highlightModelNode(idx.nodes[p.idx].node);
     const tree = this._tree();
     const r = tree && [...tree.tree, ...tree.layers, ...tree.groups].find((x) => x.sel === p.sel);
@@ -983,13 +999,16 @@ export class EditMode {
   // Scroll the tree row of a picked part (or of its nearest listed ancestor) into view and flash it.
   _reveal(pick) {
     this.tab = 'views';
-    this.render();
     const tree = this._tree();
+    const r = tree && tree.tree.find((x) => x.sel === pick.sel);
+    if (r && r.parent && !r.parent.startsWith('level:')) this.vwExpanded.add(r.parent);
+    this.render();
     const idx = this.card.viewIndex();
     let sel = pick.sel;
     const rows = () => [...this.panel.querySelectorAll('ul.vtree li[data-sel]')];
     if (!rows().some((li) => li.dataset.sel === sel) && tree && idx) {
-      for (let p = pick.idx; p >= 0; p = idx.nodes[p].parent) if (tree.rowOf.has(p)) { sel = tree.rowOf.get(p); break; }
+      const shown = new Set(rows().map((li) => li.dataset.sel));
+      for (let p = pick.idx; p >= 0; p = idx.nodes[p].parent) if (shown.has(tree.rowOf.get(p))) { sel = tree.rowOf.get(p); break; }
     }
     const li = rows().find((x) => x.dataset.sel === sel);
     if (!li) return;
@@ -1042,9 +1061,17 @@ export class EditMode {
         return true;
       }
       case 'vw-save-cam':
-        card.saveViewPatch(v.id, { camera: this.view.getCamera() });
         this.message = { text: `Saved the current camera as the start of "${v.label}".` };
+        card.saveViewPatch(v.id, { camera: this.view.getCamera() });
+        this.render();
         return true;
+      case 'vw-expand': {
+        const sel = btn.dataset.sel;
+        if (this.vwExpanded.has(sel)) this.vwExpanded.delete(sel);
+        else this.vwExpanded.add(sel);
+        this.render();
+        return true;
+      }
       case 'vw-reset-cam':
       case 'vw-reset':
         card.saveViewPatch(v.id, act === 'vw-reset' ? { rules: [], camera: null } : { camera: null });
@@ -1288,10 +1315,8 @@ export class EditMode {
     const id = btn.dataset.id;
     const sel = this.room(this.selectedRoom);
     this.message = null;
-    if (btn.dataset.act.startsWith('vw-') && this._viewsClick(btn.dataset.act, btn)) {
-      this.render();
-      return;
-    }
+    // Views tab actions commit; the rebuild after the commit renders the panel once
+    if (btn.dataset.act.startsWith('vw-') && this._viewsClick(btn.dataset.act, btn)) return;
     switch (btn.dataset.act) {
       case 'tab':
         if (id !== this.tab) {
@@ -1449,11 +1474,18 @@ export class EditMode {
       const v = el.value;
       const m = this.layout.model || {};
       const levels = { ...(m.levels || {}) };
-      if (v === 'auto') delete levels[el.dataset.id]; // back to automatic
-      else if (v.startsWith('floor:')) levels[el.dataset.id] = { floor: v.slice(6) };
-      else if (v === 'none') levels[el.dataset.id] = { floor: null };
+      const id = el.dataset.id;
+      if (v === 'auto') delete levels[id]; // back to automatic
+      else if (v.startsWith('floor:')) levels[id] = { floor: v.slice(6) };
+      else if (v === 'none') levels[id] = { floor: null };
       else return;
-      this.setModelProps({ levels });
+      // a legacy show mode on this level becomes view rules before the binding drops it
+      const c = this.card._config;
+      const saved = { ...(c.model ? levelsFromFloorMap(c.model_floors) : {}), ...(m.levels || {}) };
+      const mb = this.card._mb;
+      const views = mb ? legacyShowRules(this.layout.views, this.card._views, id, saved, mb.manifest.levels) : this.layout.views;
+      this.commit({ ...this.layout, model: { ...m, levels }, ...(views !== this.layout.views ? { views } : {}) });
+      this.render();
     } else if (f === 'md-room') {
       const m = this.layout.model || {};
       const rooms = { ...(m.rooms || {}) };

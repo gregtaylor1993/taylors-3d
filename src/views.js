@@ -12,14 +12,42 @@ export function parseSelector(s) {
   return KINDS.includes(kind) && value ? { kind, value } : null;
 }
 
+// Path segments escape \\ * / # in names with a backslash; a name shared by several siblings gets
+// "#<n>" (0-based among them) so every node path is unique.
+export const escapeName = (name) => String(name).replace(/[\\*/#]/g, '\\$&');
+
 const globCache = new Map();
 function globRe(pattern) {
   let re = globCache.get(pattern);
   if (re) return re;
-  const esc = (t) => t.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-  const segs = pattern.split('/').filter((seg, i, a) => !(seg === '**' && a[i - 1] === '**'));
-  const body = segs.map((seg) => (seg === '**' ? '.*' : esc(seg).replace(/\*/g, '[^/]*'))).join('/')
-    .replace(/\.\*\//g, '(?:.*/)?');
+  const reEsc = (t) => t.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  // split on unescaped '/', keeping escapes inside segments
+  const segs = [];
+  let cur = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === '\\' && i + 1 < pattern.length) { cur += c + pattern[++i]; continue; }
+    if (c === '/') { segs.push(cur); cur = ''; continue; }
+    cur += c;
+  }
+  segs.push(cur);
+  const segRe = (seg) => {
+    let out = '';
+    for (let i = 0; i < seg.length; i++) {
+      const c = seg[i];
+      if (c === '\\' && i + 1 < seg.length) out += reEsc(c + seg[++i]); // literal (paths keep the escape)
+      else if (c === '*') out += '(?:\\\\.|[^/\\\\])*';
+      else out += reEsc(c);
+    }
+    return out;
+  };
+  const list = segs.filter((seg, i, a) => !(seg === '**' && a[i - 1] === '**'));
+  let body = '';
+  list.forEach((seg, i) => {
+    const last = i === list.length - 1;
+    if (seg === '**') body += last ? '.*' : '(?:.*/)?';
+    else body += segRe(seg) + (last ? '' : '/');
+  });
   re = new RegExp('^' + body + '$');
   globCache.set(pattern, re);
   return re;
@@ -27,20 +55,36 @@ function globRe(pattern) {
 
 export function nodeIndex(adapter, manifest) {
   const nodes = [];
-  const walk = (node, parent, parentPath, levelId) => {
+  // unique path segment per sibling list
+  const segments = (list) => {
+    const names = list.map((n) => adapter.name(n));
+    const count = new Map(), seen = new Map();
+    for (const n of names) count.set(n, (count.get(n) || 0) + 1);
+    return names.map((n) => {
+      if (count.get(n) < 2) return { seg: escapeName(n), dup: null };
+      const k = seen.get(n) || 0;
+      seen.set(n, k + 1);
+      return { seg: escapeName(n) + '#' + k, dup: k };
+    });
+  };
+  const walk = (node, parent, parentPath, levelId, { seg, dup }) => {
     const name = adapter.name(node);
-    const path = parentPath ? `${parentPath}/${name}` : name;
+    const path = parentPath ? `${parentPath}/${seg}` : seg;
     const entry = manifest.byNode.get(node) || null;
     const fp = (adapter.extras(node) || {}).fp || {};
     const layers = Array.isArray(fp.layer) ? fp.layer.filter((x) => typeof x === 'string') : typeof fp.layer === 'string' ? [fp.layer] : [];
     const tag = entry ? { kind: entry.kind, id: entry.id, role: entry.role || null, type: entry.type || null, group: entry.group || null } : null;
     const lvl = entry && entry.kind === 'level' ? entry.id : levelId;
     const i = nodes.length;
-    nodes.push({ node, parent, children: [], path, name, layers, tag, levelId: lvl });
+    nodes.push({ node, parent, children: [], path, name, dup, layers, tag, levelId: lvl });
     if (parent >= 0) nodes[parent].children.push(i);
-    for (const c of adapter.children(node)) walk(c, i, path, lvl);
+    const kids = adapter.children(node);
+    const segs = segments(kids);
+    kids.forEach((c, k) => walk(c, i, path, lvl, segs[k]));
   };
-  for (const r of adapter.roots()) walk(r, -1, '', null);
+  const roots = adapter.roots();
+  const rootSegs = segments(roots);
+  roots.forEach((r, k) => walk(r, -1, '', null, rootSegs[k]));
   return { nodes };
 }
 
@@ -289,7 +333,7 @@ export function viewTree(index, labels = {}) {
   const row = (sel, i, depth, extra) => {
     let r = rows.get(sel);
     if (r) { r.nodes.push(i); return null; }
-    r = { sel, label: labels[sel] || nodes[i].name || sel, depth, nodes: [i], ...extra };
+    r = { sel, label: labels[sel] || nodes[i].name || sel, depth, nodes: [i], parent: null, children: 0, ...extra };
     rows.set(sel, r);
     return r;
   };
@@ -302,22 +346,26 @@ export function viewTree(index, labels = {}) {
   const levels = tagged(['level']), places = tagged(['room', 'zone']), objects = tagged(['object']);
   const tree = [];
   const push = (r) => { if (r) tree.push(r); };
-  const objectsUnder = (p, depth) => objects.filter((o) => nearest(o, ['room', 'zone', 'level']) === p)
-    .forEach((o) => push(row(sel(nodes[o]), o, depth)));
-  const placesUnder = (lv, depth) => places.filter((p) => nearest(p, ['level']) === lv).forEach((p) => {
-    const r = row(sel(nodes[p]), p, depth);
+  const objectsUnder = (p, depth, parent) => objects.filter((o) => nearest(o, ['room', 'zone', 'level']) === p).forEach((o) => {
+    const r = row(sel(nodes[o]), o, depth, { parent: parent ? parent.sel : null });
     push(r);
-    objectsUnder(p, depth + 1);
+    if (r && parent) parent.children++;
+  });
+  const placesUnder = (lv, depth, parent) => places.filter((p) => nearest(p, ['level']) === lv).forEach((p) => {
+    const r = row(sel(nodes[p]), p, depth, { parent: parent ? parent.sel : null });
+    push(r);
+    if (r && parent) parent.children++;
+    objectsUnder(p, depth + 1, r);
   });
   for (const lv of levels) {
     const r = row(sel(nodes[lv]), lv, 0);
     if (!r) continue;
     push(r);
-    placesUnder(lv, 1);
-    objectsUnder(lv, 1);
+    placesUnder(lv, 1, r);
+    objectsUnder(lv, 1, r);
   }
-  placesUnder(-1, 0); // rooms/zones outside any level
-  objectsUnder(-1, 0);
+  placesUnder(-1, 0, null); // rooms/zones outside any level
+  objectsUnder(-1, 0, null);
 
   const layers = [];
   nodes.forEach((n, i) => n.layers.forEach((name) => {
@@ -330,7 +378,7 @@ export function viewTree(index, labels = {}) {
   nodes.forEach((n, i) => {
     depth[i] = n.tag && n.tag.kind === 'level' ? 0 : (n.parent >= 0 ? depth[n.parent] : 0) + 1;
     if (!n.tag && n.name && n.children.length && depth[i] <= 2) {
-      const r = row('node:' + n.path, i, depth[i] - 1, { path: n.path });
+      const r = row('node:' + n.path, i, depth[i] - 1, { path: n.path, label: n.dup === null || n.dup === undefined ? n.name : `${n.name} #${n.dup + 1}` });
       if (r) groups.push(r);
     }
   });
@@ -365,4 +413,25 @@ export function nextViewId(ids) {
   let n = 1;
   while (used.has('view_' + n)) n++;
   return { id: 'view_' + n, n };
+}
+
+// A level's legacy show mode (layout.model.levels[id].show) as layout rules: the same rules the
+// migration adds to generated views, put before each view's own layout rules. Used before the
+// "belongs to HA floor" dropdown drops the show mode. Returns layoutViews unchanged when there is none.
+export function legacyShowRules(layoutViews, views, levelId, savedLevels, levels) {
+  const b = (savedLevels || {})[levelId];
+  if (!b || typeof b !== 'object' || !['hidden', 'always', 'all-only', 'only'].includes(b.show)) return layoutViews;
+  const one = { [levelId]: b };
+  const mig = migrateShowModes(one);
+  const out = { ...(layoutViews || {}) };
+  let changed = false;
+  for (const v of views || []) {
+    if (v.source !== 'generated') continue;
+    const add = migratedRules(v.id, mig, one, levels || []);
+    if (!add.length) continue;
+    const cur = obj(out[v.id]);
+    out[v.id] = { ...cur, rules: [...add.map((r) => ({ ...r })), ...(Array.isArray(cur.rules) ? cur.rules : [])] };
+    changed = true;
+  }
+  return changed ? out : layoutViews;
 }

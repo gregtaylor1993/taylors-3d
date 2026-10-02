@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { nodeIndex, ruleState, setRuleState, nextEyeState, viewTree, pickSelector, orderViews, nextViewId } from '../src/views.js';
+import { nodeIndex, ruleState, setRuleState, nextEyeState, viewTree, pickSelector, orderViews, nextViewId, parseSelector, matches, legacyShowRules } from '../src/views.js';
 import { buildManifest } from '../src/manifest.js';
 
 const tree = (roots) => {
@@ -104,5 +104,69 @@ describe('orderViews / nextViewId', () => {
   it('picks the first free view_<n>', () => {
     expect(nextViewId(['a', 'view_1', 'view_3'])).toEqual({ id: 'view_2', n: 2 });
     expect(nextViewId([])).toEqual({ id: 'view_1', n: 1 });
+  });
+});
+
+describe('unique node selectors', () => {
+  const chair = () => ({ name: 'Chair' });
+  const odd = { name: 'a*b/c#d', children: [{ name: 'x' }] };
+  const room = { name: 'Dining', children: [chair(), chair(), chair(), { name: 'Table' }, odd] };
+  const ad = tree([room, { name: 'Dining' }]);
+  const ix = nodeIndex(ad, buildManifest(ad));
+  const paths = ix.nodes.map((n) => n.path);
+  const m = (sel, path) => matches(parseSelector(sel), ix.nodes[paths.indexOf(path)]);
+  it('suffixes ambiguous sibling names with #<n>, leaves unique ones alone', () => {
+    expect(paths).toEqual(['Dining#0', 'Dining#0/Chair#0', 'Dining#0/Chair#1', 'Dining#0/Chair#2', 'Dining#0/Table',
+      'Dining#0/a\\*b\\/c\\#d', 'Dining#0/a\\*b\\/c\\#d/x', 'Dining#1']);
+    expect(ix.nodes[2].dup).toBe(1);
+    expect(ix.nodes[4].dup).toBe(null);
+  });
+  it('a suffixed selector matches one sibling only', () => {
+    expect(m('node:Dining#0/Chair#1', 'Dining#0/Chair#1')).toBe(true);
+    expect(m('node:Dining#0/Chair#1', 'Dining#0/Chair#0')).toBe(false);
+    expect(m('node:**/Chair*', 'Dining#0/Chair#2')).toBe(true);
+  });
+  it('escaped * and / in names match literally', () => {
+    expect(m('node:Dining#0/a\\*b\\/c\\#d', 'Dining#0/a\\*b\\/c\\#d')).toBe(true);
+    expect(m('node:Dining#0/a\\*b\\/c\\#d/x', 'Dining#0/a\\*b\\/c\\#d/x')).toBe(true);
+    expect(m('node:Dining#0/a\\*b\\/c\\#d', 'Dining#0/Table')).toBe(false);
+    expect(m('node:Dining#0/*/x', 'Dining#0/a\\*b\\/c\\#d/x')).toBe(true);
+  });
+  it('group rows label duplicates with their number', () => {
+    const t = viewTree(nodeIndex(tree([{ name: 'G', children: [{ name: 'S', children: [{ name: 'm' }] }, { name: 'S', children: [{ name: 'm' }] }] }]),
+      buildManifest(tree([]))));
+    expect(t.groups.map((r) => [r.sel, r.label])).toEqual([['node:G', 'G'], ['node:G/S#0', 'S #1'], ['node:G/S#1', 'S #2']]);
+  });
+});
+
+describe('tree parents', () => {
+  it('objects in a room name the room row as parent', () => {
+    const t = viewTree(idx);
+    expect(t.tree.find((r) => r.sel === 'object:sofa').parent).toBe('room:kitchen');
+    expect(t.tree.find((r) => r.sel === 'object:l1').parent).toBe('level:ground');
+    expect(t.tree.find((r) => r.sel === 'room:kitchen').children).toBe(1);
+  });
+});
+
+describe('legacyShowRules', () => {
+  const levels = [{ id: 'g', role: 'storey', order: 0 }, { id: 'f', role: 'storey', order: 1 }, { id: 'ext', role: 'exterior' }];
+  const views = [{ id: 'g', source: 'generated' }, { id: 'f', source: 'generated' }, { id: 'all', source: 'generated' }, { id: 'x', source: 'added' }];
+  it('moves a level\'s legacy show mode into the views\' layout rules (before existing ones)', () => {
+    const saved = { ext: { show: 'hidden', floor: 'ground' }, f: { show: 'only', floor: 'first' } };
+    const lv = { g: { rules: [{ show: 'layer:a' }], camera: null } };
+    expect(legacyShowRules(lv, views, 'ext', saved, levels)).toEqual({
+      g: { rules: [{ hide: 'level:ext' }, { show: 'layer:a' }], camera: null },
+      f: { rules: [{ hide: 'level:ext' }] },
+      all: { rules: [{ hide: 'level:ext' }] },
+    });
+    expect(legacyShowRules({}, views, 'f', saved, levels)).toEqual({ g: { rules: [{ hide: 'level:f' }] } });
+    expect(legacyShowRules({}, views, 'g', { g: { show: 'all-only' } }, levels)).toEqual({ f: { rules: [{ hide: 'level:g' }] } });
+    expect(legacyShowRules({}, views, 'g', { g: { show: 'always' } }, levels)).toEqual({
+      g: { rules: [{ show: 'level:g' }] }, f: { rules: [{ show: 'level:g' }] }, all: { rules: [{ show: 'level:g' }] } });
+  });
+  it('returns the same object when there is no legacy mode', () => {
+    const lv = {};
+    expect(legacyShowRules(lv, views, 'g', { g: { floor: 'x' } }, levels)).toBe(lv);
+    expect(legacyShowRules(lv, views, 'g', {}, levels)).toBe(lv);
   });
 });

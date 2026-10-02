@@ -200,6 +200,10 @@ const STYLE = `
   .panel ul.vtree button.eye.default { opacity: .7; }
   .panel ul.vtree li.flash { animation: fp-flash 1.2s ease-out; }
   @keyframes fp-flash { 0%, 40% { background: color-mix(in srgb, var(--primary-color, #03a9f4) 35%, transparent); } 100% { background: transparent; } }
+  .panel ul.vtree li.part .state { color: var(--primary-color); }
+  .panel ul.vtree button.expand { font-size: 12px; color: var(--secondary-text-color); padding: 0 4px; }
+  .panel ul.vtree .yaml { font-size: 9.5px; padding: 0 4px; border-radius: 4px; letter-spacing: .04em;
+    border: 1px solid var(--divider-color, rgba(0,0,0,.2)); color: var(--secondary-text-color); }
   .panel ul.vtree li.gone .name { text-decoration: line-through; opacity: .6; }
   .fp-pickmenu { position: absolute; z-index: 5; display: flex; flex-direction: column; gap: 2px; padding: 6px; min-width: 170px;
     box-sizing: border-box; border-radius: 8px; font-size: 12.5px; color: var(--primary-text-color);
@@ -504,13 +508,18 @@ class Floorplan3dCard extends HTMLElement {
     const mb = this.modelBindings();
     this._mb = mb;
     const viewsChanged = this._resolveViewList(mb);
+    const viewsOnly = viewsChanged === 'views'; // only layout.views / view_order: no scene or marker rebuild
+    let viewRefreshed = false;
     const modelKey = mb ? JSON.stringify([mb.levels, mb.rooms, this._modelAlign()]) : '';
-    if (structure || viewsChanged || l.rooms !== b.rooms || l.floors !== b.lfloors || h.floors !== b.floors || h.areas !== b.areas
+    if (structure || (viewsChanged && !viewsOnly) || l.rooms !== b.rooms || l.floors !== b.lfloors || h.floors !== b.floors || h.areas !== b.areas
       || (mb && mb.manifest) !== b.manifest || modelKey !== b.modelKey) {
       b.manifest = mb && mb.manifest;
       b.modelKey = modelKey;
-      this._buildStructure(mb, viewsChanged);
+      this._buildStructure(mb, !!viewsChanged);
       markers = true;
+    } else if (viewsOnly) {
+      this._refreshViews();
+      viewRefreshed = true;
     }
     const sig = registrySignature(h);
     const m = l.mower || null;
@@ -537,7 +546,7 @@ class Floorplan3dCard extends HTMLElement {
       this._refreshStates();
       this._refreshMower(mower);
     }
-    if (markers && this._editing) this._edit.afterUpdate();
+    if ((markers || viewRefreshed) && this._editing) this._edit.afterUpdate();
     else if (this._editing) this._edit.onStates();
   }
 
@@ -677,17 +686,9 @@ class Floorplan3dCard extends HTMLElement {
       };
     });
 
-    // the active view: kept while it exists, else the configured / first one
-    this._viewStates = new Map();
     const fresh = !!this._viewFresh;
     this._viewFresh = false;
-    if (!this._views.some((v) => v.id === this._viewId && !v.hidden)) {
-      const withRooms = this._floors.find((f) => this._roomList.some((r) => r.floorId === f.id)) || this._floors[0];
-      this._viewId = defaultViewId(this._views, {
-        viewId: this._config.view_id, floor: this._config.floor, fallback: this._view.model ? null : withRooms.id,
-      }, (v) => this._stateFor(v).floors);
-      this._floorOnly = null;
-    }
+    this._pickView();
     if (viewsChanged) this._floorOnly = null;
     const cur = this.currentView();
     this._viewState = cur ? this._stateFor(cur) : null;
@@ -701,6 +702,31 @@ class Floorplan3dCard extends HTMLElement {
       this._fitted = false;
       this._initialCamera();
     }
+  }
+
+  // The active view: kept while it exists, else the configured / first one. Resets the per-view states.
+  _pickView() {
+    this._viewStates = new Map();
+    if (!this._views.some((v) => v.id === this._viewId && !v.hidden)) {
+      const withRooms = this._floors.find((f) => this._roomList.some((r) => r.floorId === f.id)) || this._floors[0];
+      this._viewId = defaultViewId(this._views, {
+        viewId: this._config.view_id, floor: this._config.floor, fallback: this._view.model ? null : withRooms.id,
+      }, (v) => this._stateFor(v).floors);
+      this._floorOnly = null;
+    }
+  }
+
+  // View settings changed (rules, labels, cameras, floors, cut, order): re-resolve visibility and
+  // marker states only; the scene, rooms and markers stay.
+  _refreshViews() {
+    this._pickView();
+    this._floorOnly = null;
+    const cur = this.currentView();
+    this._viewState = cur ? this._stateFor(cur) : null;
+    if (this._labelKeyNow() !== this._labelKey) this._pushStructure();
+    this._applyViewVisibility();
+    this._applyMarkerStates();
+    this._syncToolbar();
   }
 
   // Rooms, walls and labels into the view. Labels with a model: edit mode, or storey views for
@@ -734,16 +760,19 @@ class Floorplan3dCard extends HTMLElement {
     const manifest = mb ? mb.manifest : null;
     const haFloors = mergeFloors(this._hass, manifest ? { floors: [] } : l);
     const savedLevels = { ...(this._config.model ? levelsFromFloorMap(this._config.model_floors) : {}), ...((l.model && l.model.levels) || {}) };
-    const key = JSON.stringify([haFloors.map((f) => [f.id, f.name]), l.views || null, l.view_order || null, this._config.views || null, savedLevels, mb ? mb.levels : null]);
-    if (manifest === b.viewManifest && key === b.viewKey) return false;
+    const key = JSON.stringify([haFloors.map((f) => [f.id, f.name]), this._config.views || null, savedLevels, mb ? mb.levels : null]);
+    const vkey = JSON.stringify([l.views || null, l.view_order || null]);
+    if (manifest === b.viewManifest && key === b.viewKey && vkey === b.viewsKey) return false;
+    const onlyViews = manifest === b.viewManifest && key === b.viewKey && !!this._floors;
     if (manifest !== b.viewManifest) {
       this._index = manifest && this._view.model ? nodeIndex(threeAdapter(this._view.model.root), manifest) : null;
       this._viewFresh = true;
     }
     b.viewManifest = manifest;
     b.viewKey = key;
+    b.viewsKey = vkey;
     this._views = orderViews(resolveViews({ manifest, haFloors, layoutViews: l.views, yamlViews: this._config.views, savedLevels }), l.view_order);
-    return true;
+    return onlyViews ? 'views' : true;
   }
 
   // Per view: effective node visibility, primary storey, linked HA floors (cached until the next rebuild).

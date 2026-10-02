@@ -261,8 +261,10 @@ try {
   check('legacy "hidden"', JSON.stringify(await vis()) === '[false,true]');
   await selectLevel('lvl_a0', 'auto');
   await sleep(200);
-  check('choose "auto" removes the saved binding', !('lvl_a0' in (await page.evaluate(`${card}._layout.model.levels`))) && JSON.stringify(await vis()) === '[true,true]'
-    && await page.evaluate(`${card}.shadowRoot.querySelector('[data-field=md-level][data-id=lvl_a0]').value === 'auto'`));
+  check('choose "auto" removes the saved binding, the legacy mode stays as view rules', !('lvl_a0' in (await page.evaluate(`${card}._layout.model.levels`)))
+    && JSON.stringify(await vis()) === '[false,true]'
+    && JSON.stringify(await page.evaluate(`${card}._layout.views.all.rules`)).includes('{"hide":"level:lvl_a0"}'), JSON.stringify(await page.evaluate(`${card}._layout.views`)))
+  check('dropdown shows auto again', await page.evaluate(`${card}.shadowRoot.querySelector('[data-field=md-level][data-id=lvl_a0]').value === 'auto'`));
 
   // untagged model: loads whole, no rooms
   const untagged = path.join(root, 'screenshots', 'untagged.glb');
