@@ -115,7 +115,7 @@ The binding keeps only the floor (`{ floor }` or auto). The Model tab's level dr
   model's `fp.layer` names; for untagged parts the model's own groups two levels deep. Each row has a
   three-state eye: default (inherits), shown, hidden. Rows show the resolved state.
 - **Click in 3D** (Views tab open): the picked part is highlighted and a small menu offers
-  "Hide on this floor", "Show on this floor", "Hide on all floors", "Reveal in tree". Picks walk up to
+  "Hide in this view", "Show in this view", "Hide in all views", "Reveal in tree". Picks walk up to
   the nearest tagged node; untagged meshes pick the deepest named group (not single meshes) so a click
   hides a meaningful part.
 - **Camera**: "Save current view as this floor's start" and "Reset camera".
@@ -198,7 +198,7 @@ Room labels (edit mode with a model; always without a model) show the name and t
   YAML merge, measured elevations, outline extraction from triangle lists (rectangle, L-shape, hole-free
   with extra faces, failure → null), label formatting.
 - Headless: Views tab tree toggles hide/show a level and a layer on the demo model; click-in-3D
-  "Hide on this floor" hides the clicked group only on that floor; saved camera restores after
+  "Hide in this view" hides the clicked group only on that floor; saved camera restores after
   switching floors and on reload; pick a room on the demo model creates a polygon matching the room's
   outline within 0.1 m; untagged demo copy: no elevation inputs visible, elevation derived; legacy
   `floor:` model: cut checkbox present and default on.

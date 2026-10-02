@@ -799,7 +799,7 @@ export function roomLabel(name, polygon, mode = 'size') {
   - First floor view: ground-floor devices faded (`fp-faded`), first-floor devices not faded;
   - Exterior view: all levels visible, every room marker shown;
   - Views tab: eye on `layer:furniture` → furniture nodes hidden only in the current view (switch view → visible again); stored rule in `layout.views.<id>.rules`;
-  - click in 3D on a furniture box → menu → "Hide on this floor" → that box's group hidden; "Reveal in tree" scrolls to its row;
+  - click in 3D on a furniture box → menu → "Hide in this view" → that box's group hidden; "Reveal in tree" scrolls to its row;
   - "Save current view as start" → change camera, switch views and back → camera restored (distance within 0.1 m);
   - linked floors: uncheck the floor of Ground floor → its devices without model rooms disappear;
   - untagged copy (strip extras and rename to legacy names via `rewriteGlbJson`): generated views Ground/…/All, `cut` checkbox present and checked, elevation inputs absent in Rooms tab;

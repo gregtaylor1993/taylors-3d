@@ -145,7 +145,7 @@ Also update the existing `resolveLevels` expectations: exterior now `{ show: 'al
   - without a model (fresh demo page, no `?model`): `toneMapping === 0` (NoToneMapping), `shadowMap.enabled === false`, room labels present, `button.daynight` hidden;
   - `renderer.getPixelRatio() <= 1.5`.
   - Save screenshots `screenshots/look-day.png`, `screenshots/look-night.png` (demo model, 3D, ground floor).
-- [ ] **Step 6: Real-model screenshots** (do not commit them; they're for the controller): if `~/Downloads/house_floorplan3d/house.glb` exists, add an optional block at the end of `scripts/model-check.mjs` that only runs when the env var `REAL_MODEL` is set to a path: upload it, select each floor chip and save `screenshots/real-<floor>-day.png` plus one night shot. Run it once with `REAL_MODEL=~/Downloads/house_floorplan3d/house.glb`.
+- [ ] **Step 6: Real-model screenshots** (do not commit them; they're for the controller): if `<path to your house.glb>` exists, add an optional block at the end of `scripts/model-check.mjs` that only runs when the env var `REAL_MODEL` is set to a path: upload it, select each floor chip and save `screenshots/real-<floor>-day.png` plus one night shot. Run it once with `REAL_MODEL=<path to your house.glb>`.
 - [ ] **Step 7: Docs**:
   - spec section 2: replace the level default text with the Global Constraints' modes and defaults (stacking `with`, `only`, exterior `always`, roof `all-only`) and add "Tagged models are never cut; legacy models keep the cut at wall height."
   - guide: under Structure rules add "Walls stay at full storey height; each storey's ceiling/slab belongs to the storey above, so hiding the upper level opens the view into the rooms."
