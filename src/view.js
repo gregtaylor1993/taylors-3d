@@ -104,6 +104,10 @@ export class FloorplanView {
     this.trail = null;
     this.modelGroup = new THREE.Group();
     this.scene.add(this.modelGroup);
+    this.objectsGroup = new THREE.Group(); // model objects: the real light pool and spot targets
+    this.scene.add(this.objectsGroup);
+    this.objectLayer = null; // ObjectLayer (registers itself); reset when the model goes
+    this.onObjectsInvalidate = null; // called when model placement or visibility changed
     this.model = null; // { id, root, manifest }
     this.modelClip = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
     this.sectionClip = null; // side section: global clipping plane (card world) or null
@@ -320,6 +324,7 @@ export class FloorplanView {
       this._shadowDirty();
       this._applyFloorVisibility();
       this._scheduleOcclusion(0);
+      this._objectsInvalid();
       this.dirty = true;
     };
     if (this.model && this.model.id === id) {
@@ -475,6 +480,7 @@ export class FloorplanView {
     this._modelVisibility = null;
     if (!this.model) return;
     this.highlightModelNode(null);
+    if (this.objectLayer) this.objectLayer.setModel(null); // restores cloned materials before they are disposed
     this._clearGroup(this.modelGroup);
     this.model = null;
     this._occBoxes = null;
@@ -1125,6 +1131,7 @@ export class FloorplanView {
     if (model !== this._shadowSig) {
       this._shadowSig = model;
       if (this.model) this._shadowDirty();
+      this._objectsInvalid(); // lamps on hidden levels give their pool lights to visible ones
     }
     const occ = model + '|' + this.mode + '|' + this._shownMarkersSig();
     if (occ !== this._occSig) {
@@ -1168,6 +1175,19 @@ export class FloorplanView {
   _shadowDirty() {
     this.renderer.shadowMap.needsUpdate = true;
     this.stats.shadow++;
+  }
+
+  markDirty() {
+    this.dirty = true;
+  }
+
+  requestShadowUpdate() {
+    this._shadowDirty();
+    this.dirty = true;
+  }
+
+  _objectsInvalid() {
+    if (this.onObjectsInvalidate && this.model) this.onObjectsInvalidate();
   }
 
   // The 3D camera before switching to Top (null until then).
@@ -1523,6 +1543,8 @@ export class FloorplanView {
     this._disposeStems();
     this.setPivotMarker(false);
     this._disposeModel();
+    if (this.objectLayer) this.objectLayer.dispose();
+    this.onObjectsInvalidate = null;
     this.setMapOverlay(null);
     this.setTrail(null);
     this.markerObjects.clear();

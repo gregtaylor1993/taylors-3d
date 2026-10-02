@@ -17,6 +17,8 @@ import {
   defaultViewId, viewCut, orderViews, sectionPlane, sectionCamera, zoomToFor, roomAt, exteriorShown, cameraToCard, topCameraToCard,
 } from './views.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
+import { ObjectLayer } from './objects/layer.js';
+import { bindObjects } from './objects/logic.js';
 
 const VERSION = '0.3.1';
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
@@ -253,6 +255,10 @@ class Floorplan3dCard extends HTMLElement {
     this._daylight = true;
     this._section = false; // side section toggle
     this._sectionPreview = null; // Views tab slider: plane shown while dragging
+    this._objects = null; // ObjectLayer: model lamps and the real light pool
+    this._bindings = new Map(); // object id -> binding (objects/logic.js bindObjects)
+    this._boundEntities = new Set(); // entities bound to a model object: no marker of their own
+    this._bindKey = null;
   }
 
   static getStubConfig() {
@@ -281,6 +287,7 @@ class Floorplan3dCard extends HTMLElement {
       this._view.setOcclusion(this._config.occlusion !== false);
       this._applyZoomTo();
       this._loadModel();
+      this._updateObjects(); // lights: auto | off
     }
   }
 
@@ -313,6 +320,7 @@ class Floorplan3dCard extends HTMLElement {
     const prevModel = this._view.model;
     this._view.setModel(opts).then((err) => {
       if (this._view.model !== prevModel && this._section) this._dropSection();
+      this._objects.setModel(this._view.model);
       this._notice.textContent = err || '';
       this._notice.hidden = !err;
       // a new model resets the views; the first view applied frames it (see _resolveViewList)
@@ -455,6 +463,8 @@ class Floorplan3dCard extends HTMLElement {
     });
     this._editBtn.addEventListener('click', () => this._toggleEdit());
     this._view = new FloorplanView(this._stage);
+    this._objects = new ObjectLayer(this._view);
+    this._view.onObjectsInvalidate = () => this._updateObjects(); // view, section or placement changed
     this._view.setOcclusion(this._config.occlusion !== false);
     this._view.setMode(this._mode);
     this._loadModel();
@@ -559,7 +569,7 @@ class Floorplan3dCard extends HTMLElement {
     const sig = registrySignature(h);
     const m = l.mower || null;
     const mowerKey = m ? `${m.entity}|${m.floor_id}` : '';
-    if (markers || !b.sig || sig.some((x, i) => x !== b.sig[i]) || l.pins !== b.pins || l.hidden !== b.hidden || mowerKey !== b.mowerKey) {
+    if (this._syncBindings() || markers || !b.sig || sig.some((x, i) => x !== b.sig[i]) || l.pins !== b.pins || l.hidden !== b.hidden || mowerKey !== b.mowerKey) {
       b.sig = sig;
       b.pins = l.pins;
       b.hidden = l.hidden;
@@ -581,6 +591,7 @@ class Floorplan3dCard extends HTMLElement {
       this._refreshStates();
       this._refreshMower(mower);
     }
+    this._updateObjects();
     if ((markers || viewRefreshed) && this._editing) this._edit.afterUpdate();
     else if (this._editing) this._edit.onStates();
   }
@@ -1058,9 +1069,45 @@ class Floorplan3dCard extends HTMLElement {
     this._commit({ ...l, views: { ...views, [id]: { ...(views[id] || {}), ...patch } } });
   }
 
+  // Object bindings, recomputed only when the model, layout.objects / groups or the existence of
+  // a candidate entity changed. True when the set of bound entities (= hidden markers) changed.
+  _syncBindings() {
+    const model = this._objects && this._objects.model;
+    const objs = model ? model.manifest.objects : [];
+    const l = this._layout || {}, lo = l.objects || {}, groups = l.groups || {}, states = this._hass.states;
+    const exists = objs.map((o) => {
+      const e = lo[o.id] && lo[o.id].entity !== undefined ? lo[o.id].entity : (o.suggest || {}).entity;
+      return e && states[e] ? 1 : 0;
+    }).join('');
+    const key = [model, lo, groups, exists];
+    if (this._bindKey && key.every((x, i) => x === this._bindKey[i])) return false;
+    this._bindKey = key;
+    this._bindings = bindObjects(objs, lo, states);
+    this._objects.setBindings(this._bindings, groups);
+    const bound = new Set();
+    for (const b of this._bindings.values()) if (b.entity && !b.hidden) bound.add(b.entity);
+    const changed = bound.size !== this._boundEntities.size || [...bound].some((e) => !this._boundEntities.has(e));
+    this._boundEntities = bound;
+    return changed;
+  }
+
+  // Lamps and the light pool for the current states and view (cheap when nothing changed).
+  _updateObjects() {
+    const layer = this._objects;
+    if (!layer || !layer.model || !this._hass || !this._config) return;
+    const levels = layer.model.manifest.levels;
+    const shown = (n) => { for (let x = n; x; x = x.parent) if (!x.visible) return false; return true; };
+    layer.update(this._hass.states, {
+      visibleLevel: (id) => { const lv = levels.find((x) => x.id === id); return !lv || shown(lv.node); },
+      lightsOn: this._config.lights !== 'off',
+    });
+  }
+
   _buildMarkers() {
     const h = this._hass;
-    this._markers = buildMarkers(h, this._layout, { group_by: this._config.group_by });
+    // a device bound to a model object has no marker: the object is the control (glow sprite too)
+    const bound = this._boundEntities;
+    this._markers = buildMarkers(h, this._layout, { group_by: this._config.group_by }).filter((m) => !bound.has(m.entityId));
     this._positions = markerPositions(this._markers, { ...this._layout, rooms: this._allRooms() }, h, this._floors);
 
     // the mower's device marker follows the live position instead of being auto placed

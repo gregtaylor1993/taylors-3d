@@ -30,6 +30,13 @@ describe('card editor', () => {
     expect(mod.cleanConfig({ zoom_to: 'cursor' })).toEqual({ zoom_to: 'cursor' });
   });
 
+  it('offers lights auto / off (auto is the default)', () => {
+    const field = mod.SCHEMA.flatMap((x) => x.schema || [x]).find((x) => x.name === 'lights');
+    expect(field.selector.select.options.map((o) => o.value)).toEqual(['auto', 'off']);
+    expect(mod.cleanConfig({ lights: 'auto' })).toEqual({});
+    expect(mod.cleanConfig({ lights: 'off' })).toEqual({ lights: 'off' });
+  });
+
   it('renders ha-form with defaults and emits cleaned config', () => {
     const el = document.createElement('floorplan3d-card-editor');
     document.body.append(el);
