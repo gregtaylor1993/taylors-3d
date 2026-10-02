@@ -114,7 +114,8 @@ house.userData.fp = { views: [
   edits, saved cameras and linked HA floors are stored by view id).
 - `show`: when present, the view starts from nothing and shows these; `hide` is applied after.
   Rules cascade to children, and a later rule wins over an earlier one.
-- `camera` (optional): `{ position, target }` in model world metres (Y up). The card tweens to
+- `camera` (optional): `{ position, target }` in model world metres (Y up; the card applies the
+  model's placement, so it follows a realignment). The card tweens to
   it when the view is opened and on **Reset view**; without one the camera stays where it is.
 - `camera_top` (optional): `{ center: [x, y], zoom }`, the view's **Top** camera: centre in plan
   metres (x east, y north) and zoom > 0 (1 shows 20 m vertically; the horizontal extent follows

@@ -188,10 +188,11 @@ the floor of its top storey):
 - In a storey view, devices in the visible rooms of that storey and outdoor devices are shown;
   devices of lower storeys are hidden. An overview (every storey and the roof visible, e.g.
   Exterior) shows every device.
-- Devices without a model room (pins, areas without a room) follow their HA floor: they show in
-  views linked to that floor. A pin's floor maps to that floor's level, so an outdoor pin on
-  the ground floor is hidden in upper storey views; link its area to an outdoor room or zone
-  to keep it visible everywhere.
+- A pin belongs to the model room or zone under it (on its floor), so a pin dropped in the garden
+  shows wherever the garden zone shows. The live mower is outdoors: it shows in every view where
+  part of an exterior level is visible.
+- Devices outside every model room and zone (pins off the plan, areas without a room) follow
+  their HA floor: they show in views linked to that floor, and are hidden in views above it.
 - Room labels (name and size) appear in storey views for the rooms of that storey.
 - Switching views keeps the camera, unless the view has a saved camera. **Reset view** (the
   crosshair button) returns to the view's camera or frames the house.
@@ -217,6 +218,11 @@ re-exports; parts no longer in the model are listed for removal.
   *Set rotation centre* in Top recentres the top camera. Models may give `fp.views[*].camera_top`.
 - **Reset view** returns to the saved camera (3D: incl. its rotation centre; Top: `camera_top`),
   else frames the view. *Reset camera* in the Views tab drops the camera of the current mode.
+- Cameras from the model (`fp.views[*].camera` / `camera_top`) are in model coordinates and follow
+  the model when you move, rotate or scale it in the Model tab. Cameras and side-section planes
+  saved in the card (Views tab, YAML `views.<id>`) are in card coordinates and stay put when the
+  model is realigned later: save them again afterwards. Pins placed on the model follow it; pins
+  from v0.2.x on a floor bound to a model level start following it on the first realignment.
 
 #### Side section
 
