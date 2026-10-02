@@ -89,6 +89,7 @@ export class FloorplanView {
     this.sun.position.set(-12, 30, 18);
     this.scene.add(this.hemi, this.sun, this.sun.target);
     this.daylight = true;
+    this.sky = { night: 0, sunDir: null };
 
     this.staticGroup = new THREE.Group();
     this.markerGroup = new THREE.Group();
@@ -320,7 +321,7 @@ export class FloorplanView {
         this._occBoxes = null; // placement changed
         this._bounds = this._sceneBounds();
       }
-      if (this.model && this.daylight) this._fitShadow();
+      if (this.model) this._fitShadow();
       this._shadowDirty();
       this._applyFloorVisibility();
       this._scheduleOcclusion(0);
@@ -492,7 +493,35 @@ export class FloorplanView {
 
   setDaylight(day) {
     this.daylight = !!day;
+    this.sky = { night: day ? 0 : 1, sunDir: null };
     this._applyLook();
+  }
+
+  // night 0..1 and the unit vector toward the sun (world) or null (fixed bearing from fp.north).
+  // With a model only the light values change; shadows are re-rendered when the sun moved > 1 degree
+  // or night entered / left 1 (sun.castShadow stays true, so no shader recompile).
+  setSky({ night = 0, sunDir = null } = {}) {
+    const old = this.sky;
+    this.sky = { night, sunDir };
+    this.daylight = night < 0.5;
+    if (!this.model) { this._applyLook(); return; }
+    this._applyLights();
+    const a = old.sunDir, b = sunDir;
+    let moved = (!!a !== !!b);
+    if (a && b) moved = Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]))) > Math.PI / 180;
+    if (moved || (old.night >= 1) !== (night >= 1)) this._fitShadow();
+    this.dirty = true;
+  }
+
+  _applyLights() {
+    const t = Math.max(0, Math.min(1, this.sky.night)), hemi = this.hemi, sun = this.sun;
+    hemi.color.setHex(0xc4d6ff);
+    hemi.groundColor.setHex(0x2a2520);
+    hemi.intensity = 0.9 + (0.14 - 0.9) * t;
+    sun.color.setHex(0xfff0dc);
+    sun.intensity = 2.6 * (1 - t);
+    const day = new THREE.Color(0x2a2d30), night = new THREE.Color(0x0e0f10);
+    this.renderer.setClearColor(day.lerp(night, t), 1);
   }
 
   // Renderer, light and shadow settings for model / no model and day / night.
@@ -505,13 +534,8 @@ export class FloorplanView {
       r.shadowMap.autoUpdate = false; // re-rendered on demand (needsUpdate), not every frame
       this._shadowDirty();
       r.shadowMap.type = THREE.PCFSoftShadowMap;
-      hemi.color.setHex(day ? 0xcfdcff : 0x6f86c6);
-      hemi.groundColor.setHex(day ? 0x7a6248 : 0x2a2622);
-      hemi.intensity = day ? 1.1 : 1.4;
-      // night: the sun doubles as moonlight (no shadows) until lamps cast real light
-      sun.color.setHex(day ? 0xffffff : 0xa8bcff);
-      sun.intensity = day ? 2.6 : 0.9;
-      sun.castShadow = day;
+      this._applyLights();
+      sun.castShadow = true; // stays on (toggling recompiles shaders); night = intensity 0
       sun.shadow.mapSize.set(2048, 2048);
       sun.shadow.bias = -0.0005;
       sun.shadow.normalBias = 0.02; // against acne on roofs
@@ -520,6 +544,7 @@ export class FloorplanView {
       r.toneMapping = THREE.NoToneMapping;
       r.toneMappingExposure = 1;
       r.shadowMap.enabled = false;
+      r.setClearColor(0x000000, 0);
       hemi.color.setHex(0xffffff);
       hemi.groundColor.setHex(0x8a8a8a);
       hemi.intensity = day ? 2.2 : 0.6;
@@ -559,7 +584,7 @@ export class FloorplanView {
     box.expandByScalar(SHADOW_MARGIN_M);
     const centre = box.getCenter(new THREE.Vector3());
     const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 1);
-    const dir = new THREE.Vector3(...sunDirection(this.model.north, this.modelGroup.rotation.y));
+    const dir = new THREE.Vector3(...(this.sky.sunDir || sunDirection(this.model.north, this.modelGroup.rotation.y)));
     sun.target.position.copy(centre);
     sun.position.copy(centre).addScaledVector(dir, radius * 2.5);
     const cam = sun.shadow.camera;

@@ -143,5 +143,10 @@ export function createMockHass({ onChange }) {
     update({ 'device_tracker.sunseeker_position': { ...s, attributes: { ...s.attributes, latitude: lat, longitude: lon } } });
   }, 500);
 
+  // headless checks: window.__setDemoSun(elevation, azimuth) adds / updates sun.sun
+  window.__setDemoSun = (elevation, azimuth) => update({
+    'sun.sun': { entity_id: 'sun.sun', state: elevation > 0 ? 'above_horizon' : 'below_horizon', attributes: { elevation, azimuth } },
+  });
+
   return current;
 }

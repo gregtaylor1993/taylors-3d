@@ -18,7 +18,7 @@ import {
 } from './views.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 import { ObjectLayer } from './objects/layer.js';
-import { bindObjects } from './objects/logic.js';
+import { bindObjects, nightFactor, sunVector } from './objects/logic.js';
 
 const VERSION = '0.3.1';
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
@@ -152,7 +152,7 @@ const STYLE = `
     color: var(--primary-text-color); --mdc-icon-size: 17px; }
   button.daynight { font: inherit; font-size: 15px; line-height: 1; cursor: pointer; padding: 5px 10px; border-radius: 16px;
     border: 1px solid var(--divider-color, rgba(0,0,0,.12)); background: var(--card-background-color, #fff);
-    color: var(--primary-text-color); }
+    color: var(--primary-text-color); display: flex; align-items: center; --mdc-icon-size: 17px; }
   .editing button.edit { background: var(--primary-color); border-color: var(--primary-color); color: var(--text-primary-color, #fff); }
 
   .fp-handle { box-sizing: border-box; width: 13px; height: 13px; border-radius: 50%; pointer-events: auto; cursor: grab;
@@ -237,6 +237,14 @@ function cssColor(el, name, fallback) {
 
 const luminance = (c) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
 
+function readSkyMode() {
+  try {
+    const v = localStorage.getItem('floorplan3d.sky');
+    if (v === 'auto' || v === 'day' || v === 'night') return v;
+  } catch (e) { /* storage blocked */ }
+  return 'auto';
+}
+
 class Floorplan3dCard extends HTMLElement {
   constructor() {
     super();
@@ -253,6 +261,8 @@ class Floorplan3dCard extends HTMLElement {
     this._index = null;
     this._mode = '3d';
     this._daylight = true;
+    this._skyMode = readSkyMode();
+    this._skyLast = null;
     this._section = false; // side section toggle
     this._sectionPreview = null; // Views tab slider: plane shown while dragging
     this._objects = null; // ObjectLayer: model lamps and the real light pool
@@ -331,7 +341,7 @@ class Floorplan3dCard extends HTMLElement {
       this._notice.hidden = !err;
       // a new model resets the views; the first view applied frames it (see _resolveViewList)
       this._stage.classList.toggle('has-model', !!this._view.model);
-      if (this._view.model) this._view.setDaylight(this._daylight);
+      if (this._view.model) this._applySky(true);
       else { this._daylight = true; this._view.setDaylight(true); } // no model: the toggle is hidden, so always day
       this._syncToolbar();
       this._schedule(); // the manifest arrived: rebuild
@@ -388,6 +398,7 @@ class Floorplan3dCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    if (this._view && this._view.model && this._skyMode === 'auto') this._applySky(false);
     if (!this._layout && !this._loading) this._load();
     this._schedule();
   }
@@ -434,7 +445,7 @@ class Floorplan3dCard extends HTMLElement {
               <div class="seg"><button data-mode="3d">3D</button><button data-mode="top">Top</button></div>
               <button class="reset" title="Reset view"><ha-icon icon="mdi:crosshairs-gps"></ha-icon></button>
               <button class="section" hidden title="Side section"><ha-icon icon="mdi:box-cutter"></ha-icon></button>
-              <button class="daynight" hidden title="Day / night">\u2600</button>
+              <button class="daynight" hidden title="Day / night: auto"><ha-icon icon="mdi:theme-light-dark"></ha-icon></button>
               <button class="edit" hidden title="Edit floorplan"><ha-icon icon="mdi:pencil"></ha-icon><span>Edit</span></button>
             </div>
             <div class="empty" hidden></div>
@@ -463,9 +474,10 @@ class Floorplan3dCard extends HTMLElement {
     this._editBtn = root.querySelector('button.edit');
     this._dayBtn = root.querySelector('button.daynight');
     this._dayBtn.addEventListener('click', () => {
-      this._daylight = !this._daylight;
-      this._view.setDaylight(this._daylight);
-      this._dayBtn.textContent = this._daylight ? '\u2600' : '\u263e';
+      this._skyMode = { auto: 'day', day: 'night', night: 'auto' }[this._skyMode];
+      try { localStorage.setItem('floorplan3d.sky', this._skyMode); } catch (e) { /* private mode */ }
+      this._applySky(true);
+      this._syncToolbar();
     });
     this._editBtn.addEventListener('click', () => this._toggleEdit());
     this._view = new FloorplanView(this._stage);
@@ -1261,6 +1273,35 @@ class Floorplan3dCard extends HTMLElement {
     if (this._editing && this._edit.tab === 'views') this._edit.render();
   }
 
+  _paintDayBtn() {
+    const icon = { auto: 'mdi:theme-light-dark', day: 'mdi:white-balance-sunny', night: 'mdi:weather-night' }[this._skyMode];
+    const el = this._dayBtn.querySelector('ha-icon');
+    if (el && el.getAttribute('icon') !== icon) el.setAttribute('icon', icon);
+    this._dayBtn.title = `Day / night: ${this._skyMode}`;
+  }
+
+  // Auto reads sun.sun; setSky only when night moved > 0.01 or the sun > 1 degree since the last call.
+  _applySky(force) {
+    const v = this._view;
+    if (!v || !v.model) return;
+    let sky = { night: 0, sunDir: null };
+    if (this._skyMode === 'night') sky = { night: 1, sunDir: null };
+    else if (this._skyMode === 'auto') {
+      const a = this._hass && this._hass.states && this._hass.states['sun.sun'];
+      const el = a ? Number(a.attributes.elevation) : NaN, az = a ? Number(a.attributes.azimuth) : NaN;
+      if (Number.isFinite(el) && Number.isFinite(az)) {
+        const rot = Number(this._layout && this._layout.model && this._layout.model.rotation) || Number(this._config && this._config.model_rotation) || 0;
+        sky = { night: nightFactor(el), sunDir: sunVector(az, el, v.model.north || 0, rot) };
+      }
+    }
+    const l = this._skyLast;
+    if (!force && l && Math.abs(l.night - sky.night) <= 0.01 && !!l.sunDir === !!sky.sunDir
+      && (!sky.sunDir || Math.acos(Math.max(-1, Math.min(1, l.sunDir[0] * sky.sunDir[0] + l.sunDir[1] * sky.sunDir[1] + l.sunDir[2] * sky.sunDir[2]))) <= Math.PI / 180)) return;
+    this._skyLast = sky;
+    this._daylight = sky.night < 0.5;
+    v.setSky(sky);
+  }
+
   _syncToolbar() {
     const hasModel = !!(this._view && this._view.model);
     // without a model: one chip per floor plus All (not while editing), shown with 2+ floors
@@ -1283,7 +1324,7 @@ class Floorplan3dCard extends HTMLElement {
       this._sectionBtn.hidden = !(this._view && this._view.model && this._mode === '3d');
       this._sectionBtn.classList.toggle('on', !!this._section);
     }
-    this._dayBtn.textContent = this._daylight ? '\u2600' : '\u263e';
+    this._paintDayBtn();
     this._editBtn.hidden = !(this._hass && this._hass.user && this._hass.user.is_admin);
     this._editBtn.querySelector('span').textContent = this._editing ? 'Done' : 'Edit';
     if (this._empty && this._editing) this._empty.hidden = true;

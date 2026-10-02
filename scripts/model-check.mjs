@@ -294,14 +294,44 @@ try {
   const lights = () => page.evaluate(`({ sun: ${card}._view.sun.intensity, hemi: ${card}._view.hemi.intensity, cast: ${card}._view.sun.castShadow })`);
   const day = await lights();
   await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').click()`);
+  await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').click()`);
   await sleep(300);
   const night = await lights();
-  check('night: moonlight only, no shadows, hemisphere <= 1.4', night.sun < 1 && night.cast === false && night.hemi <= 1.4, JSON.stringify(night));
-  check('button shows the moon at night', (await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').textContent`)) === '☾');
+  check('night: sun off, hemisphere 0.14', night.sun === 0 && night.cast === true && Math.abs(night.hemi - 0.14) < 0.001, JSON.stringify(night));
+  check('button icon is the moon at night', (await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight ha-icon').getAttribute('icon')`)) === 'mdi:weather-night');
   await sh('look-night.png');
   await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').click()`);
   await sleep(300);
-  check('day again restores the light', JSON.stringify(await lights()) === JSON.stringify(day) && day.sun > 0, JSON.stringify(day));
+  check('auto without sun.sun is day', JSON.stringify(await lights()) === JSON.stringify(day) && day.sun > 0, JSON.stringify(day));
+
+  // sky: auto follows sun.sun, button cycles auto -> day -> night -> auto, mode persists
+  const mode = () => page.evaluate(`${card}._skyMode`);
+  const tint = (e, a) => page.evaluate(`window.__setDemoSun(${e}, ${a})`);
+  check('sky mode starts auto', (await mode()) === 'auto');
+  await tint(-20, 180);
+  await sleep(300);
+  const sNight = await lights();
+  check('auto: sun at -20 deg -> hemi 0.14, sun 0', Math.abs(sNight.hemi - 0.14) < 0.001 && sNight.sun === 0, JSON.stringify(sNight));
+  await tint(30, 180);
+  await sleep(300);
+  const sDay = await lights();
+  check('auto: sun at +30 deg -> hemi 0.9, sun 2.6', Math.abs(sDay.hemi - 0.9) < 0.001 && Math.abs(sDay.sun - 2.6) < 0.001, JSON.stringify(sDay));
+  const shadowsBefore = await page.evaluate(`${card}._view.stats.shadow`);
+  await tint(30.2, 180.2);
+  await sleep(200);
+  check('a sun move under 1 deg does not redraw shadows', (await page.evaluate(`${card}._view.stats.shadow`)) === shadowsBefore);
+  await tint(45, 220);
+  await sleep(200);
+  check('a larger sun move redraws shadows', (await page.evaluate(`${card}._view.stats.shadow`)) > shadowsBefore);
+  const btn = `${card}.shadowRoot.querySelector('button.daynight')`;
+  const seq = [];
+  for (let i = 0; i < 3; i++) { await page.evaluate(`${btn}.click()`); seq.push(await mode()); }
+  check('button cycles auto -> day -> night -> auto', seq.join() === 'day,night,auto', seq.join());
+  await page.evaluate(`${btn}.click()`);
+  check('mode persists in localStorage', (await page.evaluate(`localStorage.getItem('floorplan3d.sky')`)) === 'day');
+  await page.evaluate(`${btn}.click()`);
+  await page.evaluate(`${btn}.click()`);
+  await tint(60, 180);
   allErrors.push(...s.errors);
 } finally {
   await s.close();
@@ -518,13 +548,14 @@ try {
   check('frame model moves the camera', (await page.evaluate(`${card}._view.camera.position.toArray().join()`)) !== cam0);
   // day/night survives a model reload
   const dn = `${card}.shadowRoot.querySelector('button.daynight')`;
-  await page.evaluate(`${dn}.click()`);
+  const skyTo = async (m) => { for (let i = 0; i < 3 && (await page.evaluate(`${card}._skyMode`)) !== m; i++) await page.evaluate(`${dn}.click()`); };
+  await skyTo('night');
   await upload(path.join(root, 'demo', 'house.glb'));
   await sleep(1500);
-  check('night kept after re-upload', (await page.evaluate(`${dn}.textContent`)) === '\u263e' && (await page.evaluate(`${card}._view.sun.intensity`)) < 1 && (await page.evaluate(`${card}._view.sun.castShadow`)) === false);
-  await page.evaluate(`${dn}.click()`);
+  check('night kept after re-upload', (await page.evaluate(`${card}._skyMode`)) === 'night' && (await page.evaluate(`${card}._view.sun.intensity`)) === 0);
+  await skyTo('day');
   await sleep(200);
-  check('back to day', (await page.evaluate(`${dn}.textContent`)) === '\u2600' && (await page.evaluate(`${card}._view.sun.intensity`)) > 1 && (await page.evaluate(`${card}._view.sun.castShadow`)) === true);
+  check('back to day', (await page.evaluate(`${card}._view.sun.intensity`)) > 1 && (await page.evaluate(`${card}._view.sun.castShadow`)) === true);
 
   // legacy model (no fp tags, floor:<id> / site / roof names): auto mapping, per-chip visibility, no regeneration notice
   const legacy = path.join(root, 'screenshots', 'legacy.glb');
@@ -571,7 +602,7 @@ try {
   check('import of a file without views keeps the view settings', (await page.evaluate(`(${card}._layout.views || {})[${JSON.stringify(keptId)}]?.label`)) === 'Kept view');
   check('import maps floor ids onto HA floors', (await page.evaluate(`${card}._layout.rooms[0].floor_id`)) === 'ground'
     && (await page.evaluate(`${panel('.msg')}.textContent`)).includes('level0 → Ground floor'));
-  await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').click()`); // night, then remove the model
+  for (let i = 0; i < 3 && (await page.evaluate(`${card}._skyMode`)) !== 'night'; i++) await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').click()`); // night, then remove the model
   await sleep(150);
   await clickText('Model');
   await sleep(150);
@@ -581,8 +612,8 @@ try {
   check('remove clears model', (await page.evaluate(`${card}._layout.model`)) === null && !(await page.evaluate(`${card}._view.model`)));
   check('removal resets the look', await page.evaluate(`(() => { const c = ${card}; return !c._stage.classList.contains('has-model')
     && c.shadowRoot.querySelector('button.daynight').hidden && c._view.renderer.toneMapping === 0 && c._view.renderer.shadowMap.enabled === false; })()`));
-  const dayLook = await page.evaluate(`(() => { const v = ${card}._view; return { hemi: v.hemi.intensity, sun: v.sun.intensity, tm: v.renderer.toneMapping, glyph: ${card}.shadowRoot.querySelector('button.daynight').textContent }; })()`);
-  check('removing the model at night restores the day look', dayLook.hemi === 2.2 && dayLook.sun === 1.4 && dayLook.tm === 0 && dayLook.glyph === '\u2600', JSON.stringify(dayLook));
+  const dayLook = await page.evaluate(`(() => { const v = ${card}._view; return { hemi: v.hemi.intensity, sun: v.sun.intensity, tm: v.renderer.toneMapping, glyph: 0 }; })()`);
+  check('removing the model at night restores the day look', dayLook.hemi === 2.2 && dayLook.sun === 1.4 && dayLook.tm === 0, JSON.stringify(dayLook));
   allErrors.push(...s.errors);
 } finally {
   await s.close();

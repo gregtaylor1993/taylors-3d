@@ -20,6 +20,9 @@ position over its map.
 - Optional 3D model of the house (.glb) under the plan: views per storey (upper storeys and the
   roof hidden), click a part to hide it in a view, saved cameras, pick a room's outline from the
   model, and a Day / Night button for lighting
+- Day / Night button cycles Auto, Day, Night (remembered per device). Auto follows `sun.sun`: the
+  sun's light and shadows point where the real sun is (using the model's `north`), and the house
+  darkens smoothly through dusk; without `sun.sun` it stays Day
 - Follows the HA theme, light and dark
 
 ## Install
