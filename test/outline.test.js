@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { outlineFromTriangles, outlineFromRaster } from '../src/outline.js';
+import { outlineFromTriangles, outlineFromRaster, outlineLoops, pickLoop, rasterGrid, outlineFromGrid } from '../src/outline.js';
 import { pointInPolygon, signedArea } from '../src/placement.js';
 
 // a horizontal quad at height y from plan rect (x0..x1, y0..y1) → two triangles (world z = -plan y), CCW from above
@@ -108,5 +108,24 @@ describe('outlineFromRaster', () => {
   it('picks only the connected slab', () => {
     const out = outlineFromRaster([...quad(0, 0, 4, 3), ...quad(6, 0, 9, 3)], [7, 0, -1]);
     expect(area(out)).toBeCloseTo(9, 0);
+  });
+});
+
+describe('loops + pickLoop', () => {
+  const tris = [...quad(0, 0, 4, 3), ...quad(6, 0, 9, 3)];
+  it('outlineLoops returns every loop at the height', () => {
+    expect(outlineLoops(tris, 0)).toHaveLength(2);
+    expect(outlineLoops(tris, 2)).toHaveLength(0);
+  });
+  it('pickLoop: containing, near, none', () => {
+    const loops = outlineLoops(tris, 0);
+    expect(area(pickLoop(loops, [7, 1]))).toBeCloseTo(9);
+    expect(area(pickLoop(loops, [4.05, 1]))).toBeCloseTo(12);
+    expect(pickLoop(loops, [5, 1])).toBeNull();
+  });
+  it('rasterGrid is reusable for several hits', () => {
+    const g = rasterGrid(tris, 0);
+    expect(area(outlineFromGrid(g, [1, 0, -1]))).toBeCloseTo(12, 0);
+    expect(area(outlineFromGrid(g, [7, 0, -1]))).toBeCloseTo(9, 0);
   });
 });

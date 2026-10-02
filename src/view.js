@@ -296,7 +296,8 @@ export class FloorplanView {
     const hit = this.raycaster.intersectObject(this.model.root, true)
       .find((h) => h.object.isMesh && shown(h.object) && h.point.y <= this.modelClip.constant + 1e-6);
     if (!hit) return null;
-    const hitInfo = { point: hit.point.toArray(), object: hit.object };
+    const fn = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : null;
+    const hitInfo = { point: hit.point.toArray(), object: hit.object, up: !fn || Math.abs(fn.y) >= Math.cos((25 * Math.PI) / 180) };
     const owner = this.model.manifest.ownerOf(hit.object);
     if (owner) return { ...owner, hit: hitInfo };
     const names = [];

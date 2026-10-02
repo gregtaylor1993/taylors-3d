@@ -5,7 +5,7 @@ const COS_UP = Math.cos((25 * Math.PI) / 180);
 const MERGE = 200; // points within 5 mm share a key
 const key = (x, z) => Math.round(x * MERGE) + ',' + Math.round(z * MERGE);
 
-export function outlineFromTriangles(tris, hit) {
+export function outlineLoops(tris, y) {
   const pts = new Map(); // key -> [x, z]
   const edgeCount = new Map(); // undirected key -> count
   const edgeDir = new Map(); // undirected key -> [p, q] as it appeared in a triangle
@@ -15,7 +15,7 @@ export function outlineFromTriangles(tris, hit) {
     const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
     const len = Math.hypot(nx, ny, nz);
     if (!len || Math.abs(ny / len) < COS_UP) continue;
-    if (Math.abs((a[1] + b[1] + c[1]) / 3 - hit[1]) > 0.05) continue;
+    if (Math.abs((a[1] + b[1] + c[1]) / 3 - y) > 0.05) continue;
     // Normalize winding: flip triangle if normal points down
     if (ny < 0) [b, c] = [c, b];
     const ks = [a, b, c].map((p) => { const k = key(p[0], p[2]); pts.set(k, [p[0], p[2]]); return k; });
@@ -79,18 +79,27 @@ export function outlineFromTriangles(tris, hit) {
     }
     if (loop.length >= 3) loops.push(loop.map((k) => { const [x, z] = pts.get(k); return [x, -z]; }));
   }
-  const target = [hit[0], -hit[2]];
+  return loops.map(finishLoopLocal).filter(Boolean);
+}
+
+// the smallest loop around the point (a merged mesh can span several rooms), else the largest loop whose box (+10 cm) holds it
+export function pickLoop(loops, target) {
   const area = (l) => Math.abs(signedArea(l));
-  // the smallest loop around the click (a merged mesh can span several rooms), else the largest loop
   let candidates = loops.filter((l) => pointInPolygon(target, l)).sort((a, b) => area(a) - area(b));
-  if (!candidates.length) { // the hit sits on an edge/seam: take the largest loop whose box (+10 cm) holds it
+  if (!candidates.length) {
     const near = (l) => l.some(([x]) => x <= target[0] + 0.1) && l.some(([x]) => x >= target[0] - 0.1)
       && l.some(([, y]) => y <= target[1] + 0.1) && l.some(([, y]) => y >= target[1] - 0.1);
     candidates = loops.filter(near).sort((a, b) => area(b) - area(a));
   }
-  if (!candidates.length) return null;
-  // Simplify collinear points BEFORE snapping
-  let simplified = candidates[0];
+  return candidates.length ? candidates[0] : null;
+}
+
+export function outlineFromTriangles(tris, hit) {
+  return pickLoop(outlineLoops(tris, hit[1]), [hit[0], -hit[2]]);
+}
+
+// collinear removal (0.02 m) BEFORE snapping to 5 cm
+function finishLoopLocal(simplified) {
   const simp = [];
   for (let i = 0; i < simplified.length; i++) {
     const p = simp.length ? simp[simp.length - 1] : simplified[simplified.length - 1];
@@ -112,9 +121,10 @@ export function outlineFromTriangles(tris, hit) {
   return out.length >= 3 ? out : null;
 }
 
+
 // Dense meshes: rasterise the up-facing triangles at the hit height onto a grid, flood-fill from the hit
 // cell and walk the region's boundary. Same 25 degree / 0.05 m filters as outlineFromTriangles.
-export function outlineFromRaster(tris, hit, { cell = 0.02 } = {}) {
+export function rasterGrid(tris, yLevel, { cell = 0.02 } = {}) {
   const keep = [];
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (let i = 0; i + 8 < tris.length; i += 9) {
@@ -123,7 +133,7 @@ export function outlineFromRaster(tris, hit, { cell = 0.02 } = {}) {
     const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
     const len = Math.hypot(nx, ny, nz);
     if (!len || Math.abs(ny / len) < COS_UP) continue;
-    if (Math.abs((tris[i + 1] + tris[i + 4] + tris[i + 7]) / 3 - hit[1]) > 0.05) continue;
+    if (Math.abs((tris[i + 1] + tris[i + 4] + tris[i + 7]) / 3 - yLevel) > 0.05) continue;
     keep.push(i);
     for (const o of [0, 3, 6]) {
       const x = tris[i + o], y = -tris[i + o + 2];
@@ -155,7 +165,12 @@ export function outlineFromRaster(tris, hit, { cell = 0.02 } = {}) {
       }
     }
   }
-  // flood fill from the hit cell (or a filled cell within 2 cells of it)
+  return { grid, W, H, x0, y0, c };
+}
+
+// flood fill from the hit cell (or a filled cell within 2 cells of it), then walk the region boundary
+export function outlineFromGrid(g, hit) {
+  const { grid, W, H, x0, y0, c } = g;
   const hx = Math.floor((hit[0] - x0) / c), hy = Math.floor((-hit[2] - y0) / c);
   let start = -1;
   for (let r = 0; r <= 2 && start < 0; r++) {
@@ -168,14 +183,16 @@ export function outlineFromRaster(tris, hit, { cell = 0.02 } = {}) {
   }
   if (start < 0) return null;
   const reg = new Uint8Array(W * H);
-  const stack = [start];
+  const stack = new Int32Array(W * H);
+  let sp = 0;
+  stack[sp++] = start;
   reg[start] = 1;
-  while (stack.length) {
-    const p = stack.pop(), i = p % W, j = (p - i) / W;
-    if (i > 0 && grid[p - 1] && !reg[p - 1]) { reg[p - 1] = 1; stack.push(p - 1); }
-    if (i < W - 1 && grid[p + 1] && !reg[p + 1]) { reg[p + 1] = 1; stack.push(p + 1); }
-    if (j > 0 && grid[p - W] && !reg[p - W]) { reg[p - W] = 1; stack.push(p - W); }
-    if (j < H - 1 && grid[p + W] && !reg[p + W]) { reg[p + W] = 1; stack.push(p + W); }
+  while (sp) {
+    const p = stack[--sp], i = p % W, j = (p - i) / W;
+    if (i > 0 && grid[p - 1] && !reg[p - 1]) { reg[p - 1] = 1; stack[sp++] = p - 1; }
+    if (i < W - 1 && grid[p + 1] && !reg[p + 1]) { reg[p + 1] = 1; stack[sp++] = p + 1; }
+    if (j > 0 && grid[p - W] && !reg[p - W]) { reg[p - W] = 1; stack[sp++] = p - W; }
+    if (j < H - 1 && grid[p + W] && !reg[p + W]) { reg[p + W] = 1; stack[sp++] = p + W; }
   }
   // boundary edges with the region on their left (counter-clockwise outer loops)
   const V = W + 1;
@@ -209,6 +226,11 @@ export function outlineFromRaster(tris, hit, { cell = 0.02 } = {}) {
   }
   if (!best) return null;
   return finishLoop(best, 0.03);
+}
+
+export function outlineFromRaster(tris, hit, opts) {
+  const g = rasterGrid(tris, hit[1], opts);
+  return g ? outlineFromGrid(g, hit) : null;
 }
 
 // merge exactly collinear points, Douglas-Peucker, snap to 5 cm, drop repeats

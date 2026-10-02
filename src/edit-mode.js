@@ -9,7 +9,7 @@ import { buildMarkers, areaName } from './registry.js';
 import { readSource, calibrationError } from './mower.js';
 import { ruleState, setRuleState, nextEyeState, viewTree, pickSelector, nextViewId, unmatchedSelectors, legacyShowRules } from './views.js';
 import { levelsFromFloorMap } from './bindings.js';
-import { outlineFromTriangles, outlineFromRaster } from './outline.js';
+import { outlineLoops, pickLoop, rasterGrid, outlineFromGrid } from './outline.js';
 
 const DENSE_TRIS = 150000;
 
@@ -261,8 +261,13 @@ export class EditMode {
       const cur = this.layout.model || {};
       this.picking = null;
       this.message = { text: `Linked ${owner.label || owner.id} to ${areaName(this.hass, pk.areaId)}` };
-      this.setModelProps({ rooms: { ...(cur.rooms || {}), [owner.id]: { area: pk.areaId } } });
+      this.setModelProps({ rooms: { ...(cur.rooms || {}), [owner.id]: { ...(cur.rooms || {})[owner.id], area: pk.areaId } } });
       this.refreshOverlay();
+      return;
+    }
+    if (owner.hit.up === false) {
+      this.message = { text: "Click on a room's floor", warn: true };
+      this.render();
       return;
     }
     pk.busy = true;
@@ -286,21 +291,22 @@ export class EditMode {
     }, 0);
   }
 
-  // traced outline -> raster (dense meshes) -> the mesh's rectangle; cached per mesh and hit height
+  // all loops (or the raster grid for dense meshes) are cached per floor piece and height; each click then
+  // only picks a loop. Fallback: the mesh's bounding rectangle.
   _traceOutline(mesh, hit) {
     const model = this.view.model;
     if (this._outlineModel !== model) { this._outlineCache.clear(); this._outlineModel = model; }
-    const k = mesh.uuid + ':' + Math.round(hit[1] / 0.05);
-    // the cache holds the polygon for the mesh; a different click can pick another loop of a merged mesh
-    const hitKey = k + ':' + hit[0].toFixed(1) + ',' + hit[2].toFixed(1);
-    if (this._outlineCache.has(hitKey)) return this._outlineCache.get(hitKey);
-    const tris = this.view.meshTriangles(mesh);
-    const dense = tris.length / 9 > DENSE_TRIS;
-    let poly = dense ? null : outlineFromTriangles(tris, hit);
-    if (!poly && dense) poly = outlineFromRaster(tris, hit);
-    const res = poly ? { poly } : { poly: this.view.meshPlanRect(mesh), note: "Used the floor piece's rectangle" };
-    this._outlineCache.set(hitKey, res);
-    return res;
+    const b = Math.round(hit[1] / 0.05);
+    const key = (n) => mesh.uuid + ':' + n;
+    let entry = null;
+    for (const n of [b, b - 1, b + 1]) { entry = this._outlineCache.get(key(n)); if (entry) break; }
+    if (!entry) {
+      const tris = this.view.meshTriangles(mesh);
+      entry = tris.length / 9 > DENSE_TRIS ? { grid: rasterGrid(tris, hit[1]) } : { loops: outlineLoops(tris, hit[1]) };
+      this._outlineCache.set(key(b), entry);
+    }
+    const poly = entry.grid ? outlineFromGrid(entry.grid, hit) : entry.loops ? pickLoop(entry.loops, [hit[0], -hit[2]]) : null;
+    return poly ? { poly } : { poly: this.view.meshPlanRect(mesh), note: "Used the floor piece's bounding rectangle — reshape it if needed" };
   }
 
   usePickedOutline() {
@@ -404,7 +410,11 @@ export class EditMode {
       e.preventDefault();
       return;
     }
-    if (this.drawing) {
+    if (this.picking && !this.drawing) {
+      if (e.key !== 'Escape') return;
+      this.cancelPicking();
+      e.preventDefault();
+    } else if (this.drawing) {
       if (e.key === 'Enter') this.finishDrawing();
       else if (e.key === 'Escape') this.cancelDrawing();
       else if (e.key === 'Backspace') {
