@@ -92,6 +92,37 @@ describe('popupRows', () => {
     expect(popupRows(obj, null, {})).toEqual(one);
   });
 
+  it('grouped fixture with an unavailable own entity: controller row and reason stay', () => {
+    const groups = { hall: { entity: 'switch.g' } };
+    const obj = { id: 'l1', type: 'light', group: 'hall' };
+    let states = { 'light.a': st('unavailable', { friendly_name: 'Bulb' }), 'switch.g': st('off', { friendly_name: 'Relay' }) };
+    let rows = popupRows(obj, chainState(obj, { entity: 'light.a' }, groups, states), states, groups);
+    expect(rows).toEqual([
+      { kind: 'chain', entity: 'switch.g', label: 'Relay', value: false },
+      { kind: 'reason', label: 'Relay is off' },
+    ]);
+    states = { ...states, 'switch.g': st('on', { friendly_name: 'Relay' }) };
+    rows = popupRows(obj, chainState(obj, { entity: 'light.a' }, groups, states), states, groups);
+    expect(rows).toEqual([
+      { kind: 'chain', entity: 'switch.g', label: 'Relay', value: true },
+      { kind: 'reason', label: 'Bulb is unavailable' },
+    ]);
+  });
+
+  it('nothing in the chain usable: single unavailable row', () => {
+    const groups = { hall: { entity: 'switch.g' } };
+    const obj = { id: 'l1', type: 'light', group: 'hall' };
+    const states = { 'light.a': st('unavailable'), 'switch.g': st('unknown') };
+    expect(popupRows(obj, chainState(obj, { entity: 'light.a' }, groups, states), states, groups))
+      .toEqual([{ kind: 'state', label: 'State', value: 'unavailable' }]);
+  });
+
+  it('toggle row is labelled On / off', () => {
+    const states = { 'switch.r': st('on') };
+    const obj = { id: 'l1', type: 'light' };
+    expect(popupRows(obj, chainState(obj, { entity: 'switch.r' }, {}, states), states)[0].label).toBe('On / off');
+  });
+
   it('mower: state, battery and one start/dock row', () => {
     const states = { 'lawn_mower.m': st('docked', { battery_level: 87 }) };
     const obj = { id: 'm', type: 'mower' };
@@ -126,5 +157,15 @@ describe('objectAction / actionTarget', () => {
     expect(actionTarget({ group: 'g' }, { entity: null }, groups)).toBe('switch.g');
     expect(actionTarget({}, null, groups)).toBe(null);
     expect(actionTarget({ group: 'g' }, { entity: 'light.a', hidden: true }, groups)).toBe(null);
+  });
+
+  it('unavailable own entity falls back to a usable group controller', () => {
+    const groups = { g: { entity: 'switch.g' } };
+    const states = { 'light.a': st('unavailable'), 'switch.g': st('off') };
+    expect(actionTarget({ group: 'g' }, { entity: 'light.a' }, groups, states)).toBe('switch.g');
+    expect(actionTarget({ group: 'g' }, { entity: 'light.a' }, groups, { ...states, 'light.a': st('on') })).toBe('light.a');
+    // controller not usable either: the own entity (the caller shows the popup)
+    expect(actionTarget({ group: 'g' }, { entity: 'light.a' }, groups, { ...states, 'switch.g': st('unknown') })).toBe('light.a');
+    expect(actionTarget({}, { entity: 'light.a' }, {}, states)).toBe('light.a');
   });
 });

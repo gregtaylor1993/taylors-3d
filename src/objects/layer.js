@@ -186,6 +186,14 @@ export class ObjectLayer {
     return [...this.parts].map(([id, p]) => ({ id, world: root.localToWorld(p.part.anchor.clone()) }));
   }
 
+  // World position of one object's anchor (null when the object is gone).
+  anchorOf(id) {
+    const p = this.model && this.parts.get(id);
+    if (!p) return null;
+    this.model.root.updateWorldMatrix(true, false);
+    return this.model.root.localToWorld(p.part.anchor.clone());
+  }
+
   objectAt(id) {
     const p = this.parts.get(id);
     return p ? { obj: p.obj, part: p.part, chain: p.chain, result: p.result, binding: this.bindings.get(id) || null } : null;

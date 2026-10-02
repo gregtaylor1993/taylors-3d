@@ -83,6 +83,7 @@ const STYLE = `
     box-shadow: 0 1px 3px rgba(0,0,0,.2); }
   .fp-val:empty { display: none; }
   .fp-popup { position: absolute; left: 0; top: 0; z-index: 3; min-width: 190px; max-width: 260px; padding: 8px 10px 10px;
+    box-sizing: border-box; overflow: auto;
     border-radius: 12px; background: var(--card-background-color, #fff); color: var(--primary-text-color);
     border: 1px solid var(--divider-color, rgba(0,0,0,.12)); box-shadow: 0 4px 16px rgba(0,0,0,.28); font-size: 13px;
     touch-action: manipulation; user-select: none; -webkit-user-select: none; }
@@ -523,6 +524,7 @@ class Floorplan3dCard extends HTMLElement {
     this._popup = new ObjectPopup(this._stage, {
       onAction: (domain, service, data) => this._hass && this._hass.callService(domain, service, data),
       project: (w) => this._view.projectWorld(w),
+      anchor: (id) => this._objects.anchorOf(id),
       resolve: (id) => {
         const o = this._objects.objectAt(id);
         if (!o || !this._hass || (o.binding && o.binding.hidden)) return null;
@@ -1201,8 +1203,12 @@ class Floorplan3dCard extends HTMLElement {
   // Tap = moved < 5 px; hold 500 ms (not moved) = hold action. Orbit still starts from the canvas.
   _objectDown(e, canvas) {
     if (this._gesture) { this._endGesture(); return; } // a second finger: pinch / orbit, no tap
-    if (!this._objectTapsOn() || e.button !== 0 || !e.isPrimary) return;
     const path = e.composedPath();
+    if (this._popup.closedBy === e) { // this tap closed the popup: no object or marker tap (orbit may start)
+      if (e.target !== canvas && !path.some((n) => n.classList && n.classList.contains('toolbar'))) e.stopPropagation();
+      return;
+    }
+    if (!this._objectTapsOn() || e.button !== 0 || !e.isPrimary) return;
     if ((this._popup.el && path.includes(this._popup.el)) || path.some((n) => n.classList && n.classList.contains('toolbar'))) return;
     const id = this._objectHit(e.clientX, e.clientY, e.pointerType === 'touch' ? OBJECT_HIT_PX.touch : OBJECT_HIT_PX.mouse);
     if (!id) return; // markers and the model as before
@@ -1249,7 +1255,7 @@ class Floorplan3dCard extends HTMLElement {
     if (!o || !this._hass) return;
     const action = objectAction(o.obj, which);
     if (action === 'none') return;
-    const target = actionTarget(o.obj, o.binding, (this._layout && this._layout.groups) || {});
+    const target = actionTarget(o.obj, o.binding, (this._layout && this._layout.groups) || {}, this._hass.states);
     const st = target && this._hass.states[target];
     const usable = st && st.state !== 'unavailable' && st.state !== 'unknown';
     if (action === 'popup' || !usable) {

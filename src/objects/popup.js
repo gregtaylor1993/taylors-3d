@@ -10,7 +10,7 @@ export const SWATCHES = [
   [255, 59, 48], [255, 149, 0], [255, 214, 10], [52, 199, 89], [48, 213, 200], [10, 132, 255], [175, 82, 222], [255, 55, 145],
 ];
 const LABELS = {
-  toggle: 'Power', brightness: 'Brightness', color: 'Colour', state: 'State', battery: 'Battery', power: 'Power',
+  toggle: 'On / off', brightness: 'Brightness', color: 'Colour', state: 'State', battery: 'Battery', power: 'Power',
   energy: 'Energy', temperature: 'Temperature', mode: 'Mode', start_dock: 'Mower',
 };
 
@@ -27,11 +27,14 @@ export function objectAction(obj, which) {
 }
 
 // The entity a toggle / more-info acts on: the object's own entity, else its group controller.
-export function actionTarget(obj, binding, groups = {}) {
+// With states: an unavailable own entity (a bulb behind an off relay) falls back to a usable controller.
+export function actionTarget(obj, binding, groups = {}, states = null) {
   if (binding && binding.hidden) return null;
-  if (binding && binding.entity) return binding.entity;
   const g = obj && obj.group && groups[obj.group];
-  return (g && g.entity) || null;
+  const ctrl = (g && g.entity) || null;
+  const own = (binding && binding.entity) || null;
+  if (own && states && bad(states[own]) && ctrl && !bad(states[ctrl])) return ctrl;
+  return own || ctrl;
 }
 
 // [domain, service, data] toggling an entity (domains without their own toggle use homeassistant.toggle).
@@ -77,11 +80,14 @@ function readValue(kind, e, s) {
  */
 export function popupRows(obj, chain, states = {}, groups = {}) {
   const unavailable = [{ kind: 'state', label: 'State', value: 'unavailable' }];
-  if (!chain || chain.unavailable || !chain.entities || !chain.entities.length) return unavailable;
+  if (!chain || !chain.entities || !chain.entities.some((e) => !bad(states[e]))) return unavailable;
   const g = obj.group && groups[obj.group];
   const ctrl = (g && g.entity && chain.entities.includes(g.entity) && g.entity) || null;
-  const main = chain.entities.find((e) => e !== ctrl) || ctrl;
-  const light = chain.entities.find((e) => e.startsWith('light.')) || null;
+  const own = chain.entities.find((e) => e !== ctrl) || null;
+  const ownBad = !!own && bad(states[own]);
+  // an unavailable own entity: only the (usable) controller row and the reason
+  const main = ownBad ? null : own || ctrl;
+  const light = chain.entities.find((e) => e.startsWith('light.') && !bad(states[e])) || null;
   const ls = light ? states[light] : null;
   const modes = ls && Array.isArray(ls.attributes.supported_color_modes) ? ls.attributes.supported_color_modes : null;
   const ui = obj.ui && Array.isArray(obj.ui.popup) ? obj.ui.popup : typeOf(obj.type).defaults.popup;
@@ -91,7 +97,7 @@ export function popupRows(obj, chain, states = {}, groups = {}) {
     if (KINDS.has(kind) && !want.includes(kind)) want.push(kind);
   }
   const rows = [];
-  for (const kind of want) {
+  for (const kind of main ? want : []) {
     const label = LABELS[kind];
     if (kind === 'toggle') rows.push({ kind, entity: main, label, value: states[main].state === 'on' });
     else if (kind === 'brightness') {
@@ -109,11 +115,14 @@ export function popupRows(obj, chain, states = {}, groups = {}) {
     }
   }
   if (ctrl && ctrl !== main) rows.push({ kind: 'chain', entity: ctrl, label: nameOf(states, ctrl), value: !bad(states[ctrl]) && states[ctrl].state === 'on' });
-  if (!chain.lit && chain.reason) {
-    let text = chain.reason;
-    for (const e of chain.entities) if (text.startsWith(e + ' ')) text = nameOf(states, e) + text.slice(e.length);
-    rows.push({ kind: 'reason', label: text });
+  let reason = null;
+  if (ctrl && !bad(states[ctrl]) && states[ctrl].state !== 'on') reason = `${nameOf(states, ctrl)} is off`;
+  else if (ownBad) reason = `${nameOf(states, own)} is unavailable`;
+  else if (!chain.lit && chain.reason) {
+    reason = chain.reason;
+    for (const e of chain.entities) if (reason.startsWith(e + ' ')) reason = nameOf(states, e) + reason.slice(e.length);
   }
+  if (reason) rows.push({ kind: 'reason', label: reason });
   return rows;
 }
 
@@ -127,8 +136,9 @@ const STOP = ['pointerdown', 'pointerup', 'pointermove', 'pointercancel', 'click
  *   resolve(id) -> { obj, chain, states, groups } | null (current data for the open object).
  */
 export class ObjectPopup {
-  constructor(root, { onAction, project, resolve } = {}) {
+  constructor(root, { onAction, project, resolve, anchor } = {}) {
     this.root = root;
+    this.anchorOf = anchor || null; // (id) -> world Vector3, re-read on every reposition
     this.onAction = onAction || (() => {});
     this.project = project || (() => null);
     this.resolve = resolve || (() => null);
@@ -137,7 +147,13 @@ export class ObjectPopup {
     this._anchor = null;
     this._key = null;
     this._sliding = false;
-    this._onOutside = (e) => { if (this.el && !e.composedPath().includes(this.el)) this.close(); };
+    this.closedBy = null; // the outside pointerdown that closed the popup (that gesture must not act)
+    this._onOutside = (e) => {
+      if (!this.el || e.composedPath().includes(this.el)) return;
+      this.closedBy = e;
+      this.close();
+    };
+    this._onRelease = () => { this._sliding = false; };
     this._onKey = (e) => { if (e.key === 'Escape') this.close(); };
   }
 
@@ -157,11 +173,12 @@ export class ObjectPopup {
     el.addEventListener('click', (e) => this._click(e));
     el.addEventListener('change', (e) => this._change(e));
     el.addEventListener('pointerdown', (e) => { if (e.target.type === 'range') this._sliding = true; });
-    el.addEventListener('pointerup', () => { this._sliding = false; });
     el.querySelector('.fp-pop-x').addEventListener('click', () => this.close());
     this.el = el;
     this.root.append(el);
     window.addEventListener('pointerdown', this._onOutside, true);
+    window.addEventListener('pointerup', this._onRelease, true); // a slider released outside the popup
+    window.addEventListener('pointercancel', this._onRelease, true);
     window.addEventListener('keydown', this._onKey);
     this.update();
     this.position();
@@ -249,14 +266,17 @@ export class ObjectPopup {
     if (entity) this.onAction('light', 'turn_on', { entity_id: entity, brightness: Math.round(Number(e.target.value)) });
   }
 
-  // Next to the object's anchor (called after every render), kept inside the stage.
+  // Next to the object's anchor (called after every render), kept inside the stage; hidden while
+  // the anchor is off-screen or behind the camera.
   position() {
     if (!this.el) return;
-    const p = this._anchor ? this.project(this._anchor) : null;
-    if (!p) { this.el.style.visibility = 'hidden'; return; }
+    const world = (this.anchorOf && this.anchorOf(this._id)) || this._anchor;
+    const p = world ? this.project(world) : null;
     const r = this.root.getBoundingClientRect();
+    const ax = p ? p[0] - r.left : 0, ay = p ? p[1] - r.top : 0;
+    if (!p || ax < 0 || ay < 0 || ax > r.width || ay > r.height) { this.el.style.visibility = 'hidden'; return; }
+    this.el.style.maxHeight = `${Math.max(60, r.height - 16)}px`;
     const w = this.el.offsetWidth, h = this.el.offsetHeight, gap = 18, pad = 8;
-    const ax = p[0] - r.left, ay = p[1] - r.top;
     let x = ax + gap;
     if (x + w > r.width - pad) x = ax - gap - w; // no room on the right: left of the object
     x = Math.max(pad, Math.min(x, r.width - w - pad));
@@ -268,6 +288,8 @@ export class ObjectPopup {
   close() {
     if (!this.el) return;
     window.removeEventListener('pointerdown', this._onOutside, true);
+    window.removeEventListener('pointerup', this._onRelease, true);
+    window.removeEventListener('pointercancel', this._onRelease, true);
     window.removeEventListener('keydown', this._onKey);
     this.el.remove();
     this.el = null;

@@ -406,6 +406,26 @@ try {
   await page.keyboard.press('Escape');
   await sleep(100);
   check('Esc closes the popup', !(await pop()));
+  // the tap that closes the popup does not also act (tap on the lamp itself)
+  p = await at();
+  await page.mouse.move(p[0], p[1]); await page.mouse.down(); await sleep(700); await page.mouse.up(); await sleep(100);
+  const n2 = await calls();
+  await page.mouse.click(p[0], p[1]);
+  await sleep(200);
+  check('a tap that closes the popup does not toggle', !(await pop()) && (await calls()) === n2);
+  // popup hidden while its anchor is off-screen
+  p = await at();
+  await page.mouse.move(p[0], p[1]); await page.mouse.down(); await sleep(700); await page.mouse.up(); await sleep(100);
+  const cam0 = await page.evaluate(`${card}._view.getCamera()`);
+  await page.evaluate(`(() => { const v = ${card}._view; const c = v.getCamera();
+    const d = [c.target[0] - c.position[0], c.target[1] - c.position[1], c.target[2] - c.position[2]];
+    v.setCamera({ position: c.position, target: [c.position[0] - d[0], c.position[1] - d[1], c.position[2] - d[2]] }, { instant: true }); })()`);
+  await sleep(300);
+  pp = await pop();
+  check('popup hidden while its anchor is behind the camera', !!pp && pp.vis === 'hidden', JSON.stringify(pp));
+  await page.keyboard.press('Escape');
+  await page.evaluate(`${card}._view.setCamera(${JSON.stringify(cam0)}, { instant: true })`);
+  await sleep(300);
   // popup closes on outside tap and on view change
   p = await at();
   await page.mouse.move(p[0], p[1]); await page.mouse.down(); await sleep(700); await page.mouse.up(); await sleep(100);
