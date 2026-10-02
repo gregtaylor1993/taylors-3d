@@ -14,6 +14,8 @@ import {
   castsShadow, shadowInfo, isCoplanarOverlay, depthRange, depthChanged, isOccluded, sunDirection, ghostMaterial, pickable,
 } from './render-rules.js';
 
+const TEX_KEYS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap', 'bumpMap', 'alphaMap'];
+
 // Plan rectangle of a world-space box (used for rooms tagged without an outline).
 export function fallbackOutline(box) {
   return [[box.min.x, -box.max.z], [box.max.x, -box.max.z], [box.max.x, -box.min.z], [box.min.x, -box.min.z]];
@@ -366,6 +368,7 @@ export class FloorplanView {
           if (shadowInfo(o).layers.some((l) => /^(terrain|floor)$/i.test(l))) floorYs.push(b.max.y);
         });
         if (!all.isEmpty()) floorYs.push(all.min.y);
+        const aniso = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
         root.traverse((o) => {
           if (!o.isMesh) return;
           const mats = Array.isArray(o.material) ? o.material : [o.material];
@@ -376,6 +379,11 @@ export class FloorplanView {
             }
             mat.userData.baseOpacity = mat.opacity;
             mat.userData.wasTransparent = mat.transparent;
+            // glTF does not store anisotropic filtering: without it floor boards and tiles blur at grazing angles
+            for (const key of TEX_KEYS) {
+              const tex = mat[key];
+              if (tex && tex.anisotropy !== aniso) { tex.anisotropy = aniso; tex.needsUpdate = true; }
+            }
             mat.userData.baseDepthWrite = mat.depthWrite;
           }
           const box = new THREE.Box3().setFromObject(o);
