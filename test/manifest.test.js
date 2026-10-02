@@ -153,3 +153,22 @@ describe('layer-only tags', () => {
     expect(m.errors).toEqual([]);
   });
 });
+
+describe('kindless fp keeps name tags', () => {
+  it('layer-only fp on a legacy-named top-level node', () => {
+    const m = buildManifest(tree([{ name: 'floor:ground', extras: fp({ layer: 'x' }) }, { name: 'roof' }]));
+    expect(m.errors).toEqual([]);
+    expect(m.levels.map((l) => l.id)).toEqual(['ground', 'roof']);
+  });
+  it('views-only fp on a single legacy-named root', () => {
+    const m = buildManifest(tree([{ name: 'floor:ground', extras: { fp: { views: [{ id: 'v1' }] } } }]));
+    expect(m.levels.map((l) => l.id)).toEqual(['ground']);
+    expect(m.views.map((v) => v.id)).toEqual(['v1']);
+  });
+  it('layer-only fp on an fp:<type>:<id> named node', () => {
+    const lamp = { name: 'fp:light:lamp_1', extras: fp({ layer: 'decoration' }) };
+    const m = buildManifest(tree([{ name: 'floor:ground', children: [lamp] }]));
+    expect(m.errors).toEqual([]);
+    expect(m.objects).toMatchObject([{ id: 'lamp_1', type: 'light' }]);
+  });
+});

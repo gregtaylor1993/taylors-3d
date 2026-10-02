@@ -12,11 +12,17 @@ export function parseSelector(s) {
   return KINDS.includes(kind) && value ? { kind, value } : null;
 }
 
+const globCache = new Map();
 function globRe(pattern) {
+  let re = globCache.get(pattern);
+  if (re) return re;
   const esc = (t) => t.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-  const body = pattern.split('/').map((seg) => (seg === '**' ? '.*' : esc(seg).replace(/\*/g, '[^/]*'))).join('/')
+  const segs = pattern.split('/').filter((seg, i, a) => !(seg === '**' && a[i - 1] === '**'));
+  const body = segs.map((seg) => (seg === '**' ? '.*' : esc(seg).replace(/\*/g, '[^/]*'))).join('/')
     .replace(/\.\*\//g, '(?:.*/)?');
-  return new RegExp('^' + body + '$');
+  re = new RegExp('^' + body + '$');
+  globCache.set(pattern, re);
+  return re;
 }
 
 export function nodeIndex(adapter, manifest) {
@@ -82,7 +88,7 @@ export function unmatchedSelectors(index, rules) {
   for (const r of rules || []) {
     const s = r && (r.show ?? r.hide);
     const sel = parseSelector(s);
-    if (!sel || !index.nodes.some((n) => matches(sel, n))) out.push(s);
+    if (typeof s === 'string' && (!sel || !index.nodes.some((n) => matches(sel, n)))) out.push(s);
   }
   return [...new Set(out)];
 }

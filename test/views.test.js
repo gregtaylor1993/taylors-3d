@@ -85,3 +85,23 @@ describe('resolveVisibility', () => {
     expect(unmatchedSelectors(idx, [{ hide: 'node:old/path' }, { hide: 'level:ground' }, { hide: 'bad' }])).toEqual(['node:old/path', 'bad']);
   });
 });
+
+describe('views edge cases', () => {
+  it('rule order matters', () => {
+    const v = resolveVisibility(idx, [{ show: 'room:kitchen' }, { hide: 'level:ground' }]);
+    expect(v[at('kitchen')]).toBe(false);
+  });
+  it('malformed rules are ignored', () => {
+    const rules = [{}, null, { show: 5 }, { hide: 'node:' }];
+    expect(() => unmatchedSelectors(idx, rules)).not.toThrow();
+    expect(resolveVisibility(idx, rules).every(Boolean)).toBe(true);
+    expect(unmatchedSelectors(idx, rules)).toEqual(['node:']);
+  });
+  it('node names with regex characters match literally', () => {
+    const odd = { name: 'a.b[1]' };
+    const a2 = tree([{ name: 'root', children: [odd, { name: 'aXb1' }] }]);
+    const i2 = nodeIndex(a2, buildManifest(a2));
+    const hit = i2.nodes.filter((n) => matches(parseSelector('node:root/a.b[1]'), n)).map((n) => n.name);
+    expect(hit).toEqual(['a.b[1]']);
+  });
+});

@@ -40,7 +40,7 @@ export function buildManifest(adapter) {
   // an fp object without a kind (layer-only, views-only) is not a tag
   const tagOf = (node, topLevel) => {
     const t = readTag(adapter.name(node), adapter.extras(node), { topLevel });
-    return t && t.kind === undefined ? null : t;
+    return t && t.kind === undefined ? readTag(adapter.name(node), null, { topLevel }) : t;
   };
   let tops = adapter.roots();
   if (tops.length === 1 && !tagOf(tops[0], true)) {
