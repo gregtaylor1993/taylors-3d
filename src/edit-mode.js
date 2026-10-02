@@ -1036,7 +1036,7 @@ export class EditMode {
 
   // "Side section" block: direction + position of the cut (layout.views[id].section, card world).
   _sectionHtml(v, lv) {
-    const box = this.view.model && this.view.modelBox();
+    const box = this.view.model && this.view.sectionBox();
     if (!box) return '';
     const plane = this.card.sectionPlaneNow(v);
     if (!plane) return '';
@@ -1266,7 +1266,7 @@ export class EditMode {
     if (f === 'vw-sec-pos') card.saveViewPatch(v.id, { section: this._sectionFromPanel(v, Number(el.value)) });
     else if (f === 'vw-sec-dir') {
       // a new axis: start in the middle of the model along it
-      const box = this.view.modelBox();
+      const box = this.view.sectionBox();
       const dir = SECTION_DIRS.find((d) => d.id === el.value);
       if (!box || !dir) return;
       const [lo, hi] = this._sectionRange(dir.normal, box);

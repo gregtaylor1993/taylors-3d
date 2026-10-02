@@ -9,6 +9,7 @@ import { centroid } from './placement.js';
 import { wallSegments } from './layout.js';
 import { levelVisible } from './bindings.js';
 import { buildManifest, threeAdapter } from './manifest.js';
+import { sectionLevels, unionBox } from './views.js';
 
 // Plan rectangle of a world-space box (used for rooms tagged without an outline).
 export function fallbackOutline(box) {
@@ -299,7 +300,7 @@ export class FloorplanView {
     this.raycaster.setFromCamera(ndc, this.camera);
     const shown = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
     const hit = this.raycaster.intersectObject(this.model.root, true)
-      .find((h) => h.object.isMesh && shown(h.object) && h.point.y <= this.modelClip.constant + 1e-6);
+      .find((h) => h.object.isMesh && shown(h.object) && h.point.y <= this.modelClip.constant + 1e-6 && !this._cutAway(h.point));
     if (!hit) return null;
     const fn = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : null;
     const hitInfo = { point: hit.point.toArray(), object: hit.object, up: !fn || Math.abs(fn.y) >= Math.cos((25 * Math.PI) / 180) };
@@ -757,6 +758,7 @@ export class FloorplanView {
     }
     this._sectionMaterials();
     this._applyFloorVisibility();
+    this.renderer.shadowMap.needsUpdate = true;
     this.dirty = true;
   }
 
@@ -786,6 +788,17 @@ export class FloorplanView {
     this.modelGroup.updateMatrixWorld(true);
     const b = new THREE.Box3().setFromObject(this.model.root);
     return b.isEmpty() ? null : { min: b.min.toArray(), max: b.max.toArray() };
+  }
+
+  // box framing the section: union of the storey/basement levels (the house), else the whole model
+  sectionBox() {
+    if (!this.model) return null;
+    this.modelGroup.updateMatrixWorld(true);
+    const boxes = sectionLevels(this.model.manifest.levels).map((l) => {
+      const b = new THREE.Box3().setFromObject(l.node);
+      return b.isEmpty() ? null : { min: b.min.toArray(), max: b.max.toArray() };
+    });
+    return unionBox(boxes) || this.modelBox();
   }
 
   // a plane given in model space (glTF scene coordinates) -> card world

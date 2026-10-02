@@ -484,11 +484,25 @@ export function sectionCamera(plane, box) {
 
 // Views tab directions (world normals; world z = -plan y).
 export const SECTION_DIRS = [
-  { id: 'we', label: 'West→East', normal: [-1, 0, 0] },
-  { id: 'ew', label: 'East→West', normal: [1, 0, 0] },
-  { id: 'ns', label: 'North→South', normal: [0, 0, 1] },
-  { id: 'sn', label: 'South→North', normal: [0, 0, -1] },
+  { id: 'west', label: 'Keep west half', normal: [-1, 0, 0] }, // -x + c >= 0: x <= c
+  { id: 'east', label: 'Keep east half', normal: [1, 0, 0] },
+  { id: 'north', label: 'Keep north half', normal: [0, 0, -1] }, // -z + c >= 0: plan y >= -c
+  { id: 'south', label: 'Keep south half', normal: [0, 0, 1] },
 ];
+
+// Levels whose boxes frame the section (the house without garden / roof overhang).
+export const sectionLevels = (levels) => (levels || []).filter(isStorey);
+
+// Union of {min, max} boxes (null entries skipped); null when there is none.
+export function unionBox(boxes) {
+  let out = null;
+  for (const b of boxes || []) {
+    if (!b) continue;
+    if (!out) out = { min: [...b.min], max: [...b.max] };
+    else for (let k = 0; k < 3; k++) { out.min[k] = Math.min(out.min[k], b.min[k]); out.max[k] = Math.max(out.max[k], b.max[k]); }
+  }
+  return out;
+}
 
 export function sectionDir(normal) {
   let best = SECTION_DIRS[0], bd = -Infinity;

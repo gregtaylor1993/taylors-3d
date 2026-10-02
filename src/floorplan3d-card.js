@@ -306,7 +306,7 @@ class Floorplan3dCard extends HTMLElement {
     }
     const prevModel = this._view.model;
     this._view.setModel(opts).then((err) => {
-      if (this._view.model !== prevModel && this._section) { this._section = false; this._sectionPreview = null; this._view.setSection(null); }
+      if (this._view.model !== prevModel && this._section) this._dropSection();
       this._notice.textContent = err || '';
       this._notice.hidden = !err;
       // a new model resets the views; the first view applied frames it (see _resolveViewList)
@@ -908,7 +908,16 @@ class Floorplan3dCard extends HTMLElement {
 
   // ---------- side section ----------
   _sectionActive() {
-    return this._section && this._mode === '3d' && !!this._view.model && !!this._index && !!this._mb && !this._floorOnly;
+    if (this._section && (!this._mb || !this._index || !this._view.model)) this._dropSection(); // model gone: fully off
+    return this._section && this._mode === '3d' && !this._floorOnly;
+  }
+
+  // Section off without touching visibility or camera (callers re-apply what they need).
+  _dropSection() {
+    this._section = false;
+    this._sectionPreview = null;
+    if (this._view.sectionClip) this._view.setSection(null);
+    if (this._sectionBtn) this._sectionBtn.classList.remove('on');
   }
 
   // "Show all" while the section is on: every node, all floors, overview device rules.
@@ -922,7 +931,7 @@ class Floorplan3dCard extends HTMLElement {
 
   // A view's cut plane in card world (the active view: the Views tab preview while sliding wins).
   sectionPlaneNow(v = this.currentView()) {
-    const box = this._view.modelBox();
+    const box = this._view.sectionBox();
     if (!box || !v) return null;
     if (this._sectionPreview && v.id === this._viewId) return this._sectionPreview;
     return sectionPlane(v, box, (p) => this._view.modelPlaneToWorld(p));
@@ -941,7 +950,7 @@ class Floorplan3dCard extends HTMLElement {
       this._section = true;
       this._applyViewVisibility();
       this._applyMarkerStates();
-      const plane = this.sectionPlaneNow(), box = this._view.modelBox();
+      const plane = this.sectionPlaneNow(), box = this._view.sectionBox();
       if (!was && plane && box) this._view.setCamera(sectionCamera(plane, box));
     } else {
       if (!this._section) return;
@@ -962,7 +971,7 @@ class Floorplan3dCard extends HTMLElement {
     if (!plane) { if (this._section) this._applySectionPlane(); return; }
     if (!this._section) { this.setSection(true); return; }
     this._view.setSection(plane);
-    const box = this._view.modelBox();
+    const box = this._view.sectionBox();
     if (aim && box) this._view.setCamera(sectionCamera(plane, box));
   }
 
@@ -1096,7 +1105,7 @@ class Floorplan3dCard extends HTMLElement {
       if (this._view.model && !match.camera) this._view.fit();
       return;
     }
-    if (this._section) { this._section = false; this._sectionPreview = null; this._view.setSection(null); }
+    if (this._section) this._dropSection();
     this._floorOnly = id;
     this._floor = id;
     this._view.setVisibleFloor(id);
@@ -1131,6 +1140,7 @@ class Floorplan3dCard extends HTMLElement {
     }
     for (const btn of this.shadowRoot.querySelectorAll('.seg button')) btn.classList.toggle('on', btn.dataset.mode === this._mode);
     this._dayBtn.hidden = !(this._view && this._view.model);
+    if (this._section && (!this._mb || !this._index || !hasModel)) this._dropSection();
     if (this._sectionBtn) {
       this._sectionBtn.hidden = !(this._view && this._view.model && this._mode === '3d');
       this._sectionBtn.classList.toggle('on', !!this._section);

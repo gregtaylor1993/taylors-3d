@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { normSection, sectionPlane, sectionCamera, SECTION_DIRS, sectionDir, sectionPos, sectionAt, sectionRange,
-  sectionSide, resolveViews } from '../src/views.js';
+  sectionSide, sectionLevels, unionBox, resolveViews } from '../src/views.js';
 import { buildManifest } from '../src/manifest.js';
 
 const box = { min: [0, 0, -10], max: [16, 8, 0] }; // centre x 8, plan y 0..10
@@ -69,14 +69,26 @@ describe('sectionCamera', () => {
 });
 
 describe('section directions and slider position', () => {
-  it('has the four directions', () => {
-    expect(SECTION_DIRS.map((d) => d.normal)).toEqual([[-1, 0, 0], [1, 0, 0], [0, 0, 1], [0, 0, -1]]);
+  it('has the four directions, labelled by the half they keep', () => {
+    expect(SECTION_DIRS.map((d) => [d.id, d.label, d.normal])).toEqual([
+      ['west', 'Keep west half', [-1, 0, 0]], ['east', 'Keep east half', [1, 0, 0]],
+      ['north', 'Keep north half', [0, 0, -1]], ['south', 'Keep south half', [0, 0, 1]],
+    ]);
+  });
+  it('each direction keeps the half its label says (world z = -plan y)', () => {
+    const at = { west: [-5, 0, 0], east: [5, 0, 0], north: [0, 0, -5], south: [0, 0, 5] };
+    const opposite = { west: 'east', east: 'west', north: 'south', south: 'north' };
+    for (const d of SECTION_DIRS) {
+      const p = { normal: d.normal, constant: 0 };
+      expect(sectionSide(p, at[d.id])).toBeGreaterThan(0);
+      expect(sectionSide(p, at[opposite[d.id]])).toBeLessThan(0);
+    }
   });
   it('picks the closest direction', () => {
-    expect(sectionDir([-1, 0, 0]).id).toBe('we');
-    expect(sectionDir([0.9, 0, 0.1]).id).toBe('ew');
-    expect(sectionDir([0, 0, 1]).id).toBe('ns');
-    expect(sectionDir([0.1, 0, -0.9]).id).toBe('sn');
+    expect(sectionDir([-1, 0, 0]).id).toBe('west');
+    expect(sectionDir([0.9, 0, 0.1]).id).toBe('east');
+    expect(sectionDir([0, 0, 1]).id).toBe('south');
+    expect(sectionDir([0.1, 0, -0.9]).id).toBe('north');
   });
   it('position round-trips: x for east-west normals, plan y (north) for north-south', () => {
     for (const d of SECTION_DIRS) {
@@ -124,5 +136,17 @@ describe('section in manifest and resolveViews', () => {
     expect(v[1].modelSection).toBeNull();
     const w = resolveViews({ manifest, haFloors: [], layoutViews: { a: { section: { normal: [0, 0, 0], constant: 1 } } }, yamlViews: {}, savedLevels: {} });
     expect(w[0].section).toBeNull();
+  });
+});
+
+describe('section box', () => {
+  it('uses storey and basement levels only', () => {
+    const levels = [{ id: 'g', role: 'storey' }, { id: 'b', role: 'basement' }, { id: 'ext', role: 'exterior' }, { id: 'roof', role: 'roof' }, { id: 'x' }];
+    expect(sectionLevels(levels).map((l) => l.id)).toEqual(['g', 'b']);
+    expect(sectionLevels(null)).toEqual([]);
+  });
+  it('unions boxes, skipping empty ones; null when none', () => {
+    expect(unionBox([{ min: [0, 0, 0], max: [1, 1, 1] }, null, { min: [-1, 2, 0], max: [0, 3, 5] }])).toEqual({ min: [-1, 0, 0], max: [1, 3, 5] });
+    expect(unionBox([])).toBeNull();
   });
 });

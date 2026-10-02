@@ -118,6 +118,11 @@ try {
   check('Section on: camera moved to the cut', JSON.stringify(sec.cam) !== JSON.stringify(cam0), JSON.stringify([cam0, sec.cam]));
   check('Section on: markers on the removed side hidden, kept side shown', sec.removedHidden > 0 && sec.removedShown === 0 && sec.keptShown > 0, JSON.stringify(sec));
   await sh('model-section.png');
+  const pk = await page.evaluate(`(() => { const v = ${card}._view, r = v.renderer.domElement.getBoundingClientRect(); let hits = 0, cut = 0;
+    for (let i = 1; i < 8; i++) for (let j = 1; j < 8; j++) { const h = v.pickModel(r.left + (r.width * i) / 8, r.top + (r.height * j) / 8);
+      if (!h) continue; hits++; if (v.sectionClip.distanceToPoint({ x: h.hit.point[0], y: h.hit.point[1], z: h.hit.point[2] }) < -1e-6) cut++; }
+    return { hits, cut }; })()`);
+  check('Section on: model picks ignore the removed half', pk.hits > 0 && pk.cut === 0, JSON.stringify(pk));
   await page.evaluate(`${secBtn}.click()`);
   await sleep(600);
   sec = await secState();

@@ -193,11 +193,12 @@ The **Section** button (box cutter, 3D view with a model) cuts the house with on
 and turns the camera to look at the cut face: every storey and the roof are shown while it is on,
 devices beyond the cut are hidden, and cut walls read solid. Turning it off, switching views,
 **Reset view** or **Top** clears the cut and returns to the view. Where the cut runs is set per
-view in **Edit → Views → Side section**: a direction (West→East, East→West, North→South,
-South→North) and a **Position** slider across the model (0.05 m steps, the cut follows the slider
-live). Without a setting the model's `fp.views[*].section` is used
-(`{ "normal": [-1, 0, 0], "constant": 7 }`, a three.js plane in model coordinates: the side where
-`normal · p + constant ≥ 0` stays), else a West→East cut through the middle of the house.
+view in **Edit → Views → Side section**: which half stays (*Keep west / east / north / south
+half*) and a **Position** slider across the house (its storeys; 0.05 m steps, the cut follows the
+slider live). The camera looks at the cut face from the removed half. Without a setting the
+model's `fp.views[*].section` is used (`{ "normal": [-1, 0, 0], "constant": 7 }`, a three.js plane
+in model coordinates: the side where `normal · p + constant ≥ 0` stays, here x ≤ 7 m), else the
+west half is kept, cut through the middle of the house.
 
 Per-card overrides in YAML (same keys, they win over the stored ones):
 
