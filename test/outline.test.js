@@ -68,6 +68,15 @@ describe('outlineFromTriangles', () => {
     expect(out).toHaveLength(4);
     expect(area(out)).toBeCloseTo(3);
   });
+  it('merges points within 5 mm', () => {
+    const t = quad(0, 0, 4, 3);
+    t[3] += 0.003; t[11] -= 0.002; // nudge shared-corner copies by a few mm
+    expect(area(outlineFromTriangles(t, [2, 0, -1.5]))).toBeCloseTo(12, 1);
+  });
+  it('hit on the boundary seam falls back to the largest nearby loop', () => {
+    const out = outlineFromTriangles([...quad(0, 0, 4, 3), ...quad(0.5, 0.5, 1, 1)], [4.05, 0, -1.5]);
+    expect(area(out)).toBeCloseTo(12);
+  });
   it('perf: 20k disjoint triangles plus target quad completes quickly', () => {
     const tris = [];
     for (let i = 0; i < 20000; i++) {

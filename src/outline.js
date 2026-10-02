@@ -2,7 +2,8 @@
 import { pointInPolygon, signedArea } from './placement.js';
 
 const COS_UP = Math.cos((25 * Math.PI) / 180);
-const key = (x, z) => Math.round(x * 1000) + ',' + Math.round(z * 1000);
+const MERGE = 200; // points within 5 mm share a key
+const key = (x, z) => Math.round(x * MERGE) + ',' + Math.round(z * MERGE);
 
 export function outlineFromTriangles(tris, hit) {
   const pts = new Map(); // key -> [x, z]
@@ -79,7 +80,14 @@ export function outlineFromTriangles(tris, hit) {
     if (loop.length >= 3) loops.push(loop.map((k) => { const [x, z] = pts.get(k); return [x, -z]; }));
   }
   const target = [hit[0], -hit[2]];
-  const candidates = loops.filter((l) => pointInPolygon(target, l)).sort((a, b) => Math.abs(signedArea(a)) - Math.abs(signedArea(b)));
+  const area = (l) => Math.abs(signedArea(l));
+  // the smallest loop around the click (a merged mesh can span several rooms), else the largest loop
+  let candidates = loops.filter((l) => pointInPolygon(target, l)).sort((a, b) => area(a) - area(b));
+  if (!candidates.length) { // the hit sits on an edge/seam: take the largest loop whose box (+10 cm) holds it
+    const near = (l) => l.some(([x]) => x <= target[0] + 0.1) && l.some(([x]) => x >= target[0] - 0.1)
+      && l.some(([, y]) => y <= target[1] + 0.1) && l.some(([, y]) => y >= target[1] - 0.1);
+    candidates = loops.filter(near).sort((a, b) => area(b) - area(a));
+  }
   if (!candidates.length) return null;
   // Simplify collinear points BEFORE snapping
   let simplified = candidates[0];
