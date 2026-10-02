@@ -343,6 +343,95 @@ try {
   await s.close();
 }
 
+// 1b. model objects: tap toggles, hold opens the popup, a drag never toggles (a lamp injected into the demo model)
+s = await openDemo({ model: '1', view: '3d' }, { width: 1400, height: 560 });
+try {
+  const { page } = s;
+  await page.waitForFunction(`!!${card}._view.model && !!${card}._hass`, { timeout: 10000 });
+  await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=ground]').click()`);
+  await settle(page, card);
+  const injected = await page.evaluate(`(() => { const c = ${card}, v = c._view, m = v.model;
+    const lv = v.modelManifest().levels.find((l) => l.id === 'level0');
+    let mesh = null;
+    lv.node.traverse((n) => { if (!mesh && n.isMesh && n.name) mesh = n; });
+    if (!mesh) return null;
+    m.manifest.objects = (m.manifest.objects || []).concat([{ id: 'test_lamp', type: 'light', label: 'Test lamp', node: mesh,
+      glow: mesh.name, level: 'level0', suggest: { entity: 'light.hall' } }]);
+    c._objects.setModel(null); c._objects.setModel(m);
+    c._bindKey = null; c._syncBindings(); c._buildMarkers(); c._refreshStates(); c._updateObjects();
+    v.dirty = true;
+    return mesh.name; })()`);
+  check('test lamp injected into the demo model', !!injected, String(injected));
+  await sleep(200);
+  const at = () => page.evaluate(`(() => { const c = ${card}; const a = c._objects.anchors().find((x) => x.id === 'test_lamp');
+    return a && c._view.projectWorld(a.world); })()`);
+  const hall = () => page.evaluate(`${card}._hass.states['light.hall'].state`);
+  const calls = () => page.evaluate('(window.__serviceCalls || []).length');
+  let p = await at();
+  check('lamp anchor projects onto the screen', !!p, JSON.stringify(p));
+  const before = await hall();
+  await page.mouse.click(p[0] + 12, p[1] + 8); // within 30 px
+  await sleep(200);
+  check('tap near the lamp toggles its light', (await hall()) !== before, `${before} -> ${await hall()}`);
+  check('the bound light has no marker of its own', !(await page.evaluate(`${card}._markers.some((m) => m.entityId === 'light.hall')`)));
+  const n0 = await calls();
+  p = await at();
+  await page.mouse.move(p[0], p[1]);
+  await page.mouse.down();
+  await page.mouse.move(p[0] + 40, p[1] + 10, { steps: 5 });
+  await page.mouse.up();
+  await sleep(200);
+  check('a drag that starts on the lamp (orbit) never toggles', (await calls()) === n0);
+  await settle(page, card);
+  p = await at();
+  await page.mouse.move(p[0], p[1]);
+  await page.mouse.down();
+  await sleep(700);
+  await page.mouse.up();
+  await sleep(200);
+  const pop = () => page.evaluate(`(() => { const el = ${card}.shadowRoot.querySelector('.fp-popup');
+    return el && { title: el.querySelector('.fp-pop-title').textContent, rows: [...el.querySelectorAll('.fp-pop-row')].map((r) => r.className.replace('fp-pop-row ', '')),
+      vis: el.style.visibility, t: el.style.transform }; })()`);
+  let pp = await pop();
+  check('hold opens the popup (toggle + brightness) without toggling', !!pp && pp.title === 'Test lamp' && pp.rows.join() === 'toggle,brightness' && pp.vis !== 'hidden' && (await calls()) === n0, JSON.stringify(pp));
+  await page.screenshot({ path: path.join(root, 'screenshots', 'object-popup.png') });
+  await page.evaluate(`(() => { const r = ${card}.shadowRoot.querySelector('.fp-popup .brightness input'); r.value = '100'; r.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  const last = await page.evaluate('JSON.stringify(window.__serviceCalls[window.__serviceCalls.length - 1])');
+  check('brightness slider sends light.turn_on once on release', last === JSON.stringify(['light', 'turn_on', { entity_id: 'light.hall', brightness: 100 }]), last);
+  const st1 = await hall();
+  await page.evaluate(`${card}.shadowRoot.querySelector('.fp-popup .toggle .fp-switch').click()`);
+  await sleep(200);
+  pp = await pop();
+  check('popup switch toggles and the popup stays open', (await hall()) !== st1 && !!pp, `${st1} -> ${await hall()}`);
+  await page.keyboard.press('Escape');
+  await sleep(100);
+  check('Esc closes the popup', !(await pop()));
+  // popup closes on outside tap and on view change
+  p = await at();
+  await page.mouse.move(p[0], p[1]); await page.mouse.down(); await sleep(700); await page.mouse.up(); await sleep(100);
+  await page.mouse.click(30, 520);
+  await sleep(100);
+  check('outside tap closes the popup', !(await pop()));
+  p = await at();
+  await page.mouse.move(p[0], p[1]); await page.mouse.down(); await sleep(700); await page.mouse.up(); await sleep(100);
+  await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=exterior]').click()`);
+  await sleep(100);
+  check('view change closes the popup', !(await pop()));
+  // edit mode: object taps are off until the Objects tab exists
+  await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=ground]').click()`);
+  await settle(page, card);
+  await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
+  await sleep(300);
+  const n1 = await calls();
+  p = await at();
+  if (p) await page.mouse.click(p[0], p[1]);
+  await sleep(200);
+  check('edit mode: tapping the lamp does not toggle it', (await calls()) === n1);
+  allErrors.push(...s.errors);
+} finally {
+  await s.close();
+}
+
 // 2. missing model
 s = await openDemo({ model: '/demo/missing.glb' });
 try {

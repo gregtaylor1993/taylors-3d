@@ -110,6 +110,7 @@ export function createMockHass({ onChange }) {
     hassUrl: (p) => p,
     fetchWithAuth,
     callService: async (domain, service, data) => {
+      (window.__serviceCalls = window.__serviceCalls || []).push([domain, service, data]); // headless checks
       const s = current.states[data.entity_id];
       if (!s || service !== 'toggle') return;
       const on = s.state !== 'on';

@@ -75,7 +75,7 @@ export class FloorplanView {
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.localClippingEnabled = true; // model cut-away
     this.labelRenderer = new CSS2DRenderer();
-    Object.assign(this.labelRenderer.domElement.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
+    Object.assign(this.labelRenderer.domElement.style, { position: 'absolute', inset: '0', pointerEvents: 'none', isolation: 'isolate' }); // own stacking context: label z-indexes stay under the popup
     container.append(this.renderer.domElement, this.labelRenderer.domElement);
 
     this.persp = new THREE.PerspectiveCamera(35, 1, 0.3, 500);
@@ -107,6 +107,7 @@ export class FloorplanView {
     this.scene.add(this.modelGroup);
     this.objectsGroup = new THREE.Group(); // model objects: the real light pool and spot targets
     this.scene.add(this.objectsGroup);
+    this.onRender = null; // called after every rendered frame
     this.objectLayer = null; // ObjectLayer (registers itself); reset when the model goes
     this.onObjectsInvalidate = null; // called when model placement or visibility changed
     this.model = null; // { id, root, manifest }
@@ -244,6 +245,14 @@ export class FloorplanView {
   // Screen position (client px) of a plan point, the inverse of planPoint.
   screenPoint(x, y, z, floorId) {
     const v = planToWorld(x, y, z, this.floorElevation(floorId)).project(this.camera);
+    const r = this.renderer.domElement.getBoundingClientRect();
+    return [r.left + ((v.x + 1) / 2) * r.width, r.top + ((1 - v.y) / 2) * r.height];
+  }
+
+  // Client px of a world point, null when it is behind the camera or outside the depth range.
+  projectWorld(world) {
+    const v = world.clone().project(this.camera);
+    if (!(v.z >= -1 && v.z <= 1)) return null;
     const r = this.renderer.domElement.getBoundingClientRect();
     return [r.left + ((v.x + 1) / 2) * r.width, r.top + ((1 - v.y) / 2) * r.height];
   }
@@ -1529,6 +1538,7 @@ export class FloorplanView {
       this.labelRenderer.domElement.classList.toggle('compact', this.pixelsPerMetre() < COMPACT_PPM);
       this.renderer.render(this.scene, this.camera);
       this.labelRenderer.render(this.scene, this.camera);
+      if (this.onRender) this.onRender(); // e.g. the object popup follows its anchor
     };
     this._raf = requestAnimationFrame(loop);
     this._scheduleOcclusion(0);

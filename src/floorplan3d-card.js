@@ -18,16 +18,19 @@ import {
 } from './views.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 import { ObjectLayer } from './objects/layer.js';
-import { bindObjects, nightFactor, sunVector, sunStrength, clampSunDir } from './objects/logic.js';
+import { bindObjects, nightFactor, sunVector, sunStrength, clampSunDir, screenNearest } from './objects/logic.js';
+import { ObjectPopup, objectAction, actionTarget, toggleCall } from './objects/popup.js';
 
 const VERSION = '0.3.1';
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LONG_PRESS_MS = 500;
 const CLICK_SLOP_PX = 5;
+const OBJECT_HIT_PX = { touch: 52, mouse: 30 };
 const TRAIL_STEP_M = 0.15;
 const TRAIL_MAX = 3000;
 const MOWER_Z = 0.15;
 const MODEL_API = '/api/floorplan3d/model';
+const nodeShown = (n) => { for (let x = n; x; x = x.parent) if (!x.visible) return false; return true; };
 
 const STYLE = `
   :host { display: block; }
@@ -79,6 +82,37 @@ const STYLE = `
     background: var(--card-background-color, #fff); color: var(--primary-text-color);
     box-shadow: 0 1px 3px rgba(0,0,0,.2); }
   .fp-val:empty { display: none; }
+  .fp-popup { position: absolute; left: 0; top: 0; z-index: 3; min-width: 190px; max-width: 260px; padding: 8px 10px 10px;
+    border-radius: 12px; background: var(--card-background-color, #fff); color: var(--primary-text-color);
+    border: 1px solid var(--divider-color, rgba(0,0,0,.12)); box-shadow: 0 4px 16px rgba(0,0,0,.28); font-size: 13px;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  .fp-pop-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .fp-pop-title { flex: 1; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fp-pop-x { border: none; background: none; color: var(--secondary-text-color); font-size: 18px; line-height: 1;
+    cursor: pointer; padding: 2px 4px; }
+  .fp-pop-row { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+  .fp-pop-label { flex: 1; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fp-pop-row.chain { border-top: 1px solid var(--divider-color, rgba(0,0,0,.12)); margin-top: 4px; padding-top: 4px; }
+  .fp-pop-row.chain .fp-pop-label { color: var(--primary-text-color); }
+  .fp-pop-row.reason { font-size: 12px; color: var(--secondary-text-color); font-style: italic; min-height: 0; padding-top: 4px; }
+  .fp-pop-row.brightness .fp-pop-label { flex: none; }
+  .fp-pop-row.brightness input { flex: 1; min-width: 0; accent-color: var(--primary-color); }
+  .fp-pop-row.brightness.off input { opacity: .5; }
+  .fp-pop-row.color { flex-wrap: wrap; gap: 6px; padding: 4px 0; }
+  .fp-swatch { width: 22px; height: 22px; border-radius: 50%; padding: 0; cursor: pointer;
+    border: 1.5px solid var(--divider-color, rgba(0,0,0,.15)); }
+  .fp-swatch.on { outline: 2px solid var(--primary-color); outline-offset: 1px; }
+  .fp-swatch.white { background: #ffd9a8; }
+  .fp-switch { width: 36px; height: 20px; border-radius: 10px; border: none; padding: 2px; cursor: pointer; flex: none;
+    background: var(--switch-unchecked-track-color, rgba(127,127,127,.45)); display: flex; transition: background .15s; }
+  .fp-switch span { width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3);
+    transition: transform .15s; }
+  .fp-switch.on { background: var(--primary-color); }
+  .fp-switch.on span { transform: translateX(16px); }
+  .fp-pop-value { font-weight: 500; }
+  .fp-pop-btns { display: flex; gap: 6px; }
+  .fp-pop-btns button { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 12px; cursor: pointer;
+    border: 1px solid var(--divider-color, rgba(0,0,0,.12)); background: var(--card-background-color, #fff); color: var(--primary-text-color); }
   .body { display: flex; }
   .body .stage { flex: 1; min-width: 0; }
   .panel { display: none; width: 300px; flex: none; box-sizing: border-box; flex-direction: column; max-height: var(--fp-height);
@@ -330,6 +364,7 @@ class Floorplan3dCard extends HTMLElement {
     const prevModel = this._view.model;
     this._view.setModel(opts).then((err) => {
       if (this._view.model !== prevModel && this._section) this._dropSection();
+      if (this._view.model !== prevModel) { this._endGesture(); this._popup.close(); }
       this._objects.setModel(this._view.model);
       // bind now: lamps light and bound markers hide without waiting for the next hass push
       if (this._hass && this._layout && this._floors && this._syncBindings()) {
@@ -419,6 +454,8 @@ class Floorplan3dCard extends HTMLElement {
 
   disconnectedCallback() {
     if (this._view) this._view.stop();
+    this._endGesture();
+    if (this._popup) this._popup.close(); // window listeners
     if (this._editing && this._edit) this._edit.detach(); // window listeners (keys, pick menu)
     if (this._ro) this._ro.disconnect();
     this._setCameraTimer(0);
@@ -483,6 +520,16 @@ class Floorplan3dCard extends HTMLElement {
     this._view = new FloorplanView(this._stage);
     this._objects = new ObjectLayer(this._view);
     this._view.onObjectsInvalidate = () => this._updateObjects(); // view, section or placement changed
+    this._popup = new ObjectPopup(this._stage, {
+      onAction: (domain, service, data) => this._hass && this._hass.callService(domain, service, data),
+      project: (w) => this._view.projectWorld(w),
+      resolve: (id) => {
+        const o = this._objects.objectAt(id);
+        if (!o || !this._hass || (o.binding && o.binding.hidden)) return null;
+        return { obj: o.obj, chain: o.chain, states: this._hass.states, groups: (this._layout && this._layout.groups) || {} };
+      },
+    });
+    this._view.onRender = () => this._popup.position();
     this._view.setOcclusion(this._config.occlusion !== false);
     this._view.setMode(this._mode);
     this._loadModel();
@@ -495,10 +542,14 @@ class Floorplan3dCard extends HTMLElement {
     canvas.addEventListener('pointerdown', (e) => this._editing && this._edit.canvasDown(e));
     canvas.addEventListener('pointermove', (e) => this._editing && this._edit.canvasMove(e));
     canvas.addEventListener('pointerup', (e) => this._editing && this._edit.canvasUp(e));
+    // model objects: tap / hold, hit-tested on screen before markers and the canvas (capture phase)
+    this._stage.addEventListener('pointerdown', (e) => this._objectDown(e, canvas), true);
     this._syncToolbar();
   }
 
   _toggleEdit() {
+    this._endGesture();
+    this._popup.close();
     this._editing = !this._editing;
     this._body.classList.toggle('editing', this._editing);
     if (this._editing) {
@@ -610,6 +661,7 @@ class Floorplan3dCard extends HTMLElement {
       this._refreshMower(mower);
     }
     this._updateObjects();
+    this._popup.update();
     if ((markers || viewRefreshed) && this._editing) this._edit.afterUpdate();
     else if (this._editing) this._edit.onStates();
   }
@@ -959,6 +1011,7 @@ class Floorplan3dCard extends HTMLElement {
     const v = this._views.find((x) => x.id === id);
     if (!v) return;
     const wasSection = this._section;
+    this._popup.close();
     this._section = false;
     this._sectionPreview = null;
     this._viewId = id;
@@ -1048,6 +1101,7 @@ class Floorplan3dCard extends HTMLElement {
 
   // Toggle the side section. Off returns to the view's visibility and (camera: true) its camera.
   setSection(on, { camera = true } = {}) {
+    if (this._popup) this._popup.close();
     if (on) {
       if (this._mode !== '3d' || !this._view.model || !this._index) return;
       const was = this._section;
@@ -1113,12 +1167,96 @@ class Floorplan3dCard extends HTMLElement {
   _updateObjects() {
     const layer = this._objects;
     if (!layer || !layer.model || !this._hass || !this._config) return;
-    const levels = layer.model.manifest.levels;
-    const shown = (n) => { for (let x = n; x; x = x.parent) if (!x.visible) return false; return true; };
-    layer.update(this._hass.states, {
-      visibleLevel: (id) => { const lv = levels.find((x) => x.id === id); return !lv || shown(lv.node); },
-      lightsOn: this._config.lights !== 'off',
-    });
+    layer.update(this._hass.states, { visibleLevel: this._levelShown(), lightsOn: this._config.lights !== 'off' });
+  }
+
+  _levelShown() {
+    const levels = (this._objects.model && this._objects.model.manifest.levels) || [];
+    return (id) => { const lv = levels.find((x) => x.id === id); return !lv || nodeShown(lv.node); };
+  }
+
+  // Object taps: view mode; in edit mode only on the Objects tab.
+  _objectTapsOn() {
+    return !this._editing || (this._edit && this._edit.tab === 'objects');
+  }
+
+  // The nearest tappable object (visible, bound, not hidden, level shown) within radius px of a client point.
+  _objectHit(x, y, radius) {
+    const layer = this._objects;
+    if (!layer || !layer.model || !this._hass) return null;
+    const groups = (this._layout && this._layout.groups) || {};
+    const levelShown = this._levelShown();
+    const pts = [];
+    for (const a of layer.anchors()) {
+      const o = layer.objectAt(a.id);
+      const b = o && o.binding;
+      if (!b || b.hidden || (!b.missing && !actionTarget(o.obj, b, groups))) continue;
+      if (!levelShown(o.obj.level) || !nodeShown(o.obj.node)) continue;
+      const p = this._view.projectWorld(a.world);
+      if (p) pts.push({ id: a.id, x: p[0], y: p[1] });
+    }
+    return screenNearest(pts, x, y, radius);
+  }
+
+  // Tap = moved < 5 px; hold 500 ms (not moved) = hold action. Orbit still starts from the canvas.
+  _objectDown(e, canvas) {
+    if (this._gesture) { this._endGesture(); return; } // a second finger: pinch / orbit, no tap
+    if (!this._objectTapsOn() || e.button !== 0 || !e.isPrimary) return;
+    const path = e.composedPath();
+    if ((this._popup.el && path.includes(this._popup.el)) || path.some((n) => n.classList && n.classList.contains('toolbar'))) return;
+    const id = this._objectHit(e.clientX, e.clientY, e.pointerType === 'touch' ? OBJECT_HIT_PX.touch : OBJECT_HIT_PX.mouse);
+    if (!id) return; // markers and the model as before
+    if (e.target !== canvas) e.stopPropagation(); // the object wins over a marker under the finger
+    const g = { id, x: e.clientX, y: e.clientY, pointerId: e.pointerId, long: false };
+    g.timer = setTimeout(() => {
+      g.long = true;
+      g.timer = null;
+      this._runObjectAction(id, 'hold');
+    }, LONG_PRESS_MS);
+    g.move = (ev) => {
+      if (ev.pointerId === g.pointerId && Math.hypot(ev.clientX - g.x, ev.clientY - g.y) >= CLICK_SLOP_PX) this._endGesture();
+    };
+    g.up = (ev) => {
+      if (ev.pointerId !== g.pointerId) return;
+      const tap = !g.long && Math.hypot(ev.clientX - g.x, ev.clientY - g.y) < CLICK_SLOP_PX;
+      this._endGesture();
+      if (tap) this._runObjectAction(id, 'tap');
+    };
+    g.cancel = () => this._endGesture();
+    g.menu = (ev) => ev.preventDefault(); // a touch hold opens no context menu
+    window.addEventListener('pointermove', g.move, true);
+    window.addEventListener('pointerup', g.up, true);
+    window.addEventListener('pointercancel', g.cancel, true);
+    window.addEventListener('contextmenu', g.menu, true);
+    this._gesture = g;
+  }
+
+  _endGesture() {
+    const g = this._gesture;
+    if (!g) return;
+    this._gesture = null;
+    clearTimeout(g.timer);
+    window.removeEventListener('pointermove', g.move, true);
+    window.removeEventListener('pointerup', g.up, true);
+    window.removeEventListener('pointercancel', g.cancel, true);
+    // the contextmenu of a touch hold follows the pointerup
+    setTimeout(() => window.removeEventListener('contextmenu', g.menu, true), 400);
+  }
+
+  // toggle: own entity, else the group controller; nothing usable (missing / unavailable): the popup says so.
+  _runObjectAction(id, which) {
+    const o = this._objects.objectAt(id);
+    if (!o || !this._hass) return;
+    const action = objectAction(o.obj, which);
+    if (action === 'none') return;
+    const target = actionTarget(o.obj, o.binding, (this._layout && this._layout.groups) || {});
+    const st = target && this._hass.states[target];
+    const usable = st && st.state !== 'unavailable' && st.state !== 'unknown';
+    if (action === 'popup' || !usable) {
+      const a = this._objects.anchors().find((x) => x.id === id);
+      if (a) this._popup.open(o.obj, a.world);
+    } else if (action === 'toggle') this._hass.callService(...toggleCall(target));
+    else this._moreInfo(target);
   }
 
   _buildMarkers() {
@@ -1259,6 +1397,7 @@ class Floorplan3dCard extends HTMLElement {
   }
 
   _setMode(mode) {
+    this._popup.close();
     if (mode !== '3d' && this._section) this.setSection(false, { camera: false });
     this._mode = mode;
     this._view.setMode(mode);
