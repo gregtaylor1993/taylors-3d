@@ -203,6 +203,8 @@ try {
     let roofShown = true; for (let o = roof; o; o = o.parent) if (!o.visible) roofShown = false;
     return { planes: v.renderer.clippingPlanes.length, roofShown, removedHidden, removedShown, keptShown, dbl, n, cam: v.getCamera(),
       on: c.shadowRoot.querySelector('button.section').classList.contains('on') }; })()`);
+  await page.waitForFunction((c0) => JSON.stringify(document.querySelector('floorplan3d-card')._view.getCamera()) !== c0, { timeout: 8000 }, JSON.stringify(cam0)).catch(() => {});
+  await settle(page, card);
   let sec = await secState();
   check('Section on: one global clipping plane, roof shown, button on', sec.planes === 1 && sec.roofShown && sec.on, JSON.stringify(sec));
   check('Section on: model materials double-sided', sec.n > 0 && sec.dbl === sec.n, `${sec.dbl}/${sec.n}`);
