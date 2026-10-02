@@ -83,13 +83,17 @@ describe('ObjectLayer', () => {
   });
 
   it('a brightness change updates the pooled light without a new assignment', () => {
-    layer.setModel(model([{ id: 'a', x: 1, hints: { castShadow: false } }]));
+    layer.setModel(model([{ id: 'a', x: 1 }]));
     layer.setBindings(bind([['a', 'light.a']]), {});
     layer.update({ 'light.a': st('on', { brightness: 255 }) }, ctx);
-    const s = view.shadow;
-    layer.update({ 'light.a': st('on', { brightness: 51 }) }, ctx);
-    expect(lit(points(layer))[0].intensity).toBeCloseTo(1);
-    expect(view.shadow).toBe(s); // not a shadow light
+    const s = view.shadow, d = view.dirty;
+    layer.update({ 'light.a': st('on', { brightness: 51, rgb_color: [255, 0, 0] }) }, ctx);
+    const l = lit(points(layer))[0];
+    expect(points(layer).indexOf(l)).toBeLessThan(4); // a shadow light
+    expect(l.intensity).toBeCloseTo(1);
+    expect(l.color.g).toBeCloseTo(0);
+    expect(view.shadow).toBe(s); // shadow maps depend on position only
+    expect(view.dirty).toBeGreaterThan(d);
   });
 
   it('a group of 20 gets one real light (middle fixture, x1.5), the rest stay emissive', () => {
@@ -155,6 +159,24 @@ describe('ObjectLayer', () => {
     layer.update({ 'light.a': st('unavailable') }, ctx);
     expect(lit(points(layer))).toHaveLength(0);
     expect(layer.objectAt('a').chain.unavailable).toBe(true);
+  });
+
+  it('a hidden object is ignored: no glow, no pool light, even when its group controller is on', () => {
+    const m = model([{ id: 'a', x: 1, group: 'g' }, { id: 'b', x: 2 }]);
+    layer.setModel(m);
+    const b = bind([['a', 'light.a'], ['b', 'light.a']]);
+    b.get('a').hidden = true;
+    layer.setBindings(b, { g: { entity: 'switch.g' } });
+    layer.update({ 'light.a': st('on'), 'switch.g': st('on') }, ctx);
+    const on = lit(points(layer));
+    expect(on).toHaveLength(1);
+    expect(on[0].position.x).toBe(2);
+    expect(m.manifest.objects[0].node.children[0].material.emissiveIntensity).toBe(0);
+    expect(layer.objectAt('a').result.lit).toBe(false);
+    // un-hiding lights it
+    layer.setBindings(bind([['a', 'light.a'], ['b', 'light.a']]), {});
+    layer.update({ 'light.a': st('on'), 'switch.g': st('on') }, ctx);
+    expect(lit(points(layer))).toHaveLength(2);
   });
 
   it('a group controller gates the fixture (chain rule)', () => {

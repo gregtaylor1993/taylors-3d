@@ -132,9 +132,38 @@ describe('types', () => {
     node.position.set(0, 2, 0);
     root.add(node);
     const part = TYPES.light.prepare({ id: 'x', type: 'light', node, hints: {} }, { root });
-    expect(part.mats).toEqual([]);
+    expect(part.glow).toBeNull();
     expect(part.anchor.toArray()).toEqual([0, 2, 0]);
     expect(TYPES.light.update(part, { lit: true, source: null }).lit).toBe(true);
+  });
+
+  it('two objects sharing one glow mesh: one clone, strongest owner wins, original back after the last owner', () => {
+    const { root, node, glow, mat } = lamp();
+    const a = TYPES.light.prepare({ id: 'a', type: 'light', node, hints: {} }, { root });
+    const clone = glow.material;
+    const b = TYPES.light.prepare({ id: 'b', type: 'light', node, hints: {} }, { root });
+    expect(glow.material).toBe(clone); // cloned once per mesh
+    const on = (bri, rgb) => ({ lit: true, source: { state: 'on', attributes: { brightness: bri, rgb_color: rgb } } });
+    TYPES.light.update(a, on(255, [255, 0, 0]));
+    TYPES.light.update(b, on(51, [0, 0, 255]));
+    expect(clone.emissiveIntensity).toBeCloseTo(3);
+    expect(clone.emissive.r).toBeCloseTo(1);
+    TYPES.light.update(a, { lit: false, source: null });
+    expect(clone.emissiveIntensity).toBeCloseTo(0.6); // b still on
+    expect(clone.emissive.b).toBeCloseTo(1);
+    TYPES.light.update(b, { lit: false, source: null });
+    expect(clone.emissiveIntensity).toBe(0);
+    TYPES.light.update(b, on(255, [0, 255, 0]));
+    let disposed = 0;
+    clone.addEventListener('dispose', () => disposed++);
+    TYPES.light.dispose(a);
+    expect(glow.material).toBe(clone); // b still owns it
+    expect(clone.emissive.g).toBeCloseTo(1);
+    TYPES.light.dispose(b);
+    expect(glow.material).toBe(mat);
+    expect(disposed).toBe(1);
+    TYPES.light.dispose(b); // twice is harmless
+    expect(disposed).toBe(1);
   });
 
   it('light_strip pools only with an explicit hints.max', () => {

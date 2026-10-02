@@ -82,20 +82,22 @@ export class ObjectLayer {
     const recolour = [];
     for (const [id, p] of this.parts) {
       const binding = this.bindings.get(id);
-      const ctrl = p.obj.group && this.groups[p.obj.group] && this.groups[p.obj.group].entity;
-      const ents = [binding && binding.entity, ctrl];
+      const hidden = !!(binding && binding.hidden); // hidden = ignored as a control: dark, no pool light
+      const ctrl = !hidden && p.obj.group && this.groups[p.obj.group] && this.groups[p.obj.group].entity;
+      const ents = hidden ? [] : [binding && binding.entity, ctrl];
       // HA replaces a state object when it changes: same objects, nothing to do
       const inputs = ents.map((e) => (e ? states[e] : null));
-      if (!p.inputs || inputs.some((x, i) => x !== p.inputs[i]) || ents.some((e, i) => e !== p.ents[i])) {
+      if (!p.inputs || inputs.length !== p.inputs.length || inputs.some((x, i) => x !== p.inputs[i]) || ents.some((e, i) => e !== p.ents[i])) {
         const prev = p.result;
         p.inputs = inputs;
         p.ents = ents;
-        p.chain = chainState(p.obj, binding, this.groups, states);
+        p.chain = hidden ? { lit: false, unavailable: false, source: null, entities: [], reason: null }
+          : chainState(p.obj, binding, this.groups, states);
         p.result = p.type.update(p.part, p.chain, ctx);
         changed = true;
         if (prev && (prev.level !== p.result.level || colorKey(prev.color) !== colorKey(p.result.color))) recolour.push(id);
       }
-      if (!p.part.pool) continue;
+      if (!p.part.pool || hidden) continue;
       const h = p.part.hints;
       fixtures.push({
         id, lit: lightsOn && !!p.result.lit, visible: visibleLevel(p.obj.level) && shown(p.obj.node),
@@ -116,14 +118,11 @@ export class ObjectLayer {
       if (hadShadow || [...this._slots.values()].some((x) => x.shadow)) this.view.requestShadowUpdate();
       if (before !== this._slotSig()) changed = true;
     } else {
-      let shadow = false;
+      // colour / brightness only: shadow maps depend on light positions, so no redraw
       for (const id of recolour) {
         const slot = this._slots.get(id);
-        if (!slot) continue;
-        this._light(slot, this.parts.get(id));
-        if (slot.shadow) shadow = true;
+        if (slot) this._light(slot, this.parts.get(id));
       }
-      if (shadow) this.view.requestShadowUpdate();
     }
     if (changed) this.view.markDirty();
   }

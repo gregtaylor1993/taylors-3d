@@ -321,6 +321,12 @@ class Floorplan3dCard extends HTMLElement {
     this._view.setModel(opts).then((err) => {
       if (this._view.model !== prevModel && this._section) this._dropSection();
       this._objects.setModel(this._view.model);
+      // bind now: lamps light and bound markers hide without waiting for the next hass push
+      if (this._hass && this._layout && this._floors && this._syncBindings()) {
+        this._buildMarkers();
+        this._refreshStates();
+      }
+      this._updateObjects();
       this._notice.textContent = err || '';
       this._notice.hidden = !err;
       // a new model resets the views; the first view applied frames it (see _resolveViewList)
@@ -1105,7 +1111,9 @@ class Floorplan3dCard extends HTMLElement {
 
   _buildMarkers() {
     const h = this._hass;
-    // a device bound to a model object has no marker: the object is the control (glow sprite too)
+    // a device bound to a model object has no marker: the object is the control (glow sprite too).
+    // With group_by: device the marker stands for the device's primary entity, so a bound primary
+    // light hides the whole device marker (its other entities, e.g. a power sensor, included).
     const bound = this._boundEntities;
     this._markers = buildMarkers(h, this._layout, { group_by: this._config.group_by }).filter((m) => !bound.has(m.entityId));
     this._positions = markerPositions(this._markers, { ...this._layout, rooms: this._allRooms() }, h, this._floors);

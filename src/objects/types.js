@@ -56,47 +56,67 @@ function anchorOf(obj, glow, root, offset) {
   return p;
 }
 
+// A glow mesh can belong to several objects (e.g. two fixtures resolving to one mesh): its material is
+// cloned once; every owner writes its level and the mesh shows the strongest owner.
+const shared = new WeakMap(); // mesh -> { original, clones: Material[], owners: Set<part> }
+
 function prepareLight(obj, { root }, pool) {
   const hints = hintDefaults(obj.hints);
   const glow = obj.node ? findGlow(obj.node, obj.glow || 'glow') : null;
-  const mats = [];
+  const part = { obj, glow, hints, pool, level: 0, color: null, anchor: null };
   if (glow) {
-    const orig = glow.material;
-    const clones = matsOf(glow).map((m) => {
-      const c = m.clone();
-      c.userData = { ...m.userData, baseEmissive: m.emissive ? m.emissive.getHex() : 0 };
-      if (c.emissive) c.emissive.setRGB(0, 0, 0);
-      c.emissiveIntensity = 0;
-      return c;
-    });
-    glow.material = Array.isArray(orig) ? clones : clones[0];
-    mats.push(...clones);
-    glow.userData.fpOrigMaterial = orig;
+    let entry = shared.get(glow);
+    if (!entry) {
+      const original = glow.material;
+      const clones = matsOf(glow).map((m) => {
+        const c = m.clone();
+        c.userData = { ...m.userData, baseEmissive: m.emissive ? m.emissive.getHex() : 0 };
+        if (c.emissive) c.emissive.setRGB(0, 0, 0);
+        c.emissiveIntensity = 0;
+        return c;
+      });
+      glow.material = Array.isArray(original) ? clones : clones[0];
+      entry = { original, clones, owners: new Set() };
+      shared.set(glow, entry);
+    }
+    entry.owners.add(part);
   }
-  return { obj, glow, mats, hints, pool, anchor: obj.node ? anchorOf(obj, glow, root, hints.offset) : new THREE.Vector3() };
+  part.anchor = obj.node ? anchorOf(obj, glow, root, hints.offset) : new THREE.Vector3();
+  return part;
+}
+
+function paint(glow) {
+  const entry = glow && shared.get(glow);
+  if (!entry) return;
+  let best = null;
+  for (const p of entry.owners) if (!best || p.level > best.level) best = p;
+  const level = best ? best.level : 0, c = (best && best.color) || [0, 0, 0];
+  for (const m of entry.clones) {
+    if (m.emissive) m.emissive.setRGB(c[0] / 255, c[1] / 255, c[2] / 255, THREE.SRGBColorSpace);
+    m.emissiveIntensity = level * 3;
+  }
 }
 
 function updateLight(part, chain) {
   const level = chain.lit ? lightLevel(chain.source || { state: 'on', attributes: {} }) : 0;
   const color = lightColor(chain.source);
-  for (const m of part.mats) {
-    if (m.emissive) m.emissive.setRGB(color[0] / 255, color[1] / 255, color[2] / 255, THREE.SRGBColorSpace);
-    m.emissiveIntensity = level * 3;
-  }
+  part.level = level;
+  part.color = color;
+  paint(part.glow);
   return { lit: level > 0, level, color };
 }
 
 function disposeLight(part) {
-  if (part.glow && part.glow.userData.fpOrigMaterial) {
-    part.glow.material = part.glow.userData.fpOrigMaterial;
-    delete part.glow.userData.fpOrigMaterial;
-  }
-  for (const m of part.mats) m.dispose();
-  part.mats = [];
+  const entry = part.glow && shared.get(part.glow);
+  if (!entry || !entry.owners.delete(part)) return;
+  if (entry.owners.size) { paint(part.glow); return; }
+  part.glow.material = entry.original;
+  for (const m of entry.clones) m.dispose();
+  shared.delete(part.glow);
 }
 
 const generic = {
-  prepare: (obj, ctx) => ({ obj, glow: null, mats: [], hints: hintDefaults(obj.hints), pool: false, anchor: obj.node ? anchorOf(obj, null, ctx.root, null) : new THREE.Vector3() }),
+  prepare: (obj, ctx) => ({ obj, glow: null, hints: hintDefaults(obj.hints), pool: false, anchor: obj.node ? anchorOf(obj, null, ctx.root, null) : new THREE.Vector3() }),
   update: () => ({ lit: false, level: 0, color: null }),
   dispose: () => {},
   defaults: { tap: 'more-info', hold: 'popup', popup: ['state'] },
