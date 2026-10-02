@@ -76,15 +76,21 @@ describe('defaultViewId', () => {
 });
 
 describe('viewCut', () => {
-  it('cuts untagged models at the highest linked floor + wall height', () => {
-    expect(viewCut({ id: 'ground', cut: null }, { tagged: false, elevations: [0, 3], wallHeight: 1 })).toBe(4);
-    expect(viewCut({ id: 'ground', cut: null }, { tagged: false, elevations: [0], wallHeight: 0.1 })).toBe(0.3);
+  it('cuts untagged models at the top of the highest linked storey (elevation + storey height)', () => {
+    expect(viewCut({ id: 'ground', cut: null }, { tagged: false, floors: [{ elevation: 0, height: 3 }, { elevation: 3, height: 2.6 }] })).toBeCloseTo(5.6);
+    expect(viewCut({ id: 'ground', cut: null }, { tagged: false, floors: [{ elevation: 0, height: 2.7 }] })).toBeCloseTo(2.7);
+    expect(viewCut({ id: 'ground', cut: null }, { tagged: false, floors: [{ elevation: 0 }] })).toBeCloseTo(2.7); // top storey default
+  });
+  it('ignores wall_height (it only applies to drawn walls)', () => {
+    expect(viewCut({ id: 'ground', cut: null }, { tagged: false, floors: [{ elevation: 0, height: 2.7 }], wallHeight: 1 })).toBeCloseTo(2.7);
   });
   it('no cut for tagged models, cut: false, no floors, or the default All view', () => {
-    expect(viewCut({ id: 'ground', cut: null }, { tagged: true, elevations: [0], wallHeight: 1 })).toBe(null);
-    expect(viewCut({ id: 'ground', cut: false }, { tagged: false, elevations: [0], wallHeight: 1 })).toBe(null);
-    expect(viewCut({ id: 'ground', cut: null }, { tagged: false, elevations: [], wallHeight: 1 })).toBe(null);
-    expect(viewCut({ id: 'all', cut: null }, { tagged: false, elevations: [0, 3], wallHeight: 1 })).toBe(null);
-    expect(viewCut({ id: 'all', cut: true }, { tagged: false, elevations: [0, 3], wallHeight: 1 })).toBe(4);
+    const floors = [{ elevation: 0, height: 3 }, { elevation: 3, height: 2.6 }];
+    expect(viewCut({ id: 'ground', cut: null }, { tagged: true, floors })).toBe(null);
+    expect(viewCut({ id: 'ground', cut: false }, { tagged: false, floors })).toBe(null);
+    expect(viewCut({ id: 'ground', cut: null }, { tagged: false, floors: [] })).toBe(null);
+    expect(viewCut({ id: 'ground', cut: null }, { tagged: false, floors: [{ elevation: NaN }] })).toBe(null);
+    expect(viewCut({ id: 'all', cut: null }, { tagged: false, floors })).toBe(null);
+    expect(viewCut({ id: 'all', cut: true }, { tagged: false, floors })).toBeCloseTo(5.6);
   });
 });

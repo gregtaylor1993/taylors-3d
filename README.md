@@ -60,7 +60,8 @@ The options below can be set in the visual editor or in YAML.
 | `layout_key` | `default` | Name of the stored layout. Use different keys for different plans. |
 | `height` | `520px` | Card height. |
 | `group_by` | `device` | `device`: one marker per device. `entity`: one per entity. |
-| `wall_height` | `1.0` | Height of the cut-away walls in metres. |
+| `wall_height` | `1.0` | Height of the cut-away drawn walls in metres (rooms drawn on the card; a model is cut at its storey height instead). |
+| `occlusion` | `true` | With a model: markers hidden behind a wall from the current camera angle are shown faint (25 %) and can't be tapped; in edit mode they stay half visible and draggable. Checked once the camera has been still for 150 ms; not in top view. `false` turns it off. |
 | `view` | `3d` | Start in `3d` or `top` view. |
 | `floor` | first floor with rooms | Floor id (or view id) to show first, or `all`. |
 | `view_id` | | View to show first (with a model: a view id such as `ground`). Wins over `floor`. |
@@ -160,9 +161,23 @@ Untagged models still load and show whole.
 In **Edit → Model** you choose which HA floor each level belongs to and assign each room to an
 HA area. Defaults follow level order and the tag's suggested area, so most of it is automatic;
 your choices are stored by id and survive re-exports. Click a part of the model in the view to
-find it in the lists. A tagged model shows whole levels; only an untagged model is cut at
-`wall_height` (per view, *Cut at wall height* in the Views tab). Check a model before
-uploading with `npm run check-model -- house.glb`.
+find it in the lists. A tagged model shows whole levels and is never clipped; only an untagged
+model is cut, at the top of the view's highest storey (its elevation + storey height, 2.7 m when
+unknown; per view, *Cut at storey height* in the Views tab). Check a model before uploading with
+`npm run check-model -- house.glb`.
+
+Rendering notes for model authors:
+- **Shadows:** every mesh receives shadows; glass does not cast them, so light reaches rooms
+  behind windows. No shadow is cast by meshes that are transparent, have opacity < 1 or
+  transmission, are named like *glass / window / pane / glazing*, sit on an `fp.layer` of
+  `glass`, `terrain`, `floor`, `decal` or `label`, or are flat (< 2 cm thick) overlays.
+- The sun's shadow box covers the storey / basement / roof levels + 4 m (an untagged model:
+  meshes up to 30 m across), not the whole plot, so shadows stay sharp. If the model root (or a
+  top node) has `fp.north` (degrees), the sun's azimuth follows it (north + 0.35 rad).
+- Meshes on an `fp.layer` of `decal` / `edging`, or named like *decal / edging / overlay*, are
+  drawn in front of the surface under them (polygon offset), so they don't flicker.
+- With `model_opacity` below 1 the model is blended but keeps writing depth, so overlapping
+  parts don't vanish; originally transparent materials (glass) keep their own opacity.
 
 ### Views
 

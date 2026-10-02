@@ -49,8 +49,8 @@ Copy it to `/config/www/` and set `model: /local/house.glb` in the card.
   storey: slab, walls, windows, stairs, furniture. The card shows only the selected storey's group.
   Groups with other names still work: they are matched bottom-up and can be reassigned in the
   Model tab. A storey HA has no floor for (an unused attic) is shown with every floor and cut away.
-- Roof in a group named `roof`, terrain in `site`. Everything is cut at the selected floor's
-  cut-away height (`wall_height`), so full-height walls and the roof are fine.
+- Roof in a group named `roof`, terrain in `site`. An untagged model is cut at the top of the
+  selected storey (elevation + storey height), so full-height walls and the roof are fine.
 - Optional: room groups named `room:<area_id>` inside their floor group.
 - Ground planes, roads and terrain belong in `site`, never in a `floor:` group. Leave out a
   "world" ground plane altogether (the card draws its own background).

@@ -2,7 +2,7 @@
 // one wrapper group "house" carrying the model's views (fp.views), storey levels (level0 / level1)
 // with a tagged room group per room, furniture on the "furniture" layer, a thin ceiling slab per
 // storey on the "ceiling" layer (inside the storey above), an exterior level with the outdoor zones,
-// a roof level and one tagged lamp object. Run: node scripts/make-demo-model.mjs
+// a roof level, one tagged lamp object and a window pane on the glass layer. Run: node scripts/make-demo-model.mjs
 import fs from 'node:fs';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
@@ -82,6 +82,13 @@ for (const [name, fid, m, [x, y], [w, d, h]] of furniture) {
   piece.add(box);
   house.getObjectByName(fid === 'ground' ? 'level0' : 'level1').add(piece);
 }
+// a window pane on the south facade (glass layer: casts no sun shadow, does not hide markers)
+const pane = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.2, 0.02),
+  new THREE.MeshStandardMaterial({ color: 0xaaccee, roughness: 0.1, transparent: true, opacity: 0.35, name: 'glass' }));
+pane.name = 'window_pane_living';
+pane.userData.fp = { layer: 'glass' };
+pane.position.set(1.3, 1.5, 0.09);
+house.getObjectByName('level0').add(pane);
 // ceilings: a thin slab under the next storey up, kept in that storey so it hides with it
 const ceiling = (name, top, parent) => {
   const c = new THREE.Mesh(new THREE.BoxGeometry(12, 0.04, 9), mat(0xf7f5f0));

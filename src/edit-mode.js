@@ -1004,7 +1004,7 @@ export class EditMode {
     .map(([val, label]) => `<option value="${val}" ${(lv.zoom_to || '') === val ? 'selected' : ''}>${label}</option>`).join('')}</select></label>`;
     out += this._sectionHtml(v, lv);
     if (this.view.model && !this.view.isTagged()) {
-      out += `<label class="check"><input type="checkbox" data-field="vw-cut" ${(v.cut ?? v.id !== 'all') ? 'checked' : ''}> Cut at wall height</label>`;
+      out += `<label class="check"><input type="checkbox" data-field="vw-cut" ${(v.cut ?? v.id !== 'all') ? 'checked' : ''}> Cut at storey height</label>`;
     }
     const idx = card.viewIndex();
     const tree = this._tree();
@@ -1448,7 +1448,7 @@ export class EditMode {
     const m = this.layout.model;
     let out = `<p class="hint">A 3D model of the house (.glb) shown under the plan. Parts tagged as levels, rooms and zones
       (<code>fp</code> tags, see <a href="https://github.com/istals/floorplan3d-card/blob/main/docs/model-builder-guide.md" target="_blank" rel="noopener">docs/model-builder-guide.md</a>)
-      are shown per floor and become rooms; a tagged model shows whole levels (lower floors stay, upper ones are hidden); only an untagged model is cut at the selected floor's wall height. It is stored in Home Assistant and only shown to logged-in users.</p>
+      are shown per floor and become rooms; a tagged model shows whole levels (lower floors stay, upper ones are hidden); only an untagged model is cut at the top of the selected storey. It is stored in Home Assistant and only shown to logged-in users.</p>
       <div class="row"><label class="button ${this.uploading ? 'disabled' : 'primary'}">${this.uploading ? 'Uploading ' + esc(this.uploading) + '…' : (m ? 'Replace model' : 'Upload .glb')}
       <input type="file" accept=".glb,model/gltf-binary" data-field="model-file" hidden ${this.uploading ? 'disabled' : ''}></label></div>`;
     if (!m) return out;

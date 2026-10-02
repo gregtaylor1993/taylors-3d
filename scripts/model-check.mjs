@@ -68,6 +68,58 @@ try {
   await sleep(500);
   await sh('look-day.png');
   await sh('model-ground.png');
+
+  // render fixes: depth range, glass shadows, depth kept when ghosted, markers behind walls
+  const depth = await page.evaluate(`(() => { const c = ${card}._view.persp; return { near: c.near, far: c.far }; })()`);
+  check('depth range: near >= 0.2, far within 50..500 after load', depth.near >= 0.2 && depth.far >= 50 && depth.far <= 500, JSON.stringify(depth));
+  const shadows = await page.evaluate(`(() => { const r = ${card}._view.model.root; const pane = r.getObjectByName('window_pane_living');
+    const body = r.getObjectByName('sofa_body');
+    let clip = 0; r.traverse((o) => { if (o.isMesh) for (const m of [].concat(o.material)) if (m.clippingPlanes && m.clippingPlanes.length) clip++; });
+    return { pane: pane && [pane.castShadow, pane.receiveShadow], sofa: body && body.castShadow, clip, normalBias: ${card}._view.sun.shadow.normalBias }; })()`);
+  check('glass pane casts no shadow (still receives), furniture casts', !!shadows.pane && shadows.pane[0] === false && shadows.pane[1] === true && shadows.sofa === true, JSON.stringify(shadows));
+  check('tagged model: no clipping planes on its materials; sun normalBias 0.02', shadows.clip === 0 && shadows.normalBias === 0.02, JSON.stringify(shadows));
+  const ghost = await page.evaluate(`(async () => { const c = ${card}, v = c._view; const m = v.model.root.getObjectByName('sofa_body').material;
+    const pane = v.model.root.getObjectByName('window_pane_living').material;
+    c._config = { ...c._config, model_opacity: 0.6 }; c._loadModel(); await new Promise((r) => setTimeout(r, 100));
+    const out = { depthWrite: m.depthWrite, alphaHash: m.alphaHash, transparent: m.transparent, opacity: m.opacity, paneOpacity: pane.opacity, paneTransparent: pane.transparent };
+    c._config = { ...c._config, model_opacity: 1 }; c._loadModel(); await new Promise((r) => setTimeout(r, 100));
+    out.back = { alphaHash: m.alphaHash, opacity: m.opacity, depthWrite: m.depthWrite };
+    return out; })()`);
+  check('opacity 0.6: opaque material keeps depthWrite, glass untouched; 1 restores',
+    ghost.depthWrite === true && ghost.transparent === true && ghost.opacity === 0.6 && ghost.paneTransparent === true && Math.abs(ghost.paneOpacity - 0.35) < 1e-6
+    && ghost.back.opacity === 1 && ghost.back.depthWrite === true, JSON.stringify(ghost));
+  // a ground-floor marker seen from outside the south facade, through the wall
+  const occ = await page.evaluate(`(() => { const c = ${card}, v = c._view;
+    for (const [id, m] of v.markerObjects) {
+      const p = m.obj.position;
+      if (!m.obj.visible || m.floorId !== 'ground' || p.y < 0.3 || p.y > 2.0 || -p.z < 1 || -p.z > 4.5 || p.x < 0.5 || p.x > 11.5) continue;
+      return { id, pos: p.toArray() };
+    }
+    return null; })()`);
+  if (occ) {
+    const camBefore = await page.evaluate(`${card}._view.getCamera()`);
+    await page.evaluate(`${card}._view.setCamera({ position: [${occ.pos[0]}, ${occ.pos[1] + 2}, ${occ.pos[2] + 12}], target: ${JSON.stringify(occ.pos)} }, { instant: true })`);
+    await sleep(600);
+    const cls = (id) => page.evaluate(`${card}._view.markerObjects.get(${JSON.stringify(id)}).obj.element.classList.contains('fp-occluded')`);
+    check('a marker behind the south wall is fp-occluded from a camera outside', await cls(occ.id), JSON.stringify(occ));
+    const style = (id) => page.evaluate(`(() => { const s = getComputedStyle(${card}._view.markerObjects.get(${JSON.stringify(id)}).obj.element); return [s.opacity, s.pointerEvents]; })()`);
+    check('occluded marker: faint, not clickable in view mode', JSON.stringify(await style(occ.id)) === '["0.25","none"]', JSON.stringify(await style(occ.id)));
+    await page.evaluate(`${card}._toggleEdit()`); // edit mode re-frames: put the camera back outside the wall
+    await sleep(500);
+    await page.evaluate(`${card}._view.setCamera({ position: [${occ.pos[0]}, ${occ.pos[1] + 2}, ${occ.pos[2] + 12}], target: ${JSON.stringify(occ.pos)} }, { instant: true })`);
+    await sleep(600);
+    const es = await style(occ.id);
+    check('occluded marker in edit mode: half opacity, still draggable', (await cls(occ.id)) && JSON.stringify(es) === '["0.5","auto"]', JSON.stringify(es));
+    await page.evaluate(`${card}._toggleEdit()`);
+    await sleep(300);
+    await page.evaluate(`${card}._view.setCamera({ position: [${occ.pos[0]}, ${occ.pos[1] + 14}, ${occ.pos[2] + 3}], target: ${JSON.stringify(occ.pos)} }, { instant: true })`);
+    await sleep(600);
+    check('same marker seen from above (no wall in between) is not occluded', !(await cls(occ.id)));
+    await page.evaluate(`${card}._view.setCamera(${JSON.stringify(camBefore)}, { instant: true })`);
+    await sleep(300);
+  } else {
+    check('found a ground-floor marker near the south facade for the occlusion check', false);
+  }
   await chip('first');
   v = await st();
   check('First floor view: both storeys stack, exterior shown, roof hidden', v.level0 && v.level1 && v.exterior && !v.roof, JSON.stringify(v));
@@ -460,7 +512,9 @@ try {
   await page.evaluate(`${card}._setFloor('ground')`);
   await sleep(300);
   check('legacy: ground chip shows ground only', JSON.stringify(await legacyVis()) === '[true,false]');
-  check('legacy: cut at ground elevation + wall height', Math.abs((await page.evaluate(`${card}._view.modelClip.constant`)) - 1) < 1e-6, String(await page.evaluate(`${card}._view.modelClip.constant`)));
+  const storeyTop = (id) => page.evaluate(`(() => { const f = ${card}._floors.find((x) => x.id === ${JSON.stringify(id)}); return f.elevation + (f.height || 2.7); })()`);
+  check('legacy: cut at the top of the ground storey (not the 1 m wall height)', Math.abs((await page.evaluate(`${card}._view.modelClip.constant`)) - (await storeyTop('ground'))) < 1e-6 && (await storeyTop('ground')) > 2,
+    `${await page.evaluate(`${card}._view.modelClip.constant`)} vs ${await storeyTop('ground')}`);
   await page.evaluate(`${card}._setFloor('first')`);
   await sleep(300);
   check('legacy: first chip stacks the storeys', JSON.stringify(await legacyVis()) === '[true,true]');
@@ -679,8 +733,11 @@ try {
   check('legacy copy is not tagged', !(await page.evaluate(`${card}._view.isTagged()`)));
   await chip('ground');
   await clickText('Views');
-  check('legacy copy: "Cut at wall height" present and on', await page.evaluate(`${sr}.querySelector('.panel [data-field=vw-cut]')?.checked === true`));
-  check('legacy copy: model cut at the wall height', Math.abs((await page.evaluate(`${card}._view.modelClip.constant`)) - 1) < 1e-6);
+  check('legacy copy: "Cut at storey height" present and on', await page.evaluate(`${sr}.querySelector('.panel [data-field=vw-cut]')?.checked === true`));
+  const legacyTop = await page.evaluate(`(() => { const f = ${card}._floors.find((x) => x.id === 'ground'); return f.elevation + (f.height || 2.7); })()`);
+  check('legacy copy: model cut at the top storey elevation + height (not + 1.0)', legacyTop > 2 && Math.abs((await page.evaluate(`${card}._view.modelClip.constant`)) - legacyTop) < 1e-6,
+    `${await page.evaluate(`${card}._view.modelClip.constant`)} vs ${legacyTop}`);
+  check('legacy copy: materials carry the model clipping plane', await page.evaluate(`(() => { let n = 0, c = 0; ${card}._view.model.root.traverse((o) => { if (o.isMesh) { n++; if ([].concat(o.material).every((m) => m.clippingPlanes && m.clippingPlanes.length === 1)) c++; } }); return n > 0 && n === c; })()`));
   await clickText('Rooms');
   check('legacy copy: no elevation inputs in the Rooms tab', await page.evaluate(`!${sr}.querySelector('.panel [data-field=floor-elevation]')`));
   // drop the drawn kitchen again (the model has no rooms), then pick its floor: traced outline
@@ -862,7 +919,7 @@ try {
   check('untagged copy: a single generated "All" view (no chips)', JSON.stringify(await page.evaluate(`${card}._views.map((v) => v.id + ':' + v.source)`)) === '["all:generated"]'
     && (await chipIds()).length === 0, JSON.stringify(await page.evaluate(`${card}._views.map((v) => v.id)`)));
   await clickText('Views');
-  check('untagged copy: "Cut at wall height" present, off by default in "All"', await page.evaluate(`${sr}.querySelector('.panel [data-field=vw-cut]')?.checked === false`));
+  check('untagged copy: "Cut at storey height" present, off by default in "All"', await page.evaluate(`${sr}.querySelector('.panel [data-field=vw-cut]')?.checked === false`));
   await clickText('Rooms');
   check('untagged copy: no elevation inputs in the Rooms tab', await page.evaluate(`!${sr}.querySelector('.panel [data-field=floor-elevation]')`));
   const ov = await page.evaluate(`(() => { const c = ${card}; return { overview: c._viewState.overview, shown: [...c._view.markerObjects.values()].filter((m) => m.obj.visible).length, all: c._view.markerObjects.size }; })()`);

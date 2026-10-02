@@ -1,7 +1,7 @@
 // Visual editor for the card options (Lovelace "Show visual editor"), built on HA's ha-form.
 // Rooms, devices, mower and model are edited on the card itself (its Edit button).
 
-const DEFAULTS = { layout_key: 'default', height: '520px', group_by: 'device', wall_height: 1.0, view: '3d', room_labels: 'size', zoom_to: 'center' };
+const DEFAULTS = { layout_key: 'default', height: '520px', group_by: 'device', wall_height: 1.0, view: '3d', room_labels: 'size', zoom_to: 'center', occlusion: true };
 
 export const SCHEMA = [
   { name: 'height', selector: { text: {} } },
@@ -15,6 +15,7 @@ export const SCHEMA = [
       { name: 'room_labels', selector: { select: { mode: 'dropdown', options: [{ value: 'size', label: 'Name and size' }, { value: 'name', label: 'Name only' }, { value: 'none', label: 'None' }] } } },
     ],
   },
+  { name: 'occlusion', selector: { boolean: {} } },
   { name: 'layout_key', selector: { text: {} } },
   {
     type: 'expandable', name: '', title: 'Model from a URL (instead of uploading in the card)', schema: [
@@ -35,6 +36,7 @@ const LABELS = {
   view: 'Start view',
   floor: 'Start floor',
   wall_height: 'Cut-away wall height',
+  occlusion: 'Dim markers behind walls',
   group_by: 'Markers',
   room_labels: 'Room labels',
   zoom_to: 'Zoom towards',
@@ -47,6 +49,8 @@ const LABELS = {
 
 const HELPERS = {
   height: 'CSS height, e.g. 520px or 60vh',
+  wall_height: 'Drawn walls only; a model is cut at the top of the storey',
+  occlusion: 'With a 3D model: markers hidden by a wall from the current angle are shown faint',
   floor: 'Empty: the first floor that has rooms',
   zoom_to: 'Centre: zoom and rotate around the view\'s rotation centre (Edit → Views)',
   layout_key: 'Cards with the same name share one plan. Letters, digits, - and _.',

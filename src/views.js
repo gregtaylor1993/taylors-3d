@@ -334,12 +334,17 @@ export function defaultViewId(views, { viewId, floor, fallback } = {}, floorsOf 
   return vis.length ? vis[0].id : null;
 }
 
-// Clip height for untagged models: the highest linked floor + the cut-away wall height. On by
-// default except for the default "All" view; tagged models are never cut.
-export function viewCut(view, { tagged, elevations, wallHeight }) {
+// Clip height for untagged models: the top of the highest linked storey (its elevation + storey
+// height, 2.7 m when unknown). On by default except for the default "All" view; tagged models are
+// never cut. wall_height only applies to drawn walls, not to a model.
+export const DEFAULT_STOREY_HEIGHT = 2.7;
+export function viewCut(view, { tagged, floors }) {
   const on = view.cut ?? view.id !== 'all';
-  if (tagged || !on || !elevations || !elevations.length) return null;
-  return Math.max(...elevations) + Math.max(Number(wallHeight) || 0, 0.3);
+  const list = (floors || []).filter((f) => f && Number.isFinite(f.elevation));
+  if (tagged || !on || !list.length) return null;
+  const top = list.reduce((a, b) => (b.elevation > a.elevation ? b : a));
+  const h = Number(top.height);
+  return top.elevation + (Number.isFinite(h) && h > 0 ? h : DEFAULT_STOREY_HEIGHT);
 }
 
 // ---------- edit mode: per-view rule edits, element tree, picks, order ----------

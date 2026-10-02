@@ -70,6 +70,8 @@ const STYLE = `
   .fp-marker.active.light .fp-dot { background: var(--fp-light, var(--state-light-active-color, #ffb74d));
     border-color: var(--fp-light, var(--state-light-active-color, #ffb74d)); color: #fff; }
   .fp-marker.unavailable .fp-dot { opacity: .45; border-style: dashed; }
+  .fp-marker.fp-occluded { opacity: .25; pointer-events: none; }
+  .editing .fp-marker.fp-occluded { opacity: .5; pointer-events: auto; }
   .fp-val { position: absolute; top: calc(100% + 2px); left: 50%; transform: translateX(-50%);
     font-size: 10.5px; font-weight: 500; padding: 1px 5px; border-radius: 8px; white-space: nowrap;
     background: var(--card-background-color, #fff); color: var(--primary-text-color);
@@ -276,6 +278,7 @@ class Floorplan3dCard extends HTMLElement {
     }
     if (this.isConnected && !this._view) this.connectedCallback();
     else if (this._view) {
+      this._view.setOcclusion(this._config.occlusion !== false);
       this._applyZoomTo();
       this._loadModel();
     }
@@ -440,6 +443,7 @@ class Floorplan3dCard extends HTMLElement {
     });
     this._editBtn.addEventListener('click', () => this._toggleEdit());
     this._view = new FloorplanView(this._stage);
+    this._view.setOcclusion(this._config.occlusion !== false);
     this._view.setMode(this._mode);
     this._loadModel();
     this._edit = new EditMode(this);
@@ -841,8 +845,8 @@ class Floorplan3dCard extends HTMLElement {
     if (this._index && vw.model && st.effective) {
       vw.applyModelVisibility(this._index, st.effective);
       if (section) { vw.setCut(null); return; }
-      const elevations = st.floors.map((id) => (this._floors.find((f) => f.id === id) || {}).elevation).filter(Number.isFinite);
-      vw.setCut(viewCut(v, { tagged: vw.isTagged(), elevations, wallHeight: Number(this._config.wall_height) || 1.0 }));
+      const floors = st.floors.map((id) => this._floors.find((f) => f.id === id)).filter(Boolean);
+      vw.setCut(viewCut(v, { tagged: vw.isTagged(), floors }));
     } else {
       vw.applyModelVisibility(null, null);
       vw.setCut(undefined);
