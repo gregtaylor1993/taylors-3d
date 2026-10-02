@@ -50,4 +50,34 @@ describe('outlineFromTriangles', () => {
     const out = outlineFromTriangles([...quad(0, 0, 2, 2.01), ...quad(2, 0, 4, 2.01)], [1, 0, -1]);
     expect(out).toHaveLength(4);
   });
+  it('flipped triangle inside quad makes rectangle', () => {
+    const flipped = [2, 0, -1, 2, 0, -2, 1, 0, -1.5]; // CW from above
+    const out = outlineFromTriangles([...quad(0, 0, 4, 3), ...flipped], [2, 0, -1.5]);
+    expect(out).toHaveLength(4);
+    expect(area(out)).toBeCloseTo(12);
+  });
+  it('flipped triangle normalizes winding and integrates into boundary', () => {
+    // Two overlapping quads that cancel interior edges when winding is corrected
+    const out = outlineFromTriangles([...quad(0, 0, 4, 3), ...quad(1, 1, 3, 2)], [2, 0, -1.5]);
+    expect(out).toBeTruthy();
+    expect(area(out)).toBeGreaterThan(0);
+  });
+  it('pinch with unequal edge lengths: 2×2 square touching 3×1 rectangle', () => {
+    const rect = (x0, y0, x1, y1, y = 0) => [x0, y, -y0, x1, y, -y0, x1, y, -y1, x0, y, -y0, x1, y, -y1, x0, y, -y1];
+    const out = outlineFromTriangles([...rect(0, 0, 2, 2), ...rect(2, 0, 5, 1)], [3.5, 0, -0.5]);
+    expect(out).toHaveLength(4);
+    expect(area(out)).toBeCloseTo(3);
+  });
+  it('perf: 20k disjoint triangles plus target quad completes quickly', () => {
+    const tris = [];
+    for (let i = 0; i < 20000; i++) {
+      tris.push(...quad(100 + i * 10, 100, 101 + i * 10, 101));
+    }
+    tris.push(...quad(0, 0, 4, 3));
+    const start = Date.now();
+    const out = outlineFromTriangles(tris, [2, 0, -1.5]);
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeLessThan(1000);
+    expect(area(out)).toBeCloseTo(12);
+  });
 });

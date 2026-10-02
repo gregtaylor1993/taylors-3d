@@ -6,34 +6,34 @@ const key = (x, z) => Math.round(x * 1000) + ',' + Math.round(z * 1000);
 
 export function outlineFromTriangles(tris, hit) {
   const pts = new Map(); // key -> [x, z]
-  const edges = new Map(); // "a|b" -> both directions
+  const edgeCount = new Map(); // undirected key -> count
+  const edgeDir = new Map(); // undirected key -> [p, q] as it appeared in a triangle
   for (let i = 0; i + 8 < tris.length; i += 9) {
-    const a = [tris[i], tris[i + 1], tris[i + 2]], b = [tris[i + 3], tris[i + 4], tris[i + 5]], c = [tris[i + 6], tris[i + 7], tris[i + 8]];
+    let a = [tris[i], tris[i + 1], tris[i + 2]], b = [tris[i + 3], tris[i + 4], tris[i + 5]], c = [tris[i + 6], tris[i + 7], tris[i + 8]];
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
     const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
     const len = Math.hypot(nx, ny, nz);
-    // abs() normal check: tolerates flipped winding in exported models
     if (!len || Math.abs(ny / len) < COS_UP) continue;
     if (Math.abs((a[1] + b[1] + c[1]) / 3 - hit[1]) > 0.05) continue;
+    // Normalize winding: flip triangle if normal points down
+    if (ny < 0) [b, c] = [c, b];
     const ks = [a, b, c].map((p) => { const k = key(p[0], p[2]); pts.set(k, [p[0], p[2]]); return k; });
     for (const [p, q] of [[ks[0], ks[1]], [ks[1], ks[2]], [ks[2], ks[0]]]) {
       const e = p < q ? p + '|' + q : q + '|' + p;
-      const dirs = edges.get(e) || new Set();
-      dirs.add(p < q ? 1 : -1);
-      edges.set(e, dirs);
+      edgeCount.set(e, (edgeCount.get(e) || 0) + 1);
+      // Store direction as it appears in the triangle
+      edgeDir.set(e, [p, q]);
     }
   }
   const boundaryEdges = [];
-  for (const [e, dirs] of edges) {
-    if (dirs.size !== 1) continue;
-    const [p, q] = e.split('|');
-    const fwd = dirs.has(1) ? [p, q] : [q, p];
-    boundaryEdges.push(fwd);
-  }
-  const adj = new Map();
-  for (const [p, q] of boundaryEdges) {
-    if (!adj.has(p)) adj.set(p, []);
-    adj.get(p).push(q);
+  const edgesByStart = new Map(); // vertex key -> array of edge indices
+  for (const [e, count] of edgeCount) {
+    if (count !== 1) continue;
+    const [p, q] = edgeDir.get(e);
+    const idx = boundaryEdges.length;
+    boundaryEdges.push([p, q]);
+    if (!edgesByStart.has(p)) edgesByStart.set(p, []);
+    edgesByStart.get(p).push(idx);
   }
   const used = new Set();
   const loops = [];
@@ -46,18 +46,13 @@ export function outlineFromTriangles(tris, hit) {
       used.add(edgeIdx);
       const [p, q] = boundaryEdges[edgeIdx];
       loop.push(p);
-      const nexts = [];
-      for (let i = 0; i < boundaryEdges.length; i++) {
-        if (used.has(i)) continue;
-        const [p2] = boundaryEdges[i];
-        if (p2 === q) nexts.push(i);
-      }
+      const nexts = (edgesByStart.get(q) || []).filter((i) => !used.has(i));
       if (!nexts.length) break;
       let next;
       if (nexts.length === 1) {
         next = nexts[0];
       } else if (loop.length > 1) {
-        // At a pinch vertex: pick the edge making the most clockwise turn (tightest right turn)
+        // Pinch vertex: pick edge with smallest signed turning angle (most clockwise)
         const [px, pz] = pts.get(p), [qx, qz] = pts.get(q);
         const incoming = [qx - px, qz - pz];
         next = nexts.reduce((best, i) => {
@@ -65,11 +60,15 @@ export function outlineFromTriangles(tris, hit) {
           const [qnx, qnz] = pts.get(qNext);
           const outgoing = [qnx - qx, qnz - qz];
           const cross = incoming[0] * outgoing[1] - incoming[1] * outgoing[0];
+          const dot = incoming[0] * outgoing[0] + incoming[1] * outgoing[1];
+          const angle = Math.atan2(cross, dot);
           const [, qBest] = boundaryEdges[best];
           const [qbx, qbz] = pts.get(qBest);
           const bestVec = [qbx - qx, qbz - qz];
           const bestCross = incoming[0] * bestVec[1] - incoming[1] * bestVec[0];
-          return cross < bestCross ? i : best;
+          const bestDot = incoming[0] * bestVec[0] + incoming[1] * bestVec[1];
+          const bestAngle = Math.atan2(bestCross, bestDot);
+          return angle < bestAngle ? i : best;
         });
       } else {
         next = nexts[0];
