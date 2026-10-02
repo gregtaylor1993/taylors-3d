@@ -1,22 +1,47 @@
 // Pure render decisions for the model view (shadows, depth range, ghosting, picking, occlusion, sun).
 // Kept free of three.js objects so they can be unit tested.
 
-export const GLASS_RE = /glass|window|pane|glazing/i;
+// glass / glazing / pane(s) as a word (underscores, digits and spaces separate words), or "window"
+// unless it is a window frame or sill. Panel, fiberglass and the like don't count.
+export const GLASS_RE = /(?<![a-z])(glass|glazing|panes?)(?![a-z])|window(?![_ ]?(frame|sill))/i;
 export const OVERLAY_RE = /decal|edging|overlay/i;
 const NO_CAST_LAYERS = ['terrain', 'floor', 'decal', 'label'];
-const FLAT_M = 0.02; // thinner than this in y and wider than 5x that: a floor overlay
+const FLAT_M = 0.02; // thinner than this in y and wider than 5x that: a flat sheet
+const ON_FLOOR_M = 0.05; // a flat sheet this close to a floor / the terrain is an overlay
 
 const hasLayer = (layers, l) => (layers || []).some((x) => String(x).toLowerCase() === l);
+const matsOf = (o) => (Array.isArray(o.material) ? o.material : o.material ? [o.material] : []);
 
-// m: { names: [node / material names], layers: [fp.layer of the node and its ancestors],
-//      transparent, opacity, transmission (original material values), size: [x, y, z] of the mesh box }
+// Shadow facts of a mesh-like node: its own name + material names (not its ancestors' names: a group
+// "Windows" holds frames too), fp.layer of the node and its ancestors, material state, plus
+// geo: { size: [x, y, z], bottom: min y, floors: [floor / terrain heights] }.
+export function shadowInfo(o, geo = {}) {
+  const mats = matsOf(o);
+  const layers = [];
+  for (let p = o; p; p = p.parent) {
+    const l = p.userData && p.userData.fp && p.userData.fp.layer;
+    if (Array.isArray(l)) layers.push(...l.map(String));
+    else if (typeof l === 'string') layers.push(l);
+  }
+  return {
+    names: [o.name, ...mats.map((m) => m.name)].filter((n) => typeof n === 'string' && n),
+    layers,
+    transparent: mats.some((m) => !!m.transparent),
+    opacity: mats.length ? Math.min(...mats.map((m) => m.opacity ?? 1)) : 1,
+    transmission: mats.length ? Math.max(...mats.map((m) => m.transmission || 0)) : 0,
+    ...geo,
+  };
+}
+
+// m: shadowInfo(...). Glass, ground layers and flat sheets lying on a floor cast no shadow.
 export function castsShadow(m) {
   const layers = (m.layers || []).map((x) => String(x).toLowerCase());
   if (layers.some((l) => NO_CAST_LAYERS.includes(l) || l.includes('glass'))) return false;
   if (m.transparent || (Number.isFinite(m.opacity) && m.opacity < 0.99) || m.transmission > 0) return false;
   if ((m.names || []).some((n) => GLASS_RE.test(n || ''))) return false;
   const s = m.size;
-  if (s && s[1] < FLAT_M && Math.max(s[0], s[2]) > FLAT_M * 5) return false;
+  const flat = s && s[1] < FLAT_M && Math.max(s[0], s[2]) > FLAT_M * 5;
+  if (flat && Number.isFinite(m.bottom) && (m.floors || []).some((f) => Math.abs(m.bottom - f) <= ON_FLOOR_M)) return false;
   return true;
 }
 
@@ -25,12 +50,16 @@ export function isCoplanarOverlay(m) {
   return hasLayer(m.layers, 'decal') || hasLayer(m.layers, 'edging') || (m.names || []).some((n) => OVERLAY_RE.test(n || ''));
 }
 
-// Camera depth range from the camera->target distance and the scene radius.
-export function depthRange(distance, radius, { ortho = false } = {}) {
+// Camera depth range. Distances from the camera: target (orbit pivot), house (the house box, 0 inside),
+// centre (centre of the whole model's bounding sphere, terrain included) and that sphere's radius
+// (capped at 300 m). Near shrinks when the camera is close to the house even with a far pivot.
+export const MAX_SCENE_RADIUS = 300;
+export function depthRange({ target, house = target, centre = target, radius, ortho = false }) {
   const r3 = (v) => Math.round(v * 1000) / 1000;
+  const r = Math.min(Math.max(radius || 0, 0), MAX_SCENE_RADIUS);
   return {
-    near: ortho ? 0.1 : r3(Math.max(0.2, distance / 200)),
-    far: r3(Math.max(50, distance + radius * 3)),
+    near: ortho ? 0.1 : r3(Math.max(0.2, Math.min(target, house) / 200)),
+    far: r3(Math.max(50, centre + r) * 1.05),
   };
 }
 

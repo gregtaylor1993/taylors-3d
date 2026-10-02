@@ -7,11 +7,11 @@ import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { centroid } from './placement.js';
 import { wallSegments } from './layout.js';
-import { levelVisible } from './bindings.js';
+import { levelVisible, measuredElevations } from './bindings.js';
 import { buildManifest, threeAdapter } from './manifest.js';
 import { sectionLevels, unionBox, pivotCamera, rayPlaneY, orthoZoom, topZoom } from './views.js';
 import {
-  castsShadow, isCoplanarOverlay, depthRange, depthChanged, isOccluded, sunDirection, ghostMaterial, pickable,
+  castsShadow, shadowInfo, isCoplanarOverlay, depthRange, depthChanged, isOccluded, sunDirection, ghostMaterial, pickable,
 } from './render-rules.js';
 
 // Plan rectangle of a world-space box (used for rooms tagged without an outline).
@@ -28,18 +28,8 @@ const SHADOW_MESH_M = 30; // untagged models: meshes up to this size make the su
 const SHADOW_MARGIN_M = 4;
 const OCCLUSION_DELAY_MS = 150; // camera still this long -> occlusion pass
 const OCCLUSION_MAX = 300; // markers per pass
+const OCCLUSION_SLICE_MS = 8; // a pass yields (setTimeout) after this long
 const PICK_LINE_M = 0.02; // raycast threshold for lines / points (three's default is 1 m)
-
-// fp.layer of a node and its ancestors (lower case)
-function layersOf(o) {
-  const out = [];
-  for (let p = o; p; p = p.parent) {
-    const l = p.userData && p.userData.fp && p.userData.fp.layer;
-    if (Array.isArray(l)) out.push(...l.map(String));
-    else if (typeof l === 'string') out.push(l);
-  }
-  return out;
-}
 
 // fp.north (degrees) on the model root or its two top levels, else null
 function northOf(root) {
@@ -122,7 +112,8 @@ export class FloorplanView {
     this._occlusion = true; // dim markers behind model walls
     this._occTimer = null;
     this._occBoxes = null; // [{ mesh, box }] world boxes of occluding model meshes (cached per placement)
-    this._sceneRadius = 10;
+    this._bounds = null; // { house: Box3, centre: Vector3, radius } for the depth range
+    this._occGen = 0; // occlusion pass generation (a new schedule cancels running slices)
     this._depth = null;
 
     this.floors = [];
@@ -316,7 +307,7 @@ export class FloorplanView {
         });
         this.model.opacity = opacity;
         this._occBoxes = null; // placement changed
-        this._sceneRadius = this._radius();
+        this._bounds = this._sceneBounds();
       }
       if (this.model && this.daylight) this._fitShadow();
       this.renderer.shadowMap.needsUpdate = true;
@@ -358,6 +349,18 @@ export class FloorplanView {
         }
         // tagged models are never cut: no clipping plane (and no extra shader variant) at all
         const tagged = manifest.levels.some((l) => l.source === 'extras' || l.source === 'name');
+        // heights a flat sheet can lie on: level floors, the terrain / floor layers, the model bottom
+        const floorYs = [0];
+        for (const l of manifest.levels) if (Number.isFinite(l.elevation)) floorYs.push(l.elevation);
+        for (const m of Object.values(measuredElevations(manifest.levels))) floorYs.push(m.elevation);
+        const all = new THREE.Box3();
+        root.traverse((o) => {
+          if (!o.isMesh) return;
+          const b = new THREE.Box3().setFromObject(o);
+          all.union(b);
+          if (shadowInfo(o).layers.some((l) => /^(terrain|floor)$/i.test(l))) floorYs.push(b.max.y);
+        });
+        if (!all.isEmpty()) floorYs.push(all.min.y);
         root.traverse((o) => {
           if (!o.isMesh) return;
           const mats = Array.isArray(o.material) ? o.material : [o.material];
@@ -370,14 +373,8 @@ export class FloorplanView {
             mat.userData.wasTransparent = mat.transparent;
             mat.userData.baseDepthWrite = mat.depthWrite;
           }
-          const size = new THREE.Box3().setFromObject(o).getSize(new THREE.Vector3()).toArray();
-          const names = [o.name, ...mats.map((m) => m.name)];
-          for (let p = o.parent; p && p !== root; p = p.parent) if (p.name) names.push(p.name);
-          const info = {
-            names, layers: layersOf(o), size,
-            transparent: mats.some((m) => m.transparent), opacity: Math.min(...mats.map((m) => m.opacity ?? 1)),
-            transmission: Math.max(...mats.map((m) => m.transmission || 0)),
-          };
+          const box = new THREE.Box3().setFromObject(o);
+          const info = shadowInfo(o, { size: box.getSize(new THREE.Vector3()).toArray(), bottom: box.min.y, floors: floorYs });
           o.receiveShadow = true;
           o.castShadow = castsShadow(info);
           o.userData.seeThrough = !!info.transparent || info.opacity < 0.6 || info.transmission > 0;
@@ -468,6 +465,7 @@ export class FloorplanView {
     this._clearGroup(this.modelGroup);
     this.model = null;
     this._occBoxes = null;
+    this._cancelOcclusion();
     this._clearOcclusion();
     this._applyLook();
     this.dirty = true;
@@ -722,7 +720,7 @@ export class FloorplanView {
       }
       this.staticGroup.add(group);
     }
-    this._sceneRadius = this._radius();
+    this._bounds = this._sceneBounds();
     this._applyFloorVisibility();
     this.dirty = true;
   }
@@ -1112,6 +1110,7 @@ export class FloorplanView {
     if (this.mode === '3d') this._lastCam3d = this.getCamera();
     this.mode = mode;
     this.camera = mode === 'top' ? this.ortho : this.persp;
+    if (mode === 'top') { this._cancelOcclusion(); this._clearOcclusion(); } // no occlusion in top view
     this._makeControls();
     this.fit();
   }
@@ -1183,43 +1182,53 @@ export class FloorplanView {
         dist *= extent / 0.85;
       }
       const to = { pos: target.clone().addScaledVector(dir, dist), target: target.clone() };
-      this._sceneRadius = this._radius();
+      this._bounds = this._sceneBounds();
       this._moveCamera(to.pos, to.target, instant);
       this._updateDepth();
       return;
     }
     this.controls.target.copy(target);
     this.controls.update();
-    this._sceneRadius = this._radius();
+    this._bounds = this._sceneBounds();
     this._updateDepth();
     this.dirty = true;
   }
 
-  // Bounding-sphere radius of the rooms + the model (giant ground meshes left out).
-  _radius() {
-    const box = new THREE.Box3();
+  // Depth-range bounds: the house box (rooms + model meshes up to 60 m) and the bounding sphere of
+  // everything (terrain included).
+  _sceneBounds() {
+    const house = new THREE.Box3(), full = new THREE.Box3();
     for (const { room, floorId } of this._rooms || []) {
       if (!room.polygon || room.polygon.length < 3) continue;
       const f = this.floors.find((x) => x.id === floorId);
       const y0 = f ? f.elevation : 0, y1 = y0 + ((f && f.height) || 2.7);
-      for (const [x, y] of room.polygon) box.expandByPoint(new THREE.Vector3(x, y0, -y)).expandByPoint(new THREE.Vector3(x, y1, -y));
+      for (const [x, y] of room.polygon) house.expandByPoint(new THREE.Vector3(x, y0, -y)).expandByPoint(new THREE.Vector3(x, y1, -y));
     }
+    full.union(house);
     if (this.model) {
       this.modelGroup.updateMatrixWorld(true);
       this.model.root.traverse((o) => {
         if (!o.isMesh) return;
         const b = new THREE.Box3().setFromObject(o);
-        if (Math.max(b.max.x - b.min.x, b.max.z - b.min.z) <= MAX_FRAME_MESH_M) box.union(b);
+        full.union(b);
+        if (Math.max(b.max.x - b.min.x, b.max.z - b.min.z) <= MAX_FRAME_MESH_M) house.union(b);
       });
     }
-    return box.isEmpty() ? 10 : Math.max(box.getSize(new THREE.Vector3()).length() / 2, 5);
+    if (full.isEmpty()) full.set(new THREE.Vector3(-5, 0, -5), new THREE.Vector3(5, 3, 5));
+    if (house.isEmpty()) house.copy(full);
+    const sphere = full.getBoundingSphere(new THREE.Sphere());
+    return { house, centre: sphere.center, radius: Math.max(sphere.radius, 5) };
   }
 
-  // Near / far follow the camera distance (depth precision where the model is); only on > 1 % changes.
+  // Near / far from the camera position (depth precision where the model is); only on > 1 % changes.
   _updateDepth() {
     const cam = this.camera, ortho = cam === this.ortho;
-    const d = cam.position.distanceTo(this.controls.target);
-    const next = depthRange(d, this._sceneRadius, { ortho });
+    const b = this._bounds || (this._bounds = this._sceneBounds());
+    const p = cam.position;
+    const next = depthRange({
+      target: p.distanceTo(this.controls.target), house: b.house.distanceToPoint(p),
+      centre: p.distanceTo(b.centre), radius: b.radius, ortho,
+    });
     if (!depthChanged({ near: cam.near, far: cam.far }, next)) return;
     cam.near = next.near;
     cam.far = next.far;
@@ -1232,12 +1241,20 @@ export class FloorplanView {
     this._scheduleOcclusion(0);
   }
 
-  // Occlusion pass once the camera has been still for 150 ms (debounced; never per frame).
+  // Occlusion pass once the camera has been still for 150 ms (debounced; never per frame). A new
+  // schedule cancels the pending timer and any pass still running in slices.
   _scheduleOcclusion(delay = OCCLUSION_DELAY_MS) {
     if (this._occTimer) clearTimeout(this._occTimer);
     this._occTimer = null;
+    this._occGen++;
     if (this._disposed) return;
     this._occTimer = setTimeout(() => this._runOcclusion(), delay);
+  }
+
+  _cancelOcclusion() {
+    if (this._occTimer) clearTimeout(this._occTimer);
+    this._occTimer = null;
+    this._occGen++;
   }
 
   _clearOcclusion() {
@@ -1272,26 +1289,37 @@ export class FloorplanView {
     const origin = cam.getWorldPosition(new THREE.Vector3());
     const shown = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
     const boxes = this._occluders().filter((b) => shown(b.mesh));
+    const markers = this.cssObjects.filter((c) => c.kind === 'marker' && c.obj.visible).slice(0, OCCLUSION_MAX); // the rest keep their state
+    const gen = this._occGen;
     const rc = this._occRay, pos = new THREE.Vector3(), dir = new THREE.Vector3(), tmp = new THREE.Vector3();
     const cut = this.modelClip.constant;
-    let n = 0;
-    for (const c of this.cssObjects) {
-      if (c.kind !== 'marker' || !c.obj.visible) continue;
-      if (++n > OCCLUSION_MAX) break; // the rest keep their last state
-      c.obj.getWorldPosition(pos);
-      const dist = origin.distanceTo(pos);
-      rc.set(origin, dir.subVectors(pos, origin).normalize());
-      rc.near = 0;
-      rc.far = Math.max(dist - 0.3, 0);
-      let hitD = null;
-      for (const { mesh, box } of boxes) {
-        const at = rc.ray.intersectBox(box, tmp);
-        if (!at || origin.distanceTo(at) > rc.far) continue; // box pre-filter
-        const h = rc.intersectObject(mesh, false).find((x) => x.point.y <= cut + 1e-6 && !this._cutAway(x.point));
-        if (h && (hitD === null || h.distance < hitD)) { hitD = h.distance; break; }
+    let i = 0;
+    const slice = () => {
+      this._occTimer = null;
+      if (this._disposed || gen !== this._occGen) return; // cancelled (camera, view, model, dispose)
+      const t0 = performance.now();
+      for (; i < markers.length; i++) {
+        if (performance.now() - t0 > OCCLUSION_SLICE_MS) { this._occTimer = setTimeout(slice, 0); return; }
+        const c = markers[i];
+        if (!c.obj.parent) continue; // removed meanwhile
+        c.obj.getWorldPosition(pos);
+        const dist = origin.distanceTo(pos);
+        rc.set(origin, dir.subVectors(pos, origin).normalize());
+        rc.near = 0;
+        rc.far = Math.max(dist - 0.3, 0);
+        let hitD = null;
+        for (const { mesh, box } of boxes) {
+          if (!box.containsPoint(origin)) { // inside the box: the ray may hit it anywhere, test the mesh
+            const at = rc.ray.intersectBox(box, tmp);
+            if (!at || origin.distanceTo(at) > rc.far) continue; // box pre-filter
+          }
+          const h = rc.intersectObject(mesh, false).find((x) => x.point.y <= cut + 1e-6 && !this._cutAway(x.point));
+          if (h) { hitD = h.distance; break; }
+        }
+        c.obj.element.classList.toggle('fp-occluded', isOccluded(hitD, dist));
       }
-      c.obj.element.classList.toggle('fp-occluded', isOccluded(hitD, dist));
-    }
+    };
+    slice();
   }
 
   _stepTween(now) {
@@ -1384,8 +1412,7 @@ export class FloorplanView {
   dispose() {
     this.stop();
     this._disposed = true;
-    if (this._occTimer) clearTimeout(this._occTimer);
-    this._occTimer = null;
+    this._cancelOcclusion();
     this.renderer.domElement.removeEventListener('wheel', this._onWheel);
     this.controls.dispose();
     this._clearGroup(this.staticGroup);

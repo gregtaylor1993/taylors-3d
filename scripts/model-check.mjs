@@ -72,6 +72,33 @@ try {
   // render fixes: depth range, glass shadows, depth kept when ghosted, markers behind walls
   const depth = await page.evaluate(`(() => { const c = ${card}._view.persp; return { near: c.near, far: c.far }; })()`);
   check('depth range: near >= 0.2, far within 50..500 after load', depth.near >= 0.2 && depth.far >= 50 && depth.far <= 500, JSON.stringify(depth));
+  // a 200 m terrain: the far plane must still reach its farthest corner from the exterior view at max distance
+  await chip('exterior');
+  const terrain = await page.evaluate(`(async () => { const c = ${card}, v = c._view;
+    const sofa = v.model.root.getObjectByName('sofa_body'); // borrow the bundle's three classes
+    const three = { Vector3: v.persp.position.constructor };
+    const g = sofa.geometry.clone(); // a 200 x 0.1 x 200 m box centred on the origin
+    g.computeBoundingBox();
+    const bb = g.boundingBox, cx = (bb.min.x + bb.max.x) / 2, cy = (bb.min.y + bb.max.y) / 2, cz = (bb.min.z + bb.max.z) / 2;
+    g.translate(-cx, -cy, -cz).scale(200 / (bb.max.x - bb.min.x), 0.1 / (bb.max.y - bb.min.y), 200 / (bb.max.z - bb.min.z));
+    const m = new sofa.constructor(g, sofa.material.clone());
+    m.name = 'test_terrain'; m.userData.fp = { layer: 'terrain' }; m.position.set(6, -0.3, -4.5);
+    v.model.root.add(m); c._loadModel(); await new Promise((r) => setTimeout(r, 100));
+    const cam = v.getCamera(), t = cam.target, p = cam.position, d = Math.hypot(p[0] - t[0], p[1] - t[1], p[2] - t[2]);
+    v.setCamera({ target: t, position: p.map((x, i) => t[i] + ((x - t[i]) * 130) / d) }, { instant: true });
+    await new Promise((r) => setTimeout(r, 300));
+    v.persp.updateMatrixWorld();
+    let far = 0; m.updateMatrixWorld(true);
+    for (const [x, z] of [[-100, -100], [100, -100], [100, 100], [-100, 100]]) {
+      const w = new three.Vector3(x, 0, z).applyMatrix4(m.matrixWorld).applyMatrix4(v.persp.matrixWorldInverse);
+      far = Math.max(far, -w.z);
+    }
+    const out = { cornerDepth: far, near: v.persp.near, far: v.persp.far, dist: 130 };
+    v.model.root.remove(m); g.dispose(); m.material.dispose(); c._loadModel(); v.setCamera(cam, { instant: true });
+    await new Promise((r) => setTimeout(r, 100));
+    return out; })()`);
+  check('far plane covers a 200 m terrain from 130 m away', terrain.cornerDepth < terrain.far && terrain.far <= 500 * 1.05, JSON.stringify(terrain));
+  await chip('ground');
   const shadows = await page.evaluate(`(() => { const r = ${card}._view.model.root; const pane = r.getObjectByName('window_pane_living');
     const body = r.getObjectByName('sofa_body');
     let clip = 0; r.traverse((o) => { if (o.isMesh) for (const m of [].concat(o.material)) if (m.clippingPlanes && m.clippingPlanes.length) clip++; });
