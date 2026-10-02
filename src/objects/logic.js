@@ -153,3 +153,10 @@ export function attachedPosition(anchor, offset, floorElevation) {
   const a = vec(anchor);
   return { x: a.x + offset[0], y: -(a.z + offset[2]), z: a.y + offset[1] - (floorElevation || 0) };
 }
+
+// The floor a model hit at world height y stands on: the highest floor with elevation <= y + tol, else null.
+export function floorAtHeight(floors, y, tol = 0.05) {
+  let best = null;
+  for (const f of floors || []) if (f.elevation <= y + tol && (!best || f.elevation > best.elevation)) best = f;
+  return best ? best.id : null;
+}

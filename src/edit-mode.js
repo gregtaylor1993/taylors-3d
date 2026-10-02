@@ -11,7 +11,7 @@ import { ruleState, setRuleState, nextEyeState, viewTree, pickSelector, nextView
   SECTION_DIRS, sectionDir, sectionPos, sectionAt, sectionRange, zoomToFor } from './views.js';
 import { levelsFromFloorMap } from './bindings.js';
 import { outlineLoops, pickLoop, rasterGrid, outlineFromGrid } from './outline.js';
-import { snapPin, attachOffset } from './objects/logic.js';
+import { snapPin, attachOffset, floorAtHeight } from './objects/logic.js';
 
 const DENSE_TRIS = 150000;
 
@@ -704,15 +704,17 @@ export class EditMode {
   _magnet(d) {
     if (this.drag !== d || !d.last) return;
     const hit = this.view.surfaceAt(d.last.clientX, d.last.clientY);
-    if (!hit) {
+    if (!hit) { // empty sky: keep the last snapped spot (a far plane hit would fling the marker away)
       this._setDragTarget(d, null);
-      this._freeMarker(d, d.last);
       return;
     }
     const owner = hit.owner;
     const level = owner ? (owner.kind === 'level' ? owner.id : owner.level) : null;
     const lf = (this.card._levels && this.card._levels.levelFloor) || {};
-    const floorId = level && lf[level] && this.floors.some((f) => f.id === lf[level]) ? lf[level] : d.pos.floorId;
+    // the HA floor bound to the hit's level, else the floor the hit stands on, else the current one
+    const floorId = (level && lf[level] && this.floors.some((f) => f.id === lf[level]) ? lf[level] : null)
+      || floorAtHeight(this.floors.map((f) => ({ id: f.id, elevation: this.view.floorElevation(f.id) })), hit.point.y)
+      || d.pos.floorId;
     const pin = snapPin(hit, this.view.floorElevation(floorId), floorId);
     d.pos = { ...d.pos, x: pin.x, y: pin.y, z: pin.z, floorId };
     d.snapped = true;
@@ -1908,9 +1910,11 @@ export class EditMode {
       const pos = this.card._positions.get(this.selectedMarker);
       if (!Number.isFinite(v) || !pos) return;
       const pin = (this.layout.pins || {})[this.selectedMarker];
-      if (pin && pin.attach && Array.isArray(pin.offset) && pos.attached) { // attached: raise / lower the offset
+      if (pin && pin.attach && Array.isArray(pin.offset)) {
+        // attached: raise / lower the offset; object missing: keep the attach, only the fallback height changes
         const o = pin.offset;
-        this.commit(E.attachPin(this.layout, this.selectedMarker, pin.attach, [o[0], o[1] + v - pos.z, o[2]], { x: pos.x, y: pos.y, z: v, floor_id: pos.floorId }));
+        const off = pos.attached ? [o[0], o[1] + v - pos.z, o[2]] : o;
+        this.commit(E.attachPin(this.layout, this.selectedMarker, pin.attach, off, { x: pin.x, y: pin.y, z: pos.attached ? pin.z + v - pos.z : v, floor_id: pin.floor_id }));
         return;
       }
       this.commit(E.setPin(this.layout, this.selectedMarker, { x: pos.x, y: pos.y, z: v, floor_id: pos.floorId, on_model: this._onModel(this.selectedMarker) }, { grid: !pin }));

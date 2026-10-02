@@ -1374,7 +1374,14 @@ class Floorplan3dCard extends HTMLElement {
       const pin = pins[id];
       if (!pin || !pin.attach) continue;
       const at = this._attachAt(pin, pos.floorId);
-      if (!at) continue;
+      if (!at) {
+        if (!pos.attached) continue;
+        // the object vanished: back to the pin's stored (fallback) position
+        const z = pin.z ?? 1.2;
+        this._positions.set(id, { x: pin.x, y: pin.y, z, floorId: pos.floorId, auto: false });
+        this._view.moveMarker(id, pin.x, pin.y, z, pos.floorId);
+        continue;
+      }
       if (pos.attached && Math.abs(at.x - pos.x) < 1e-6 && Math.abs(at.y - pos.y) < 1e-6 && Math.abs(at.z - pos.z) < 1e-6) continue;
       this._positions.set(id, { ...pos, x: at.x, y: at.y, z: at.z, attached: pin.attach });
       this._view.moveMarker(id, at.x, at.y, at.z, pos.floorId);

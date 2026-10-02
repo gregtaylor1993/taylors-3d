@@ -209,11 +209,12 @@ describe('attachPin', () => {
     const d = setPin(l, 'device:a', { x: 1.234, y: 2, z: 1, floor_id: 'g', on_model: true }, { grid: false });
     expect(d.pins['device:a']).toEqual({ x: 1.234, y: 2, z: 1, floor_id: 'g', on_model: true });
   });
-  it('attached pins are skipped by realignPins', () => {
+  it('realignPins keeps attach + offset of attached pins, moves only their fallback position', () => {
     const l = attachPin(base, 'device:a', 'lamp1', [0, 0.1, 0], { x: 1, y: 2, z: 1, floor_id: 'g' });
     const withFree = { ...l, pins: { ...l.pins, 'device:c': { x: 1, y: 0, z: 1, floor_id: 'g', on_model: true } } };
-    const out = realignPins(withFree, { position: [0, 0, 0], rotation: 0, scale: 1 }, { position: [2, 0, 0], rotation: 0, scale: 1 });
-    expect(out.pins['device:a']).toBe(withFree.pins['device:a']);
-    expect(out.pins['device:c'].x).toBe(3);
+    const out = realignPins(withFree, { position: [0, 0, 0], rotation: 0, scale: 1 }, { position: [2, 0, 0], rotation: 0, scale: 2 });
+    expect(out.pins['device:a']).toEqual({ ...withFree.pins['device:a'], x: 4, y: 4, z: 2 }); // scale 2 about the origin, then +2 east
+    expect(out.pins['device:a'].offset).toEqual([0, 0.1, 0]);
+    expect(out.pins['device:c'].x).toBe(4);
   });
 });

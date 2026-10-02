@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bindObjects, chainState, lightColor, lightLevel, lightBudget, nightFactor, sunVector, screenNearest, sunStrength, clampSunDir, snapPin, attachedPosition, attachOffset } from '../src/objects/logic.js';
+import { bindObjects, chainState, lightColor, lightLevel, lightBudget, nightFactor, sunVector, screenNearest, sunStrength, clampSunDir, snapPin, attachedPosition, attachOffset, floorAtHeight } from '../src/objects/logic.js';
 
 const st = (entity_id, state, attributes = {}) => ({ entity_id, state, attributes });
 
@@ -217,5 +217,22 @@ describe('attached pins', () => {
   it('bad offset -> null', () => {
     expect(attachedPosition({ x: 0, y: 0, z: 0 }, null, 0)).toBeNull();
     expect(attachedPosition(null, [0, 0, 0], 0)).toBeNull();
+  });
+});
+
+describe('floorAtHeight', () => {
+  const floors = [{ id: 'g', elevation: 0 }, { id: 'up', elevation: 3 }, { id: 'cellar', elevation: -3 }];
+  it('highest floor at or below the hit', () => {
+    expect(floorAtHeight(floors, 1.2)).toBe('g');
+    expect(floorAtHeight(floors, 4.5)).toBe('up');
+    expect(floorAtHeight(floors, -1)).toBe('cellar');
+  });
+  it('5 cm tolerance: a hit just under a floor surface counts for that floor', () => {
+    expect(floorAtHeight(floors, 2.96)).toBe('up');
+    expect(floorAtHeight(floors, 2.9)).toBe('g');
+  });
+  it('none below -> null', () => {
+    expect(floorAtHeight(floors, -5)).toBeNull();
+    expect(floorAtHeight([], 1)).toBeNull();
   });
 });

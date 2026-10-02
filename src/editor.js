@@ -143,7 +143,8 @@ export function realignPins(layout, oldAlign, newAlign) {
   let changed = false;
   const out = {};
   for (const [id, p] of Object.entries(pins)) {
-    if (!p || !p.on_model || p.attach) { out[id] = p; continue; } // attached pins follow their object
+    // attached pins follow their object; only their fallback position (object missing) is realigned
+    if (!p || !p.on_model) { out[id] = p; continue; }
     const [x, y] = transformPoint(inverseTransformPoint([p.x, p.y], oldAlign), newAlign);
     const z = p.z * (ns / os);
     // micrometre precision: slider ticks realign step by step, mm rounding would accumulate drift

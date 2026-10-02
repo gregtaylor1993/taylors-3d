@@ -1322,6 +1322,26 @@ try {
       !!pin && pin.z > 0.5 && pin.z < 2.6 && dist <= 0.1 && pin.on_model === true && !pin.attach, JSON.stringify({ pin, wall: w, dist }));
     check('magnetic: the wall marker sits off the wall towards the viewer', !!pin && ((pin.x - w.point[0]) * w.n[0] + (pin.y - w.point[1]) * w.n[1]) > 0.02, JSON.stringify(pin));
     check('magnetic: highlight cleared after the drop', await page.evaluate(`!${card}._view.pickHelper`));
+    // empty sky: the marker keeps its last snapped spot (no fling to a far plane hit)
+    const sky = await page.evaluate(`(() => { const c = ${card}, v = c._view, r = v.renderer.domElement.getBoundingClientRect();
+      for (let y = r.top + 15; y < r.bottom - 15; y += 15) for (let x = r.left + 15; x < r.right - 15; x += 15)
+        if (!v.surfaceAt(x, y) && c.shadowRoot.elementFromPoint(x, y)?.tagName === 'CANVAS') return { x, y };
+      return null; })()`);
+    if (sky) {
+      const aNow = await page.evaluate(`(() => { const c = ${card}, el = c._markerEls.get(${JSON.stringify(a.id)}).querySelector('.fp-dot').getBoundingClientRect(); return { x: el.left + el.width / 2, y: el.top + el.height / 2 }; })()`);
+      await page.mouse.move(aNow.x, aNow.y);
+      await page.mouse.down();
+      await page.mouse.move(sky.x, sky.y, { steps: 8 });
+      await sleep(50);
+      await page.mouse.up();
+      await sleep(250);
+      const ps = await pinOf(a.id);
+      // the path crosses the model first: the marker stays at the last surface it stuck to, inside the model
+      const box = await page.evaluate(`${card}._view.modelBox()`);
+      const inBox = !!ps && ps.x >= box.min[0] - 0.1 && ps.x <= box.max[0] + 0.1 && -ps.y >= box.min[2] - 0.1 && -ps.y <= box.max[2] + 0.1
+        && ps.z + 0 >= box.min[1] - 0.1 && ps.z <= box.max[1] + 0.1;
+      check('magnetic: dragging out over empty sky keeps the last snapped spot (inside the model)', inBox, JSON.stringify({ after: ps, box, sky }));
+    } else check('magnetic: found empty sky on screen', false);
     // 2) lamp
     await drag(b, targets.lamp);
     pin = await pinOf(b.id);
@@ -1341,7 +1361,18 @@ try {
     check('magnetic: realigned model -> the attached marker follows the lamp (+0.5 m east)',
       Math.abs(w1.anchor[0] - w0.anchor[0] - 0.5) < 0.01 && Math.abs(w1.world[0] - w0.world[0] - 0.5) < 0.01 && off1.every((v, i) => Math.abs(v - off0[i]) < 0.002),
       JSON.stringify({ w0, w1 }));
-    check('magnetic: realign leaves the attached pin as stored', JSON.stringify(pin1) === JSON.stringify(pin), JSON.stringify(pin1));
+    check('magnetic: realign keeps attach + offset, moves only the fallback position (+0.5 m)',
+      !!pin1 && pin1.attach === pin.attach && JSON.stringify(pin1.offset) === JSON.stringify(pin.offset) && Math.abs(pin1.x - pin.x - 0.5) < 0.002 && pin1.y === pin.y,
+      JSON.stringify(pin1));
+    // the object vanishes: the marker falls back to its stored position, then comes back with it
+    const gone = await page.evaluate(`(() => { const c = ${card}, id = ${JSON.stringify(b.id)}, l = c._objects, part = l.parts.get('test_lamp');
+      l.parts.delete('test_lamp'); c._refreshAttached();
+      const p = c._positions.get(id), pin = c._layout.pins[id];
+      const out = { fell: !p.attached && Math.abs(p.x - pin.x) < 1e-6 && Math.abs(p.y - pin.y) < 1e-6 && Math.abs(p.z - pin.z) < 1e-6 };
+      l.parts.set('test_lamp', part); c._refreshAttached();
+      out.back = c._positions.get(id).attached === 'test_lamp';
+      return out; })()`);
+    check('magnetic: object gone -> stored fallback position, back -> follows it again', gone.fell && gone.back, JSON.stringify(gone));
     // the lamp moved: find it on screen again
     const lamp2 = await page.evaluate(`(() => { const c = ${card}, v = c._view, r = v.renderer.domElement.getBoundingClientRect();
       for (let y = r.top + 20; y < r.bottom - 20; y += 10) for (let x = r.left + 20; x < r.right - 20; x += 10) {

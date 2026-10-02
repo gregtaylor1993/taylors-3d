@@ -102,7 +102,10 @@ with a model the heights come from the model.
 
 **Devices.** Every device with an area appears in that area's room. Drag a marker to pin it; set
 its height above the floor; **Return to auto placement** removes the pin; **Hide** removes it
-from the plan. Devices whose area has no room yet, and hidden devices, are listed here.
+from the plan. With a model the dragged marker sticks to the surface under the pointer (5 cm off
+it, on the floor of that level); dropped on a model object (lamp, mower, …) it attaches and
+follows that object's position (not its rotation, e.g. the mower's heading). **Detach** keeps it
+where it is as a normal pin. Hold **Alt** while dragging for a free drag at the current height. Devices whose area has no room yet, and hidden devices, are listed here.
 
 **Mower.** See below.
 
