@@ -183,8 +183,60 @@ pl.shadow.mapSize.set(512, 512); pl.shadow.bias = -0.004; pl.shadow.camera.near 
 4. A shadow budget of about 4 shadowed lamps, chosen from visible + on, 512² maps, bias about −0.004.
 5. Optional bloom only on desktop: `UnrealBloomPass` threshold about 0.9, strength 0.4, radius 0.3, emissive only. Off on mobile and wall tablets.
 
-## Optional side section
-A "side" toggle adds one renderer clipping plane at x = `sectionX` (default 7.0 m, normal −X), so the attic profile reads from the side. This is the only cutting in the model, and it is off by default.
+## Camera modes: Perspective, Top down, Side section
+All coordinates are model world: Y up, metres. The house spans x −0.27…15.87 (long axis, west→east) and z −0.27…10.27 (terrace side → entrance side), so its centre is about **(7.8, 0, 5)**. Every mode uses the same `PerspectiveCamera(35°)` + OrbitControls. A mode only sets **position + target** (and for Section, one clipping plane). After that, the user can orbit freely again.
+
+### 1. Perspective (default, "Reset view")
+| View | position | target | feel |
+|---|---|---|---|
+| Exterior + garden | (24, 26, 34) | (7.8, 0, 5) | 3/4 aerial from the entrance/bedroom corner, about 38° down, whole plot visible |
+| Exterior, no garden | (7.8, 12, 30) | (7.8, 1.5, 5) | front elevation, slightly from above, house fills the frame |
+| Ground floor / Attic | (7.8, 17, 21) | (7.8, 0, 5) | from the entrance side, about 45° down into the open rooms (attic or roof hidden) |
+- **The target is always the house centre at floor level,** so orbiting turns around the middle of the plan.
+- **A 35° FOV from 20–40 m** gives an "architectural model" look: little perspective distortion and nearly parallel walls.
+
+### 2. Top down
+| View | position | target |
+|---|---|---|
+| Exterior + garden | (7.8, **64**, 5.02) | (7.8, 0, 5) |
+| Floors / no garden | (7.8, **26**, 5.02) | (7.8, 0, 5) |
+- **Straight down.** The tiny **+0.02 m z offset** is required: OrbitControls can't build a view matrix when the camera is exactly above the target (gimbal lock with `up = +Y`). With the offset, screen-up points to −z, which is the terrace side.
+- **It is still a perspective camera.** Walls show a little lean at the edges, which helps you read the height. The user can orbit out of it at any time.
+- **For pixel-exact plans** (House Plan backgrounds, mower overlay), the export uses an **OrthographicCamera** instead:
+```js
+const c = new THREE.OrthographicCamera(-w/2, w/2, h/2, -h/2, 1, 200);   // w,h = box size in metres
+c.position.set(cx, 80, cz); c.up.set(0, 0, -1); c.lookAt(cx, 0, cz);   // up = −z → terrace side at the top
+```
+  - **Floors:** box x −1…16.6, z −3…11.2, at 150 px/m.
+  - **Site:** box x −6…29, z −30…20, at 60 px/m (also 1920 px wide for the mower live-map YAML).
+  - **Pixel ↔ metre** is a plain linear mapping: `x = x0 + px/ppm`, `z = z0 + py/ppm`.
+
+### 3. Side section
+A vertical cut through the house, looked at from the side, to read the attic profile: knee walls, the zone under 1.6 m, roof build-up and stairs.
+```js
+cut = new THREE.Plane(new THREE.Vector3(-1, 0, 0), sectionX);   // keeps x < sectionX, removes everything east of it
+renderer.clippingPlanes = [cut];                                 // global clip, all materials
+camera.position.set(sectionX + 20, 4.6, 5.01); controls.target.set(sectionX, 3.8, 5);
+```
+- **`sectionX` defaults to 7.0 m** (through the stairs and the middle of the attic). It is a Tweak, 0–15.6 m.
+- **The camera looks west at the cut face,** at eye level a bit above the attic floor (target y 3.8). That gives a true section elevation.
+- **Section forces the roof and the attic visible.** From the Ground view it switches to Attic, because the point is to see storeys + roof in profile.
+- **Wall caps:** the cut leaves walls hollow. Draw dark-grey caps with a stencil pass, or simply use double-sided interior materials so the inner faces read as a solid wall colour (the model's approach).
+- **Turning Section off** (or pressing Reset / Top down) clears `clippingPlanes` and returns to the Perspective preset.
+- **The only clipping in the whole model is this plane.** Level switching never clips.
+
+### Card implementation
+```js
+const CAM = {
+  perspective: { exterior: [[24,26,34],[7.8,0,5]], ground: [[7.8,17,21],[7.8,0,5]], attic: [[7.8,17,21],[7.8,0,5]] },
+  top:         { exterior: [[7.8,64,5.02],[7.8,0,5]], ground: [[7.8,26,5.02],[7.8,0,5]], attic: [[7.8,26,5.02],[7.8,0,5]] },
+  section:     x => [[x+20,4.6,5.01],[x,3.8,5]],
+};
+function go([p, t], ms = 400) { tween(camera.position, p, ms); tween(controls.target, t, ms); } // ease-in-out, call controls.update() per frame
+```
+- **Store presets per glb** in `fp.views[*].camera` (already exported for Perspective). Add `camera_top` and an optional `section: { normal:[-1,0,0], constant:7 }`, or compute Top down from the level bounding box: centre + height = max(w, d) / (2·tan(fov/2)) × 1.1.
+- **Switching level tabs keeps the current camera;** only these buttons move it.
+- **When converting to glTF coordinates for the card,** use the same mapping as the export: model (x, y, z) → glTF (z + 0.27, y, −x − 0.27).
 
 ## Mapping to the house.glb contract
 The exported glb uses `extras.fp` levels: `ground` (storey, order 0), `attic` (storey, order 1), `exterior` (role exterior), `roof` (role roof). It has the same table as `fp.views`:
