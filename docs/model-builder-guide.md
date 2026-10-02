@@ -116,6 +116,9 @@ house.userData.fp = { views: [
   Rules cascade to children, and a later rule wins over an earlier one.
 - `camera` (optional): `{ position, target }` in model world metres (Y up). The card tweens to
   it when the view is opened and on **Reset view**; without one the camera stays where it is.
+- `camera_top` (optional): `{ center: [x, y], zoom }`, the view's **Top** camera: centre in plan
+  metres (x east, y north) and zoom > 0 (1 shows about 20 m from top to bottom). Used when the
+  view is opened in Top and on **Reset view** there; invalid values are ignored with a warning.
 - `section` (optional): `{ normal: [x, y, z], constant }`, the view's **Side section** cut as a
   three.js plane in model world (the side where `normal · p + constant ≥ 0` stays), e.g.
   `{ normal: [-1, 0, 0], constant: 7 }` keeps x ≤ 7 m. Without one the card keeps the west half,

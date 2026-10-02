@@ -65,6 +65,7 @@ The options below can be set in the visual editor or in YAML.
 | `floor` | first floor with rooms | Floor id (or view id) to show first, or `all`. |
 | `view_id` | | View to show first (with a model: a view id such as `ground`). Wins over `floor`. |
 | `room_labels` | `size` | Room labels: `size` (name and size, e.g. `Office · 4.5 × 5.0 m`, or `m²` for other shapes), `name`, or `none`. |
+| `zoom_to` | `center` | Zoom pivot: `center` zooms (and rotates) around the view's rotation centre, `cursor` zooms towards the mouse pointer. A view can override it (see Camera). |
 | `views` | | Per-view overrides by view id (see Views). |
 | `model` | | URL of a `.glb` model, e.g. `/local/house.glb`. |
 | `model_position` | `[0, 0, 0]` | Model offset in plan metres `[east, north, up]`. |
@@ -187,6 +188,21 @@ of the model in 3D for a menu: **Hide in this view**, **Show in this view**, **H
 views**, **Reveal in tree**. Your changes are stored per view id in the layout and survive model
 re-exports; parts no longer in the model are listed for removal.
 
+#### Camera
+
+- **Rotation centre**: *Edit → Views → Set rotation centre*, then click a point on the model (or
+  the floor of the view when nothing is hit; Esc cancels). The camera moves so it orbits and zooms
+  around that point, keeping its angle and distance, and the view's camera (position + centre) is
+  saved. While the Views tab is open a small cross marks the current centre.
+- **Zoom towards**: card option `zoom_to` (`center` by default, or `cursor`), per view in the
+  Views tab (or `views.<id>.zoom_to` in YAML).
+- **Top view camera**: in **Top**, *Save current view as start* stores the view's own top camera
+  (`camera_top: { center: [x, y], zoom }`, plan metres; zoom 1 shows about 20 m from top to
+  bottom) instead of the 3D one. Switching views in Top uses it, else keeps the current top camera;
+  *Set rotation centre* in Top recentres the top camera. Models may give `fp.views[*].camera_top`.
+- **Reset view** returns to the saved camera (3D: incl. its rotation centre; Top: `camera_top`),
+  else frames the view. *Reset camera* in the Views tab drops the camera of the current mode.
+
 #### Side section
 
 The **Section** button (box cutter, 3D view with a model) cuts the house with one vertical plane
@@ -211,6 +227,8 @@ views:
       - hide: layer:furniture
       - hide: node:house/level0/sofa
     camera: { position: [18, 22, 16], target: [6, 0, -4] }
+    camera_top: { center: [6, 4], zoom: 1.5 }   # plan metres
+    zoom_to: cursor
     section: { normal: [-1, 0, 0], constant: 7 }   # card world: keeps x <= 7 m
   exterior:
     hidden: true

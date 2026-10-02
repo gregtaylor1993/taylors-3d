@@ -180,6 +180,43 @@ function migratedRules(viewId, mig, savedLevels, levels) {
 }
 
 const isCam = (c) => c && Array.isArray(c.position) && Array.isArray(c.target);
+
+// ---------- camera: top-view camera, zoom pivot, rotation centre ----------
+const finite = (x) => typeof x === 'number' && Number.isFinite(x);
+
+// Top-view camera { center: [x, y] plan metres, zoom > 0 } (copied), or null.
+export function normTopCamera(c) {
+  if (!c || typeof c !== 'object' || !Array.isArray(c.center) || c.center.length !== 2) return null;
+  if (!c.center.every(finite) || !finite(c.zoom) || !(c.zoom > 0)) return null;
+  return { center: [...c.center], zoom: c.zoom };
+}
+
+export const ZOOM_TO = ['center', 'cursor'];
+const zoomOk = (z) => (ZOOM_TO.includes(z) ? z : null);
+
+// Zoom pivot: the view's zoom_to, else the card option, else 'center' (zoom and rotate around the target).
+export const zoomToFor = (view, config) => zoomOk(view && view.zoom_to) || zoomOk(config && config.zoom_to) || 'center';
+
+const cm = (x) => Math.round(x * 100) / 100 + 0;
+
+// Rotation centre: target moves to point, the camera by the same delta (same angle and distance).
+export function pivotCamera(cam, point) {
+  const d = point.map((v, i) => v - cam.target[i]);
+  return { position: cam.position.map((v, i) => cm(v + d[i])), target: point.map(cm) };
+}
+
+// Ray origin + t·dir (t > 0) on the horizontal plane at height y, or null.
+export function rayPlaneY(origin, dir, y) {
+  if (Math.abs(dir[1]) < 1e-9) return null;
+  const t = (y - origin[1]) / dir[1];
+  if (!(t > 0)) return null;
+  return origin.map((v, i) => (i === 1 ? y : v + dir[i] * t));
+}
+
+// Stored top zoom: 1 = 10 m half height (TOP_REF_HALF), independent of the fitted frustum.
+export const TOP_REF_HALF = 10;
+export const orthoZoom = (zoom, half) => (zoom * half) / TOP_REF_HALF;
+export const topZoom = (ortho, half) => (ortho * TOP_REF_HALF) / half;
 const obj = (o) => (o && typeof o === 'object' && !Array.isArray(o) ? o : {});
 
 const warned = new Set();
@@ -193,7 +230,7 @@ export function resolveViews({ manifest, haFloors, layoutViews, yamlViews, saved
       { id: 'all', label: 'All', rules: [], floors: null, source: 'floors' }];
   } else if (manifest.views && manifest.views.length) {
     base = manifest.views.filter((v, i, a) => a.findIndex((x) => x.id === v.id) === i)
-      .map((v) => ({ id: v.id, label: v.label || v.id, rules: modelViewRules(v), camera: v.camera, floors: null, source: 'model', section: v.section }));
+      .map((v) => ({ id: v.id, label: v.label || v.id, rules: modelViewRules(v), camera: v.camera, floors: null, source: 'model', section: v.section, camera_top: v.camera_top }));
   } else {
     const mig = migrateShowModes(savedLevels);
     base = generatedViews(mLevels).map((v) => ({
@@ -220,8 +257,10 @@ export function resolveViews({ manifest, haFloors, layoutViews, yamlViews, saved
     const fl = Array.isArray(y.floors) ? y.floors : Array.isArray(l.floors) ? l.floors : b.floors;
     const floors = Array.isArray(fl) ? [...fl] : null;
     const section = normSection(y.section !== undefined ? y.section : l.section);
+    const camera_top = normTopCamera(y.camera_top) || normTopCamera(l.camera_top) || normTopCamera(b.camera_top);
+    const zoom_to = zoomOk(y.zoom_to) || zoomOk(l.zoom_to);
     return { id: b.id, label: pick('label', b.label), rules, camera, floors, cut: pick('cut', null), source: b.source, hidden: !!pick('hidden', false),
-      section, modelSection: normSection(b.section) };
+      section, modelSection: normSection(b.section), camera_top, zoom_to };
   });
 }
 

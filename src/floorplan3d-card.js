@@ -14,7 +14,7 @@ import {
 import { threeAdapter } from './manifest.js';
 import {
   nodeIndex, resolveViews, resolveVisibility, primaryLevel, defaultFloors, levelOrders, isOverview, floorLevels, deviceState,
-  defaultViewId, viewCut, orderViews, sectionPlane, sectionCamera,
+  defaultViewId, viewCut, orderViews, sectionPlane, sectionCamera, zoomToFor,
 } from './views.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 
@@ -275,7 +275,10 @@ class Floorplan3dCard extends HTMLElement {
       this._body.style.setProperty('--fp-height', this._config.height);
     }
     if (this.isConnected && !this._view) this.connectedCallback();
-    else if (this._view) this._loadModel();
+    else if (this._view) {
+      this._applyZoomTo();
+      this._loadModel();
+    }
   }
 
   // model: from YAML (model: url) if set, else the one uploaded to the integration (layout.model)
@@ -701,6 +704,7 @@ class Floorplan3dCard extends HTMLElement {
     if (viewsChanged) this._floorOnly = null;
     const cur = this.currentView();
     this._viewState = cur ? this._stateFor(cur) : null;
+    this._applyZoomTo();
     this._pushStructure();
     if (!this._floorOnly) this._applyViewVisibility();
     this._empty.hidden = this._roomList.length > 0 || !!this._editing;
@@ -732,6 +736,7 @@ class Floorplan3dCard extends HTMLElement {
     this._floorOnly = null;
     const cur = this.currentView();
     this._viewState = cur ? this._stateFor(cur) : null;
+    this._applyZoomTo();
     if (this._labelKeyNow() !== this._labelKey) this._pushStructure();
     this._applyViewVisibility();
     this._applyMarkerStates();
@@ -806,6 +811,11 @@ class Floorplan3dCard extends HTMLElement {
 
   currentView() {
     return this._views.find((v) => v.id === this._viewId) || null;
+  }
+
+  // Zoom pivot of the active view (view zoom_to > card zoom_to > centre).
+  _applyZoomTo() {
+    if (this._view) this._view.setZoomTo(zoomToFor(this.currentView(), this._config));
   }
 
   viewIndex() {
@@ -884,7 +894,12 @@ class Floorplan3dCard extends HTMLElement {
     this._applyViewVisibility();
     if (this._labelKeyNow() !== this._labelKey) this._pushStructure();
     this._applyMarkerStates();
-    if (v.camera) this._view.setCamera(v.camera, { instant });
+    this._applyZoomTo();
+    if (this._mode === 'top') {
+      // top view: its own camera when saved, else keep the current one (no model: frame the floor)
+      if (v.camera_top) this._view.setTopCamera(v.camera_top, { instant });
+      else if (!this._view.model) this._view.fit({ instant });
+    } else if (v.camera) this._view.setCamera(v.camera, { instant });
     else if (!this._view.model || wasSection) this._view.fit({ instant });
     this._syncToolbar();
     if (this._editing) this._edit.onViewChanged();
@@ -896,14 +911,20 @@ class Floorplan3dCard extends HTMLElement {
     this._fitted = true;
     const v = this.currentView();
     if (v && v.camera && this._mode === '3d') this._view.setCamera(v.camera, { instant: true });
-    else this._view.fit({ instant: true });
+    else {
+      this._view.fit({ instant: true });
+      if (v && v.camera_top && this._mode === 'top') this._view.setTopCamera(v.camera_top, { instant: true });
+    }
   }
 
+  // Reset view: the view's saved camera (3D incl. its rotation centre; top: camera_top), else frame it.
   _resetCamera() {
     if (this._section) this.setSection(false, { camera: false });
     const v = this.currentView();
-    if (this._mode === 'top') this._view.fit();
-    else this._view.resetCamera((v && v.camera) || null);
+    if (this._mode === 'top') {
+      if (v && v.camera_top) this._view.setTopCamera(v.camera_top);
+      else this._view.fit();
+    } else this._view.resetCamera((v && v.camera) || null);
   }
 
   // ---------- side section ----------
@@ -1120,7 +1141,10 @@ class Floorplan3dCard extends HTMLElement {
     if (mode !== '3d' && this._section) this.setSection(false, { camera: false });
     this._mode = mode;
     this._view.setMode(mode);
+    const v = this.currentView();
+    if (mode === 'top' && v && v.camera_top && !this._floorOnly) this._view.setTopCamera(v.camera_top, { instant: true });
     this._syncToolbar();
+    if (this._editing && this._edit.tab === 'views') this._edit.render();
   }
 
   _syncToolbar() {

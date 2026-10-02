@@ -23,6 +23,13 @@ describe('card editor', () => {
     expect(mod.cleanConfig({ room_labels: 'none' })).toEqual({ room_labels: 'none' });
   });
 
+  it('offers zoom_to center / cursor (center is the default)', () => {
+    const field = mod.SCHEMA.flatMap((x) => x.schema || [x]).find((x) => x.name === 'zoom_to');
+    expect(field.selector.select.options.map((o) => o.value)).toEqual(['center', 'cursor']);
+    expect(mod.cleanConfig({ zoom_to: 'center' })).toEqual({});
+    expect(mod.cleanConfig({ zoom_to: 'cursor' })).toEqual({ zoom_to: 'cursor' });
+  });
+
   it('renders ha-form with defaults and emits cleaned config', () => {
     const el = document.createElement('floorplan3d-card-editor');
     document.body.append(el);

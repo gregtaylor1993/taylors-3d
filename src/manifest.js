@@ -1,6 +1,6 @@
 // Reads the fp tags of a house model (docs/model-builder-guide.md). Works on any node tree
 // through an adapter, so the card (three.js nodes) and tools/check-model.mjs (glTF JSON) share it.
-import { normSection } from './views.js';
+import { normSection, normTopCamera } from './views.js';
 
 export const KINDS = ['level', 'room', 'zone', 'object'];
 export const ROLES = ['storey', 'basement', 'exterior', 'roof'];
@@ -59,6 +59,9 @@ export function buildManifest(adapter) {
     const section = normSection(v.section);
     if (section) view.section = section;
     else if (v.section !== undefined) m.warnings.push(`view "${v.id}": invalid section (needs normal [x, y, z] and a constant)`);
+    const top = normTopCamera(v.camera_top);
+    if (top) view.camera_top = top;
+    else if (v.camera_top !== undefined) m.warnings.push(`view "${v.id}": invalid camera_top (needs center [x, y] and zoom > 0)`);
     m.views.push(view);
   }
 

@@ -742,6 +742,86 @@ try {
   await sleep(300);
   check('Reset section: nothing saved', await page.evaluate(`(() => { const c = ${card}; return !((c._layout.views || {})[c._viewId] || {}).section; })()`));
 
+  // Camera: rotation centre per view, zoom pivot, separate top-view camera
+  await page.evaluate(`${card}._setView('ground', { instant: true })`);
+  await sleep(300);
+  check('zoom_to default center: controls.zoomToCursor false', await page.evaluate(`${card}._view.controls.zoomToCursor === false`));
+  check('Views tab shows the rotation centre cross', await page.evaluate(`!!${card}._view.pivotMarker && ${card}._view.pivotMarker.visible`));
+  check('Set rotation centre button', await clickText('Set rotation centre'));
+  check('Set rotation centre arms a click', await page.evaluate(`${card}._edit.pivoting === true`));
+  await page.keyboard.press('Escape');
+  await sleep(150);
+  check('Esc cancels Set rotation centre', await page.evaluate(`!${card}._edit.pivoting`));
+  await clickText('Set rotation centre');
+  // the screen point of a ground-floor room centre and what the model has under it
+  const aim = await page.evaluate(`(() => { const c = ${card}, v = c._view, r = c._roomList.find((x) => x.floorId === 'ground' && !x.room.outdoor);
+    const p = r.room.polygon, cx = p.reduce((a, q) => a + q[0], 0) / p.length, cy = p.reduce((a, q) => a + q[1], 0) / p.length;
+    const w = v.controls.target.clone().set(cx, v.floorElevation('ground'), -cy).project(v.camera), b = v.renderer.domElement.getBoundingClientRect();
+    const x = b.left + (w.x + 1) / 2 * b.width, y = b.top + (1 - w.y) / 2 * b.height;
+    const hit = v.pivotPoint(x, y, v.floorElevation('ground'));
+    return { x, y, hit, cam: v.getCamera() }; })()`);
+  await page.evaluate(({ x, y }) => { const e = document.querySelector('floorplan3d-card')._edit; e.canvasDown({ button: 0, clientX: x, clientY: y }); e.canvasUp({ clientX: x, clientY: y }); }, aim);
+  await sleep(700);
+  const near = (a, b, tol = 0.05) => !!a && !!b && a.every((x, i) => Math.abs(x - b[i]) <= tol);
+  const piv = await page.evaluate(`(() => { const c = ${card}, v = c._view; return { target: v.controls.target.toArray(), pos: v.persp.position.toArray(),
+    saved: ((c._layout.views || {}).ground || {}).camera || null, cross: v.pivotMarker && v.pivotMarker.position.toArray(), pivoting: c._edit.pivoting }; })()`);
+  check('Set rotation centre: controls.target is the clicked point (±0.05)', !!aim.hit && near(piv.target, aim.hit), JSON.stringify({ hit: aim.hit, t: piv.target }));
+  const d0 = aim.cam.position.map((x, i) => x - aim.cam.target[i]), d1 = piv.pos.map((x, i) => x - piv.target[i]);
+  check('Set rotation centre: camera keeps its angle and distance', near(d0, d1, 0.05), JSON.stringify({ d0, d1 }));
+  check('Set rotation centre: saved as the view camera', !!piv.saved && near(piv.saved.target, aim.hit) && !piv.pivoting, JSON.stringify(piv.saved));
+  check('rotation centre cross follows the target', near(piv.cross, piv.target, 0.01), JSON.stringify(piv.cross));
+  await page.evaluate(`${card}._setView('first')`);
+  await sleep(700);
+  await page.evaluate(`${card}._view.setCamera({ position: [25, 25, 25], target: [0, 0, 0] }, { instant: true })`);
+  await page.evaluate(`${card}._setView('ground')`);
+  await sleep(700);
+  const pivBack = await page.evaluate(`(() => { const v = ${card}._view; return { target: v.controls.target.toArray(), pos: v.persp.position.toArray() }; })()`);
+  check('switching views and back restores the rotation centre', near(pivBack.target, piv.saved.target, 0.01) && near(pivBack.pos, piv.saved.position, 0.01), JSON.stringify(pivBack));
+  await page.evaluate(`${card}._view.setCamera({ position: [25, 25, 25], target: [0, 0, 0] }, { instant: true })`);
+  await page.evaluate(`${sr}.querySelector('button.reset').click()`);
+  await sleep(700);
+  check('Reset view honours the saved rotation centre', near(await page.evaluate(`${card}._view.controls.target.toArray()`), piv.saved.target, 0.01));
+  // per-view zoom pivot
+  await page.evaluate(`(() => { const el = ${sr}.querySelector('.panel [data-field=vw-zoom-to]'); el.value = 'cursor'; el.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await sleep(300);
+  check('per-view zoom_to cursor: saved and applied', await page.evaluate(`${card}._layout.views.ground.zoom_to === 'cursor' && ${card}._view.controls.zoomToCursor === true`));
+  await page.evaluate(`${card}._setView('first')`);
+  await sleep(200);
+  check('other view keeps the default centre pivot', await page.evaluate(`${card}._view.controls.zoomToCursor === false`));
+  await page.evaluate(`${card}._setView('ground')`);
+  await sleep(200);
+  await page.evaluate(`(() => { const el = ${sr}.querySelector('.panel [data-field=vw-zoom-to]'); el.value = ''; el.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await sleep(300);
+  check('zoom_to back to the card default', await page.evaluate(`!${card}._layout.views.ground.zoom_to && ${card}._view.controls.zoomToCursor === false`));
+  // top view: its own camera
+  await page.evaluate(`${card}._setMode('top')`);
+  await sleep(300);
+  check('top mode: zoom pivot kept on the rebuilt controls', await page.evaluate(`${card}._view.controls.zoomToCursor === false`));
+  await page.evaluate(`${card}._view.setTopCamera({ center: [3, 2], zoom: 1.6 }, { instant: true })`);
+  await clickText('Save current view as start');
+  await sleep(300);
+  const top = await page.evaluate(`(() => { const v = ${card}._layout.views.ground; return { top: v.camera_top, cam: v.camera }; })()`);
+  check('top mode: Save current view stores camera_top (3D camera untouched)', JSON.stringify(top.top) === '{"center":[3,2],"zoom":1.6}' && near(top.cam.target, piv.saved.target, 0.01), JSON.stringify(top));
+  await page.evaluate(`${card}._setView('first')`);
+  await sleep(600);
+  check('top mode: a view without camera_top keeps the top camera', JSON.stringify(await page.evaluate(`${card}._view.getTopCamera()`)) === '{"center":[3,2],"zoom":1.6}', JSON.stringify(await page.evaluate(`${card}._view.getTopCamera()`)));
+  await page.evaluate(`${card}._view.setTopCamera({ center: [-4, 7], zoom: 0.8 }, { instant: true })`);
+  await page.evaluate(`${card}._setView('ground')`);
+  await sleep(700);
+  check('top mode: camera_top restored after switching views', JSON.stringify(await page.evaluate(`${card}._view.getTopCamera()`)) === '{"center":[3,2],"zoom":1.6}', JSON.stringify(await page.evaluate(`${card}._view.getTopCamera()`)));
+  await page.evaluate(`${card}._view.setTopCamera({ center: [-4, 7], zoom: 0.8 }, { instant: true })`);
+  await page.evaluate(`${sr}.querySelector('button.reset').click()`);
+  await sleep(700);
+  check('top mode: Reset view returns to camera_top', JSON.stringify(await page.evaluate(`${card}._view.getTopCamera()`)) === '{"center":[3,2],"zoom":1.6}');
+  await page.screenshot({ path: path.join(root, 'screenshots', 'model-camera-top.png') });
+  await page.evaluate(`${card}._setMode('3d')`);
+  await sleep(300);
+  await clickText('Reset this view');
+  await sleep(300);
+  check('Reset this view drops camera and camera_top', await page.evaluate(`(() => { const v = ${card}._layout.views.ground || {}; return !v.camera && !v.camera_top; })()`));
+  await clickText('Rooms');
+  check('rotation centre cross hidden outside the Views tab', await page.evaluate(`!${card}._view.pivotMarker`));
+
   // fully untagged copy (no extras, no legacy names): one generated "All" view, an overview
   const untagged = path.join(root, 'screenshots', 'untagged-views.glb');
   fs.writeFileSync(untagged, rewriteGlbJson(fs.readFileSync(path.join(root, 'demo', 'house.glb')), (json) => {

@@ -9,7 +9,7 @@ import { centroid } from './placement.js';
 import { wallSegments } from './layout.js';
 import { levelVisible } from './bindings.js';
 import { buildManifest, threeAdapter } from './manifest.js';
-import { sectionLevels, unionBox } from './views.js';
+import { sectionLevels, unionBox, pivotCamera, rayPlaneY, orthoZoom, topZoom } from './views.js';
 
 // Plan rectangle of a world-space box (used for rooms tagged without an outline).
 export function fallbackOutline(box) {
@@ -100,6 +100,8 @@ export class FloorplanView {
     this.size = { w: 1, h: 1 };
     this.dirty = true;
     this._raf = null;
+    this._zoomTo = 'center'; // zoom pivot: 'center' (controls target) or 'cursor'
+    this.pivotMarker = null; // edit mode: small cross at the rotation centre
     this._makeControls();
   }
 
@@ -110,7 +112,7 @@ export class FloorplanView {
     c.enableDamping = true;
     c.dampingFactor = 0.05;
     c.screenSpacePanning = true;
-    c.zoomToCursor = true;
+    c.zoomToCursor = this._zoomTo === 'cursor';
     if (this.mode === 'top') {
       c.enableRotate = false;
       c.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
@@ -125,6 +127,55 @@ export class FloorplanView {
     if (this.controls) c.enabled = this.controls.enabled;
     if (prevTarget) c.target.copy(prevTarget);
     this.controls = c;
+  }
+
+  // Zoom pivot: 'cursor' zooms towards the pointer, 'center' (default) zooms and rotates around the target.
+  setZoomTo(mode) {
+    this._zoomTo = mode === 'cursor' ? 'cursor' : 'center';
+    this.controls.zoomToCursor = this._zoomTo === 'cursor';
+  }
+
+  // Rotation centre under a screen point: the model surface, else the horizontal plane at height y.
+  pivotPoint(clientX, clientY, y = 0) {
+    const pick = this.pickModel(clientX, clientY);
+    if (pick && pick.hit) return pick.hit.point;
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const { origin, direction } = this.raycaster.ray;
+    return rayPlaneY(origin.toArray(), direction.toArray(), y);
+  }
+
+  // Move the rotation centre to a world point; the camera keeps its angle and distance (tweened).
+  // Returns the new camera { position, target }.
+  setPivot(point) {
+    if (this.mode !== '3d' || !point) return null;
+    const cam = pivotCamera(this.getCamera(), point);
+    this.setCamera(cam);
+    return cam;
+  }
+
+  // Edit mode: show the rotation centre as a small cross (three short lines, primary colour).
+  setPivotMarker(on) {
+    if (!on) {
+      if (this.pivotMarker) {
+        this.scene.remove(this.pivotMarker);
+        this.pivotMarker.geometry.dispose();
+        this.pivotMarker.material.dispose();
+        this.pivotMarker = null;
+        this.dirty = true;
+      }
+      return;
+    }
+    if (this.pivotMarker) return;
+    const L = 0.25;
+    const g = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute([-L, 0, 0, L, 0, 0, 0, -L, 0, 0, L, 0, 0, 0, -L, 0, 0, L], 3));
+    const m = new THREE.LineBasicMaterial({ color: this.theme.primary || 0x03a9f4, depthTest: false, transparent: true });
+    this.pivotMarker = new THREE.LineSegments(g, m);
+    this.pivotMarker.renderOrder = 12;
+    this.pivotMarker.position.copy(this.controls.target);
+    this.scene.add(this.pivotMarker);
+    this.dirty = true;
   }
 
   setControlsEnabled(on) {
@@ -819,6 +870,35 @@ export class FloorplanView {
     return { position: r(this.persp.position), target: r(this.controls.target) };
   }
 
+  // Top view: ortho centre in plan metres + zoom (1 = 10 m half height), or null outside top mode.
+  getTopCamera() {
+    if (this.mode !== 'top') return null;
+    const t = this.controls.target, r = (x) => Math.round(x * 100) / 100 + 0;
+    return { center: [r(t.x), r(-t.z)], zoom: Math.round(topZoom(this.ortho.zoom, this._orthoHalf || 10) * 1000) / 1000 };
+  }
+
+  setTopCamera(c, { instant = false } = {}) {
+    if (this.mode !== 'top' || !c) return;
+    const target = new THREE.Vector3(c.center[0], this.controls.target.y, -c.center[1]);
+    const zoom = orthoZoom(c.zoom, this._orthoHalf || 10);
+    if (instant) {
+      this._tween = null;
+      this._placeOrtho(target, zoom);
+    } else {
+      this._tween = { top: true, t0: performance.now(), from: { target: this.controls.target.clone(), zoom: this.ortho.zoom }, to: { target, zoom } };
+    }
+    this.dirty = true;
+  }
+
+  _placeOrtho(target, zoom) {
+    this.ortho.zoom = zoom;
+    this.ortho.position.set(target.x, target.y + 60, target.z);
+    this.ortho.lookAt(target);
+    this.ortho.updateProjectionMatrix();
+    this.controls.target.copy(target);
+    this.controls.update();
+  }
+
   setCamera(cam, { instant = false } = {}) {
     if (this.mode !== '3d' || !cam) return;
     const pos = new THREE.Vector3(...cam.position), target = new THREE.Vector3(...cam.target);
@@ -1015,6 +1095,13 @@ export class FloorplanView {
     const tw = this._tween;
     const t = Math.min(1, (now - tw.t0) / 400);
     const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    if (tw.top) {
+      if (this.mode !== 'top') { this._tween = null; return; }
+      this._placeOrtho(new THREE.Vector3().lerpVectors(tw.from.target, tw.to.target, e), tw.from.zoom + (tw.to.zoom - tw.from.zoom) * e);
+      this.dirty = true;
+      if (t === 1) this._tween = null;
+      return;
+    }
     this.persp.position.lerpVectors(tw.from.pos, tw.to.pos, e);
     this.controls.target.lerpVectors(tw.from.target, tw.to.target, e);
     this.controls.update();
@@ -1056,6 +1143,10 @@ export class FloorplanView {
       this._raf = requestAnimationFrame(loop);
       if (this._tween) this._stepTween(performance.now());
       this.controls.update();
+      if (this.pivotMarker && !this.pivotMarker.position.equals(this.controls.target)) {
+        this.pivotMarker.position.copy(this.controls.target);
+        this.dirty = true;
+      }
       if (!this.dirty) return;
       this.dirty = false;
       this.labelRenderer.domElement.classList.toggle('compact', this.pixelsPerMetre() < COMPACT_PPM);
@@ -1093,6 +1184,7 @@ export class FloorplanView {
     this._clearGroup(this.glowGroup);
     this._clearGroup(this.overlayGroup);
     this._disposeStems();
+    this.setPivotMarker(false);
     this._disposeModel();
     this.setMapOverlay(null);
     this.setTrail(null);

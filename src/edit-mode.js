@@ -8,7 +8,7 @@ import { pointInPolygon, signedArea } from './placement.js';
 import { buildMarkers, areaName } from './registry.js';
 import { readSource, calibrationError } from './mower.js';
 import { ruleState, setRuleState, nextEyeState, viewTree, pickSelector, nextViewId, unmatchedSelectors, legacyShowRules,
-  SECTION_DIRS, sectionDir, sectionPos, sectionAt, sectionRange } from './views.js';
+  SECTION_DIRS, sectionDir, sectionPos, sectionAt, sectionRange, zoomToFor } from './views.js';
 import { levelsFromFloorMap } from './bindings.js';
 import { outlineLoops, pickLoop, rasterGrid, outlineFromGrid } from './outline.js';
 
@@ -131,6 +131,7 @@ export class EditMode {
     this.modelPick = null;
     this.vwPick = null;
     this.vwSel = null;
+    this.pivoting = false;
     this._closeMenu();
     this.view.highlightModelNode(null);
     this.view.setStems(false);
@@ -184,6 +185,10 @@ export class EditMode {
   }
 
   _click(e) {
+    if (this.pivoting) {
+      this._setPivot(e);
+      return;
+    }
     if (this.calibrating) {
       const p = this._planPoint(e, this.card._mowerFloor());
       if (!p) return;
@@ -413,7 +418,11 @@ export class EditMode {
       e.preventDefault();
       return;
     }
-    if (this.picking && !this.drawing) {
+    if (this.pivoting) {
+      if (e.key !== 'Escape') return;
+      this.cancelPivot();
+      e.preventDefault();
+    } else if (this.picking && !this.drawing) {
       if (e.key !== 'Escape') return;
       this.cancelPicking();
       e.preventDefault();
@@ -437,7 +446,8 @@ export class EditMode {
   }
 
   _syncStageClasses() {
-    this.card._stage.classList.toggle('drawing', !!this.drawing || !!this.picking || this.doorMode || !!this.calibrating);
+    this.card._stage.classList.toggle('drawing', !!this.drawing || !!this.picking || this.doorMode || !!this.calibrating || !!this.pivoting);
+    this.view.setPivotMarker(!!this.card._editing && this.tab === 'views');
     this.card._stage.classList.toggle('moving', this.overlayMove);
     const picking = !!this.card._editing && (this.tab === 'model' || this.tab === 'views') && !!this.view.model;
     this.card._stage.classList.toggle('picking', picking);
@@ -971,6 +981,7 @@ export class EditMode {
     const visible = views.filter((x) => !x.hidden).length;
     const opts = views.map((x) => `<option value="${esc(x.id)}" ${x.id === v.id ? 'selected' : ''}>${esc(x.label)}${x.hidden ? ' (hidden)' : ''}</option>`).join('');
     const hideLabel = v.source === 'added' ? 'Delete view' : v.hidden ? 'Unhide' : 'Hide';
+    const top = card._mode === 'top';
     let out = `<p class="hint">Each view is a button on the card. Choose what it shows: click a part of the model, or use the eyes below.</p>
       <label>View <select data-field="vw-view">${opts}</select></label>
       <label>Label <input data-field="vw-label" value="${esc(v.label)}"></label>
@@ -981,10 +992,16 @@ export class EditMode {
       <div class="sub">Linked HA floors</div>
       <div class="floor-links">${this.floors.map((f) => `<label class="check"><input type="checkbox" data-field="vw-floor" data-id="${esc(f.id)}" ${st.floors.includes(f.id) ? 'checked' : ''}> ${esc(f.name)}</label>`).join('')}</div>
       <p class="hint">Devices on linked floors show in this view. None checked: the view belongs to no floor (e.g. a garden view).</p>
-      <div class="sub">Camera</div>
-      <p class="hint">${v.camera ? 'Opens with a saved camera.' : 'Opens framing the house.'}</p>
+      <div class="sub">Camera${top ? ' (top view)' : ''}</div>
+      <p class="hint">${top ? (v.camera_top ? 'Top view opens with a saved centre and zoom.' : 'Top view keeps the current position.')
+    : v.camera ? 'Opens with a saved camera.' : 'Opens framing the house.'}</p>
       <div class="row"><button data-act="vw-save-cam" ${v.hidden ? 'disabled' : ''}>Save current view as start</button>
-        <button data-act="vw-reset-cam" ${lv.camera ? '' : 'disabled'}>Reset camera</button></div>`;
+        <button data-act="vw-reset-cam" ${(top ? lv.camera_top : lv.camera) ? '' : 'disabled'}>Reset camera</button></div>
+      <div class="row">${this.pivoting ? '<button data-act="vw-pivot-cancel">Cancel</button>'
+    : `<button data-act="vw-pivot" ${v.hidden || v.id !== card._viewId ? 'disabled' : ''} title="Click a point: the camera rotates and zooms around it">Set rotation centre</button>`}</div>
+      ${this.pivoting ? '<p class="hint">Click where the rotation centre should be (Esc cancels).</p>' : ''}
+      <label>Zoom towards <select data-field="vw-zoom-to">${[['', `Card default (${zoomToFor(null, card._config)})`], ['center', 'Centre'], ['cursor', 'Cursor']]
+    .map(([val, label]) => `<option value="${val}" ${(lv.zoom_to || '') === val ? 'selected' : ''}>${label}</option>`).join('')}</select></label>`;
     out += this._sectionHtml(v, lv);
     if (this.view.model && !this.view.isTagged()) {
       out += `<label class="check"><input type="checkbox" data-field="vw-cut" ${(v.cut ?? v.id !== 'all') ? 'checked' : ''}> Cut at wall height</label>`;
@@ -1030,7 +1047,7 @@ export class EditMode {
     } else if (!this.view.model) {
       out += '<p class="hint">Upload a model (Model tab) to choose which parts each view shows.</p>';
     }
-    out += `<div class="row"><button data-act="vw-reset" class="danger" ${rules.length || lv.camera ? '' : 'disabled'}>Reset this view</button></div>`;
+    out += `<div class="row"><button data-act="vw-reset" class="danger" ${rules.length || lv.camera || lv.camera_top ? '' : 'disabled'}>Reset this view</button></div>`;
     return out;
   }
 
@@ -1069,6 +1086,38 @@ export class EditMode {
     if (!this._posCache || this._posCache.idx !== idx) this._posCache = { idx, map: new Map(idx.nodes.map((n, i) => [n.node, i])) };
     const p = this._posCache.map.get(node);
     return p === undefined ? -1 : p;
+  }
+
+  cancelPivot() {
+    this.pivoting = false;
+    this._syncStageClasses();
+    this.render();
+  }
+
+  // "Set rotation centre": the clicked model point (else the view's floor plane) becomes the
+  // controls target; saved with the camera (3D) or as the top-view centre (top).
+  _setPivot(e) {
+    const card = this.card, v = card.currentView();
+    const point = this.view.pivotPoint(e.clientX, e.clientY, this.view.floorElevation(card._floor));
+    if (!point || !v) {
+      this.message = { text: 'Click on the model or the floor', warn: true };
+      this.render();
+      return;
+    }
+    this.pivoting = false;
+    this._syncStageClasses();
+    if (card._mode === 'top') {
+      const cur = this.view.getTopCamera();
+      const camera_top = { center: [Math.round(point[0] * 100) / 100 + 0, Math.round(-point[2] * 100) / 100 + 0], zoom: cur.zoom };
+      this.view.setTopCamera(camera_top);
+      this.message = { text: `Top view of "${v.label}" now centres here.` };
+      card.saveViewPatch(v.id, { camera_top });
+    } else {
+      const camera = this.view.setPivot(point);
+      this.message = { text: `Rotation centre of "${v.label}" set.` };
+      card.saveViewPatch(v.id, { camera });
+    }
+    this.render();
   }
 
   // Click on the model (Views tab): highlight the part and offer hide/show.
@@ -1216,9 +1265,22 @@ export class EditMode {
         return true;
       }
       case 'vw-save-cam':
-        this.message = { text: `Saved the current camera as the start of "${v.label}".` };
-        card.saveViewPatch(v.id, { camera: this.view.getCamera() });
+        if (card._mode === 'top') {
+          this.message = { text: `Saved the current top view as the start of "${v.label}".` };
+          card.saveViewPatch(v.id, { camera_top: this.view.getTopCamera() });
+        } else {
+          this.message = { text: `Saved the current camera as the start of "${v.label}".` };
+          card.saveViewPatch(v.id, { camera: this.view.getCamera() });
+        }
         this.render();
+        return true;
+      case 'vw-pivot':
+        this.pivoting = true;
+        this._syncStageClasses();
+        this.render();
+        return true;
+      case 'vw-pivot-cancel':
+        this.cancelPivot();
         return true;
       case 'vw-expand': {
         const sel = btn.dataset.sel;
@@ -1232,7 +1294,8 @@ export class EditMode {
         return true;
       case 'vw-reset-cam':
       case 'vw-reset':
-        card.saveViewPatch(v.id, act === 'vw-reset' ? { rules: [], camera: null } : { camera: null });
+        card.saveViewPatch(v.id, act === 'vw-reset' ? { rules: [], camera: null, camera_top: null }
+          : card._mode === 'top' ? { camera_top: null } : { camera: null });
         if (v.id === card._viewId) after(() => card._resetCamera());
         return true;
       case 'vw-eye': {
@@ -1277,6 +1340,7 @@ export class EditMode {
       card.saveViewPatch(v.id, { section }); // drops the preview: the saved plane takes over
     } else if (f === 'vw-label') card.saveViewPatch(v.id, { label: el.value.trim() || undefined });
     else if (f === 'vw-cut') card.saveViewPatch(v.id, { cut: el.checked });
+    else if (f === 'vw-zoom-to') card.saveViewPatch(v.id, { zoom_to: el.value || undefined });
     else if (f === 'vw-floor') {
       const cur = card._stateFor(v).floors;
       const floors = this.floors.map((x) => x.id).filter((id) => (id === el.dataset.id ? el.checked : cur.includes(id)));
@@ -1503,6 +1567,7 @@ export class EditMode {
       case 'tab':
         if (id !== this.tab) {
           this.picking = null;
+          this.pivoting = false;
           this.modelPick = null;
           this.vwPick = null;
           this._closeMenu();
