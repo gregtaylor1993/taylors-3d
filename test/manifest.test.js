@@ -127,3 +127,29 @@ describe('gltfAdapter', () => {
     expect(m.ownerOf(1).id).toBe('kitchen');
   });
 });
+
+describe('manifest views', () => {
+  it('reads valid root views and drops invalid ones', () => {
+    const root = { name: 'Scene', extras: { fp: { views: [
+      { id: 'ground', label: 'Ground floor', show: ['level:ground'], hide: ['role:roof'], camera: { position: [1, 2, 3], target: [0, 0, 0] } },
+      { id: 'Bad Id', label: 'x' },
+      { id: 'all', show: 'oops' },
+    ] } }, children: [{ name: 'ground', extras: fp({ kind: 'level', id: 'ground' }) }] };
+    const m = buildManifest(tree([root]));
+    expect(m.views).toEqual([
+      { id: 'ground', label: 'Ground floor', show: ['level:ground'], hide: ['role:roof'], camera: { position: [1, 2, 3], target: [0, 0, 0] } },
+      { id: 'all', label: 'all', show: [], hide: [], camera: null },
+    ]);
+    expect(m.warnings.join('\n')).toMatch(/view "Bad Id": invalid id/);
+  });
+  it('has no views by default', () => {
+    expect(buildManifest(tree([{ name: 'floor:ground' }])).views).toEqual([]);
+  });
+});
+
+describe('layer-only tags', () => {
+  it('a node with fp but no kind is not an error', () => {
+    const m = buildManifest(tree([{ name: 'Sofa', extras: fp({ layer: 'furniture' }) }, { name: 'floor:ground' }]));
+    expect(m.errors).toEqual([]);
+  });
+});

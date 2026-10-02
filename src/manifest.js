@@ -28,7 +28,7 @@ export function readTag(name, extras, { topLevel = false } = {}) {
 }
 
 export function buildManifest(adapter) {
-  const m = { levels: [], rooms: [], objects: [], errors: [], warnings: [], byNode: new Map() };
+  const m = { levels: [], rooms: [], objects: [], views: [], errors: [], warnings: [], byNode: new Map() };
   const seen = { level: new Set(), room: new Set(), object: new Set() };
   m.ownerOf = (node) => {
     for (let n = node; n !== null && n !== undefined; n = adapter.parent(n)) {
@@ -37,9 +37,24 @@ export function buildManifest(adapter) {
     return null;
   };
 
+  // an fp object without a kind (layer-only, views-only) is not a tag
+  const tagOf = (node, topLevel) => {
+    const t = readTag(adapter.name(node), adapter.extras(node), { topLevel });
+    return t && t.kind === undefined ? null : t;
+  };
   let tops = adapter.roots();
-  if (tops.length === 1 && !readTag(adapter.name(tops[0]), adapter.extras(tops[0]), { topLevel: true })) {
+  if (tops.length === 1 && !tagOf(tops[0], true)) {
     tops = adapter.children(tops[0]); // a single untagged wrapper (e.g. "Scene")
+  }
+
+  const viewHolder = adapter.roots().find((r) => { const e = adapter.extras(r); return e && e.fp && Array.isArray(e.fp.views); });
+  const isNum3 = (a) => Array.isArray(a) && a.length === 3 && a.every(Number.isFinite);
+  const strs = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string') : []);
+  for (const v of viewHolder ? adapter.extras(viewHolder).fp.views : []) {
+    if (!v || typeof v.id !== 'string' || !ID_RE.test(v.id)) { m.warnings.push(`view "${v && v.id}": invalid id`); continue; }
+    if (m.views.some((x) => x.id === v.id)) { m.warnings.push(`view "${v.id}": duplicate id`); continue; }
+    const cam = v.camera && isNum3(v.camera.position) && isNum3(v.camera.target) ? { position: v.camera.position, target: v.camera.target } : null;
+    m.views.push({ id: v.id, label: typeof v.label === 'string' ? v.label : v.id, show: strs(v.show), hide: strs(v.hide), camera: cam });
   }
 
   const add = (node, tag, ctx, path) => {
@@ -89,7 +104,7 @@ export function buildManifest(adapter) {
   const walk = (node, ctx, parentPath, topLevel) => {
     const name = adapter.name(node);
     const path = parentPath ? `${parentPath}/${name}` : name;
-    const tag = readTag(name, adapter.extras(node), { topLevel });
+    const tag = tagOf(node, topLevel);
     let next = ctx;
     if (tag) {
       const e = add(node, tag, ctx, path);
