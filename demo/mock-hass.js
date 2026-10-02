@@ -135,6 +135,7 @@ export function createMockHass({ onChange }) {
   // mower drives a circle in the garden (~4 m radius)
   let t = 0;
   setInterval(() => {
+    if (window.__demoMowerPaused) return; // headless checks hold it still
     t += 0.06;
     const lat = 45.0 + (Math.sin(t) * 4) / 111320;
     const lon = 10.0 + (Math.cos(t) * 4) / (111320 * Math.cos((45.0 * Math.PI) / 180));

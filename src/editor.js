@@ -231,5 +231,35 @@ export function fitImport(layout, haFloors, haAreaIds) {
   const pins = Object.fromEntries(Object.entries(layout.pins || {}).map(([k, p]) => [k, p.floor_id && floorMap[p.floor_id] ? { ...p, floor_id: mapId(p.floor_id) } : p]));
   const areas = new Set(haAreaIds);
   const unknownAreas = [...new Set(layout.rooms.map((r) => r.area_id).filter((a) => a && !areas.has(a)))];
-  return { layout: { ...layout, floors, rooms, pins }, floorMap, unknownAreas };
+  const out = { ...layout, floors, rooms, pins };
+  // views link HA floors too
+  if (layout.views && typeof layout.views === 'object') {
+    out.views = Object.fromEntries(Object.entries(layout.views).map(([id, v]) => [id,
+      v && Array.isArray(v.floors) && v.floors.some((f) => floorMap[f]) ? { ...v, floors: v.floors.map(mapId) } : v]));
+  }
+  return { layout: out, floorMap, unknownAreas };
+}
+
+// Parts a plan export may leave out are kept from the current layout: the uploaded model, the
+// mower setup, the view settings (rules, cameras, sections, order). raw: the parsed file as is.
+export function mergeImport(imported, raw, current) {
+  const l = { ...imported };
+  const cur = current || {};
+  if (!('model' in raw)) l.model = cur.model || null;
+  if (!('mower' in raw) || raw.mower === null) l.mower = cur.mower || null;
+  if (!('views' in raw)) l.views = cur.views;
+  if (!('view_order' in raw)) l.view_order = cur.view_order;
+  for (const k of ['views', 'view_order']) if (l[k] === undefined) delete l[k];
+  return l;
+}
+
+// v0.2.x pins (no on_model) on floors bound to a model level start following the model, once:
+// on the first alignment change (layout.model.pins_migrated). boundFloors: HA floor ids.
+export function migrateLegacyPins(layout, boundFloors) {
+  const m = layout.model || {};
+  if (m.pins_migrated) return layout;
+  const bound = new Set(boundFloors || []);
+  const pins = Object.fromEntries(Object.entries(layout.pins || {}).map(([id, p]) => [id,
+    p && !p.on_model && bound.has(p.floor_id) ? { ...p, on_model: true } : p]));
+  return { ...layout, pins, model: { ...m, pins_migrated: true } };
 }

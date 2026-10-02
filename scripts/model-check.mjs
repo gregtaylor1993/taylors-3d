@@ -5,7 +5,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { openDemo, newPage, root } from './lib/demo-browser.mjs';
-import { inverseTransformPoint } from '../src/bindings.js';
+import { inverseTransformPoint, transformPoint } from '../src/bindings.js';
+import { alignModelPoint } from '../src/views.js';
 
 const failures = [];
 const check = (name, ok, detail = '') => {
@@ -51,7 +52,7 @@ try {
       const p = c._positions.get(m.id), o = v.markerObjects.get(m.id);
       if (!p || !o) continue;
       const room = p.auto === false || p.live ? null : (c._modelRooms.find((r) => r.area_id === m.areaId) || {}).modelId;
-      const k = room ? lvl.get(room) : 'roomless:' + p.floorId;
+      const k = room ? lvl.get(room) : p.live ? 'mower' : 'pin:' + p.floorId;
       const e = out[k] = out[k] || { shown: 0, hidden: 0, faded: 0 };
       if (o.obj.visible) e.shown++; else e.hidden++;
       if (o.obj.element.classList.contains('fp-faded')) e.faded++;
@@ -131,7 +132,7 @@ try {
     check('a marker behind the south wall is fp-occluded from a camera outside', await cls(occ.id), JSON.stringify(occ));
     const style = (id) => page.evaluate(`(() => { const s = getComputedStyle(${card}._view.markerObjects.get(${JSON.stringify(id)}).obj.element); return [s.opacity, s.pointerEvents]; })()`);
     check('occluded marker: faint, not clickable in view mode', JSON.stringify(await style(occ.id)) === '["0.25","none"]', JSON.stringify(await style(occ.id)));
-    await page.evaluate(`${card}._toggleEdit()`); // edit mode re-frames: put the camera back outside the wall
+    await page.evaluate(`${card}._toggleEdit()`);
     await sleep(500);
     await page.evaluate(`${card}._view.setCamera({ position: [${occ.pos[0]}, ${occ.pos[1] + 2}, ${occ.pos[2] + 12}], target: ${JSON.stringify(occ.pos)} }, { instant: true })`);
     await sleep(600);
@@ -153,7 +154,9 @@ try {
   d = await devs();
   check('First floor view: ground-floor devices hidden (not faded), first-floor and outdoor devices shown',
     d.level0.shown === 0 && d.level0.hidden > 0 && d.level1.shown > 0 && d.level1.hidden === 0 && d.exterior.hidden === 0 && noneFaded(d), JSON.stringify(d));
-  check('First floor view: a roomless ground-floor pin is hidden', d['roomless:ground'] && d['roomless:ground'].shown === 0, JSON.stringify(d['roomless:ground']));
+  // pins take the room / zone under them (the floor lamp stands in the living room), the mower is outdoors
+  check('First floor view: a ground-floor pin in a ground-floor room is hidden', d['pin:ground'] && d['pin:ground'].shown === 0, JSON.stringify(d['pin:ground']));
+  check('First floor view: the live mower is shown (exterior visible)', !d.mower || d.mower.shown === 1, JSON.stringify(d.mower));
   await sh('model-first.png');
   const shownMarkers = () => page.evaluate(`[...${card}._view.markerObjects.values()].filter((m) => m.obj.visible).length`);
   const allMarkers = await page.evaluate(`${card}._view.markerObjects.size`);
@@ -550,7 +553,10 @@ try {
   await sleep(200);
   check('no "Since the last setup" notice after upload', !(await page.evaluate(`${panel('')}.textContent`)).includes('Since the last setup'));
 
-  // importing a plan export keeps the uploaded model and maps foreign floor ids onto HA floors
+  // importing a plan export keeps the uploaded model and the view settings, and maps foreign floor ids onto HA floors
+  await page.evaluate(`${card}.saveViewPatch(${card}._viewId, { label: 'Kept view' })`);
+  await sleep(200);
+  const keptId = await page.evaluate(`${card}._viewId`);
   await clickText('Data');
   const plan = path.join(root, 'screenshots', 'plan-export.json');
   fs.writeFileSync(plan, JSON.stringify({ version: 1, floors: [{ id: 'level0', elevation: 0, height: 2.8 }],
@@ -560,6 +566,7 @@ try {
   await sleep(600);
   fs.unlinkSync(plan);
   check('import keeps the uploaded model', await page.evaluate(`!!(${card}._layout.model && ${card}._view.model)`));
+  check('import of a file without views keeps the view settings', (await page.evaluate(`(${card}._layout.views || {})[${JSON.stringify(keptId)}]?.label`)) === 'Kept view');
   check('import maps floor ids onto HA floors', (await page.evaluate(`${card}._layout.rooms[0].floor_id`)) === 'ground'
     && (await page.evaluate(`${panel('.msg')}.textContent`)).includes('level0 → Ground floor'));
   await page.evaluate(`${card}.shadowRoot.querySelector('button.daynight').click()`); // night, then remove the model
@@ -619,7 +626,7 @@ try {
       const p = c._positions.get(m.id), o = v.markerObjects.get(m.id);
       if (!p || !o) continue;
       const room = p.auto === false || p.live ? null : (c._modelRooms.find((r) => r.area_id === m.areaId) || {}).modelId;
-      const k = room ? lvl.get(room) : 'roomless:' + p.floorId;
+      const k = room ? lvl.get(room) : p.live ? 'mower' : (m.id === 'device:tv' ? 'outside:' : 'pin:') + p.floorId;
       const e = out[k] = out[k] || { shown: 0, hidden: 0 };
       if (o.obj.visible) e.shown++; else e.hidden++;
     }
@@ -706,19 +713,25 @@ try {
   await sleep(200);
   check('Reset camera clears it', !(await page.evaluate(`(${card}._layout.views.ground || {}).camera`)));
 
-  // linked floors: unchecking the Ground floor link hides its roomless devices (pins, mower), not the room devices
+  // linked floors: unchecking the Ground floor link hides its roomless devices outside every room / zone
+  // (a pin far off the plan), not the room devices, pins inside a room or the mower (outdoors)
+  await page.evaluate(`(() => { const c = ${card}; c._edit.commit({ ...c._layout, pins: { ...c._layout.pins, 'device:tv': { x: -30, y: -30, z: 1, floor_id: 'ground' } } }); })()`);
+  await sleep(300);
   let d = await devs();
-  const roomless0 = d['roomless:ground'] ? d['roomless:ground'].shown : 0;
+  const roomless0 = d['outside:ground'] ? d['outside:ground'].shown : 0;
   const setLink = (id, on) => page.evaluate(`(() => { const el = ${sr}.querySelector('.panel [data-field=vw-floor][data-id=${id}]'); el.checked = ${on}; el.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   await setLink('ground', false);
   await sleep(300);
   d = await devs();
-  check('unlinking the floor hides its devices without model rooms', roomless0 > 0 && d['roomless:ground'].shown === 0 && d.level0.shown > 0
+  check('unlinking the floor hides its devices outside rooms; pins in rooms and the mower stay', roomless0 > 0 && d['outside:ground'].shown === 0 && d.level0.shown > 0
+    && d['pin:ground'].shown > 0 && (!d.mower || d.mower.shown === 1)
     && JSON.stringify((await page.evaluate(`${card}._layout.views.ground.floors`))) === '[]', JSON.stringify(d));
   await setLink('ground', true);
   await sleep(300);
   d = await devs();
-  check('linking it again shows them', d['roomless:ground'].shown === roomless0, JSON.stringify(d));
+  check('linking it again shows them', d['outside:ground'].shown === roomless0, JSON.stringify(d));
+  await page.evaluate(`(() => { const c = ${card}; const pins = { ...c._layout.pins }; delete pins['device:tv']; c._edit.commit({ ...c._layout, pins }); })()`);
+  await sleep(200);
 
   // pick on a tagged room floor links the model room
   await page.evaluate(`(() => { const c = ${card}; c._edit.commit({ ...c._layout, rooms: c._layout.rooms.filter((r) => r.area_id !== 'kitchen') }); })()`);
@@ -790,6 +803,21 @@ try {
   const made = await page.evaluate(`${card}._layout.rooms.find((r) => r.area_id === 'kitchen')`);
   check('"Use this outline" creates the room', !!made && made.floor_id === 'ground' && made.polygon.length >= 6, JSON.stringify(made && { floor: made.floor_id, n: made.polygon.length }));
   await page.evaluate(`(() => { const c = ${card}; c._edit.selectRoom(null); c._edit.commit({ ...c._layout, rooms: c._layout.rooms.filter((r) => r.area_id !== 'kitchen') }); })()`);
+  // a traced outline is not reused after the model moved (cache keyed by the alignment)
+  const traceAt = (x) => page.evaluate(`(() => { const c = ${card}, v = c._view, V = v.persp.position.constructor;
+    v.modelGroup.updateMatrixWorld(true);
+    v.raycaster.set(new V(${x}, 1.2, -1), new V(0, -1, 0));
+    const hit = v.raycaster.intersectObject(v.model.root, true).find((h) => h.object.isMesh && h.point.y < 0.15);
+    if (!hit) return null;
+    const r = c._edit._traceOutline(hit.object, hit.point.toArray());
+    return Math.min(...r.poly.map((p) => p[0])); })()`);
+  const minX0 = await traceAt(8);
+  await page.evaluate(`${card}._edit.setModelProps({ position: [0.5, 0, 0] }, false)`);
+  await sleep(400);
+  const minX1 = await traceAt(8.5);
+  check('outline traced again after realigning the model (moved 0.5 m)', minX0 !== null && minX1 !== null && Math.abs(minX1 - minX0 - 0.5) < 0.06, `${minX0} -> ${minX1}`);
+  await page.evaluate(`${card}._edit.setModelProps({ position: [0, 0, 0] }, false)`);
+  await sleep(300);
   await sleep(300);
   area = await pickAndTrace();
   await clickText('Draw instead');
@@ -1032,6 +1060,131 @@ try {
   allErrors.push(...errors.filter((e) => !e.includes('GPU stall')));
 } finally {
   await s.close();
+}
+
+// 5. final review fixes: no occlusion / shadow work for irrelevant state updates (I1), mower and
+// pins in an exterior-only view (I2), model view cameras follow the model alignment (I3)
+{
+  const cams = path.join(root, 'screenshots', 'house-cams.glb');
+  const modelCam = { position: [14, 12, 10], target: [6, 0, -4] };
+  const modelTop = { center: [6, 4], zoom: 1.2 };
+  fs.writeFileSync(cams, rewriteGlbJson(fs.readFileSync(path.join(root, 'demo', 'house.glb')), (json) => {
+    for (const n of json.nodes || []) {
+      const fp = n.extras && n.extras.fp;
+      if (fp && fp.views) fp.views = fp.views.map((v) => (v.id === 'ground' ? { ...v, camera: modelCam, camera_top: modelTop } : v));
+    }
+    return json;
+  }));
+  s = await openDemo({ model: '/screenshots/house-cams.glb', view: '3d' }, { width: 1400, height: 560 });
+  try {
+    const { page } = s;
+    await page.waitForFunction(`!!${card}._view.model`, { timeout: 10000 });
+    await sleep(1500);
+    // I1: 10 hass updates (a sensor value, a light's brightness) with the camera still and the mower parked
+    await page.evaluate('window.__demoMowerPaused = true');
+    await sleep(800);
+    await page.evaluate(`(() => { const v = ${card}._view; v.stats = { occPasses: 0, occPartial: 0, shadow: 0 }; })()`);
+    for (let i = 0; i < 10; i++) {
+      await page.evaluate(`(() => { const c = ${card}, st = c.hass.states;
+        const t = st['sensor.kitchen_temperature'], l = st['light.kitchen'];
+        c.hass = { ...c.hass, states: { ...st, 'sensor.kitchen_temperature': { ...t, state: String(20 + ${i}) },
+          'light.kitchen': { ...l, attributes: { ...l.attributes, brightness: ${100 + i * 10} } } } }; })()`);
+      await sleep(60);
+    }
+    await sleep(800);
+    let stats = await page.evaluate(`${card}._view.stats`);
+    check('10 state updates, nothing relevant changed: 0 occlusion passes, 0 shadow map renders', stats.occPasses === 0 && stats.occPartial === 0 && stats.shadow === 0, JSON.stringify(stats));
+    check('the state updates still reached the markers', await page.evaluate(`[...${card}.shadowRoot.querySelectorAll('.fp-val')].some((e) => e.textContent.startsWith('29'))`));
+    // a moving mower: only its own marker is re-tested
+    const mpos = () => page.evaluate(`(() => { const c = ${card}; const o = c._view.markerObjects.get(c._mowerMarkerId); return o ? o.obj.position.toArray().map((x) => x.toFixed(2)).join() : null; })()`);
+    const p0 = await mpos();
+    await page.evaluate(`(() => { const v = ${card}._view; v.stats = { occPasses: 0, occPartial: 0, shadow: 0 }; })()`);
+    await page.evaluate('window.__demoMowerPaused = false');
+    await sleep(2600);
+    await page.evaluate('window.__demoMowerPaused = true');
+    stats = await page.evaluate(`${card}._view.stats`);
+    const p1 = await mpos();
+    check('moving mower: marker moves, partial occlusion only, no full pass, no shadow render', p0 !== p1 && stats.occPasses === 0 && stats.shadow === 0 && stats.occPartial > 0, `${p0} -> ${p1} ${JSON.stringify(stats)}`);
+    // the shadow map still updates when something relevant changes (a view switch)
+    await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=first]').click()`);
+    await sleep(500);
+    stats = await page.evaluate(`${card}._view.stats`);
+    check('a view switch re-renders the shadow map and runs a full occlusion pass', stats.shadow > 0 && stats.occPasses > 0, JSON.stringify(stats));
+
+    // I2: an added Garden view (hide all, show role:exterior) shows the mower and a pin in the garden zone
+    await page.evaluate(`(() => { const c = ${card}, l = c._layout;
+      c._commit({ ...l, views: { ...(l.views || {}), garden: { added: true, label: 'Garden', rules: [{ hide: 'all' }, { show: 'role:exterior' }] } },
+        pins: { ...l.pins, 'device:kettle_plug': { x: 14, y: -5, z: 1, floor_id: 'ground' }, 'device:tv': { x: 9, y: 2, z: 1, floor_id: 'ground' } } }); })()`);
+    await sleep(400);
+    await page.evaluate(`${card}._setView('garden')`);
+    await sleep(400);
+    const vis = (id) => page.evaluate(`(() => { const c = ${card}; const o = c._view.markerObjects.get(${id}); return o ? o.obj.visible : null; })()`);
+    const gv = { mower: await vis(`c._mowerMarkerId`), gardenPin: await vis(`'device:kettle_plug'`), kitchenPin: await vis(`'device:tv'`),
+      chip: await page.evaluate(`!!${card}.shadowRoot.querySelector('.chip.on[data-view=garden]')`) };
+    check('Garden view: mower and the pin in the garden zone shown, a pin in the (hidden) kitchen not', gv.mower === true && gv.gardenPin === true && gv.kitchenPin === false && gv.chip, JSON.stringify(gv));
+
+    // I3: model view cameras (3D and top centre) follow the model alignment; identity first
+    const near = (a, b, tol = 0.02) => a.every((x, i) => Math.abs(x - b[i]) < tol);
+    const camNow = () => page.evaluate(`${card}._view.getCamera()`);
+    await page.evaluate(`${card}._setView('ground', { instant: true })`);
+    await sleep(300);
+    let cam = await camNow();
+    check('model view camera at identity alignment', near(cam.position, modelCam.position) && near(cam.target, modelCam.target), JSON.stringify(cam));
+    const align = { position: [2, 1, 0.5], rotation: 90, scale: 1.5 };
+    await page.evaluate(`${card}.setConfig({ ...${card}._config, model_position: ${JSON.stringify(align.position)}, model_rotation: ${align.rotation}, model_scale: ${align.scale} })`);
+    await sleep(500);
+    await page.evaluate(`${card}._setView('exterior', { instant: true })`);
+    await page.evaluate(`${card}._setView('ground', { instant: true })`);
+    await sleep(300);
+    cam = await camNow();
+    const want = { position: alignModelPoint(modelCam.position, align), target: alignModelPoint(modelCam.target, align) };
+    check('model view camera follows the model alignment', near(cam.position, want.position) && near(cam.target, want.target), JSON.stringify({ cam, want }));
+    await page.evaluate(`${card}._setMode('top')`);
+    await sleep(300);
+    await page.evaluate(`${card}._setView('ground', { instant: true })`);
+    await sleep(300);
+    const top = await page.evaluate(`${card}._view.getTopCamera()`);
+    const wantC = transformPoint(modelTop.center, align);
+    check('model camera_top centre (and zoom / scale) follows the alignment', near(top.center, wantC) && Math.abs(top.zoom - modelTop.zoom / align.scale) < 0.01, JSON.stringify({ top, wantC }));
+    await page.evaluate(`${card}._setMode('3d')`);
+    await sleep(300);
+
+    // edit mode on / off keeps the camera exactly (no re-framing)
+    await page.evaluate(`${card}._view.setCamera({ position: [30, 20, 25], target: [4, 0, -3] }, { instant: true })`);
+    await sleep(200);
+    const before = await camNow();
+    await page.evaluate(`${card}._toggleEdit()`);
+    await sleep(400);
+    const inEdit = await camNow();
+    // one floor on its own in edit mode (no view linked to just it), then Done: the view's chip is lit again
+    await page.evaluate(`${card}.saveViewPatch('ground', { floors: [] })`);
+    await sleep(200);
+    await page.evaluate(`${card}._setFloor('ground')`);
+    const floorOnly = await page.evaluate(`${card}._floorOnly`);
+    await page.evaluate(`${card}._view.setCamera(${JSON.stringify(before)}, { instant: true })`);
+    await page.evaluate(`${card}._toggleEdit()`);
+    await sleep(400);
+    const after = await camNow();
+    check('edit mode on / off keeps the camera', near(before.position, inEdit.position) && near(before.position, after.position) && near(before.target, after.target), JSON.stringify([before, inEdit, after]));
+    check('Done after a single-floor pick: back to the view, its chip lit', floorOnly === 'ground' && (await page.evaluate(`!${card}._floorOnly && !!${card}.shadowRoot.querySelector('.chip.on')`)));
+    // detached while editing: window listeners (keys, pick menu) removed
+    const detached = await page.evaluate(`(() => { const c = ${card}, removed = [];
+      const orig = window.removeEventListener;
+      window.removeEventListener = function (t, fn, o) { removed.push([t, fn]); return orig.call(this, t, fn, o); };
+      c._toggleEdit();
+      const parent = c.parentNode, next = c.nextSibling;
+      c.remove();
+      window.removeEventListener = orig;
+      const ok = removed.some(([t, fn]) => t === 'keydown' && fn === c._edit._onKey);
+      parent.insertBefore(c, next);
+      c._toggleEdit();
+      return ok; })()`);
+    check('disconnect while editing removes the window keydown listener', detached);
+    allErrors.push(...s.errors);
+  } finally {
+    await s.close();
+    fs.unlinkSync(cams);
+  }
 }
 
 // 4. optional: a real model, screenshots only (REAL_MODEL=/path/to/house.glb)

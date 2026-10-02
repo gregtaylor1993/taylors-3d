@@ -254,12 +254,15 @@ export function resolveViews({ manifest, haFloors, layoutViews, yamlViews, saved
     const rules = [...b.rules, ...(Array.isArray(l.rules) ? l.rules : []), ...(Array.isArray(y.rules) ? y.rules : [])].map((r) => ({ ...r }));
     const cam = isCam(y.camera) ? y.camera : isCam(l.camera) ? l.camera : b.camera;
     const camera = isCam(cam) ? { position: [...cam.position], target: [...cam.target] } : null;
+    // model cameras are in model world (aligned when used); layout / YAML cameras are card world
+    const cameraFrame = camera && cam === b.camera && b.source === 'model' ? 'model' : 'card';
     const fl = Array.isArray(y.floors) ? y.floors : Array.isArray(l.floors) ? l.floors : b.floors;
     const floors = Array.isArray(fl) ? [...fl] : null;
     const section = normSection(y.section !== undefined ? y.section : l.section);
     const camera_top = normTopCamera(y.camera_top) || normTopCamera(l.camera_top) || normTopCamera(b.camera_top);
+    const camera_topFrame = camera_top && !normTopCamera(y.camera_top) && !normTopCamera(l.camera_top) && b.source === 'model' ? 'model' : 'card';
     const zoom_to = zoomOk(y.zoom_to) || zoomOk(l.zoom_to);
-    return { id: b.id, label: pick('label', b.label), rules, camera, floors, cut: pick('cut', null), source: b.source, hidden: !!pick('hidden', false),
+    return { id: b.id, label: pick('label', b.label), rules, camera, cameraFrame, camera_topFrame, floors, cut: pick('cut', null), source: b.source, hidden: !!pick('hidden', false),
       section, modelSection: normSection(b.section), camera_top, zoom_to };
   });
 }
@@ -576,4 +579,60 @@ export function sectionAt(normal, pos) {
 // Slider range: the box along the axis.
 export function sectionRange(normal, box) {
   return axisOf(normal)[0] ? [box.min[0], box.max[0]] : [z0(-box.max[2]), z0(-box.min[2])];
+}
+
+// ---------- roomless markers (pins, live mower) ----------
+function inPoly([x, y], poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+const polyArea = (poly) => Math.abs(poly.reduce((a, [x, y], i) => { const [x2, y2] = poly[(i + 1) % poly.length]; return a + x * y2 - x2 * y; }, 0)) / 2;
+
+// The model room / zone a plan point lies in: rooms [{id, level, polygon}] (card plan), on the
+// marker's HA floor (rooms of levels without a floor match any). Smallest first; one in
+// `visible` wins over a smaller hidden one. null when none contains it.
+export function roomAt(point, floorId, rooms, levelFloor = {}, visible = null) {
+  let best = null;
+  for (const r of rooms || []) {
+    const f = levelFloor[r.level];
+    if ((f && f !== floorId) || !Array.isArray(r.polygon) || r.polygon.length < 3 || !inPoly(point, r.polygon)) continue;
+    const cand = { id: r.id, area: polyArea(r.polygon), vis: !!visible && visible.has(r.id) };
+    if (!best || (cand.vis && !best.vis) || (cand.vis === best.vis && cand.area < best.area)) best = cand;
+  }
+  return best ? best.id : null;
+}
+
+// Live mower: shown where any node of an exterior level is shown; null when the model has none.
+export function exteriorShown(index, effective, levels) {
+  const ext = new Set((levels || []).filter((l) => l.role === 'exterior').map((l) => l.id));
+  if (!ext.size) return null;
+  return index.nodes.some((n, i) => effective[i] && ext.has(n.levelId));
+}
+
+// ---------- model cameras ----------
+// Model world point [x, height, -north] -> card world under the alignment (same as transformPoint on the plan).
+export function alignModelPoint([x, y, z], { position = [0, 0, 0], rotation = 0, scale = 1 } = {}) {
+  const a = (rotation * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a), k = scale || 1;
+  const X = x * k, Y = y * k, Z = z * k;
+  return [X * c + Z * s + (position[0] || 0), Y + (position[2] || 0), -X * s + Z * c - (position[1] || 0)];
+}
+
+// A view's 3D camera in card world; toWorld maps a model world point (model cameras only).
+export function cameraToCard(v, toWorld) {
+  if (!v || !v.camera) return null;
+  if (v.cameraFrame !== 'model' || !toWorld) return v.camera;
+  return { position: toWorld(v.camera.position), target: toWorld(v.camera.target) };
+}
+
+// A view's top camera in card world: a model centre through the alignment, zoom / scale.
+export function topCameraToCard(v, align) {
+  if (!v || !v.camera_top) return null;
+  const t = v.camera_top;
+  if (v.camera_topFrame !== 'model' || !align) return t;
+  const [x, , z] = alignModelPoint([t.center[0], 0, -t.center[1]], align);
+  return { center: [x, -z], zoom: t.zoom / ((align.scale || 1)) };
 }

@@ -9,12 +9,12 @@ import { buildMarkers, registrySignature, iconFor, isActive, displayValue, areaN
 import { mergeFloors, roomFloorId, markerPositions, lightGlow, roomLabel } from './layout.js';
 import {
   resolveLevels, resolveRoomAreas, modelRooms, combineRooms, levelFloorOverrides, bindingDiff, snapshotDiff, levelsFromFloorMap,
-  measuredElevations,
+  measuredElevations, transformPoint,
 } from './bindings.js';
 import { threeAdapter } from './manifest.js';
 import {
   nodeIndex, resolveViews, resolveVisibility, primaryLevel, defaultFloors, levelOrders, isOverview, floorLevels, deviceState,
-  defaultViewId, viewCut, orderViews, sectionPlane, sectionCamera, zoomToFor,
+  defaultViewId, viewCut, orderViews, sectionPlane, sectionCamera, zoomToFor, roomAt, exteriorShown, cameraToCard, topCameraToCard,
 } from './views.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 
@@ -342,6 +342,16 @@ class Floorplan3dCard extends HTMLElement {
   modelBindings() {
     const manifest = this._view && this._view.modelManifest();
     if (!manifest || !this._hass) return null;
+    // cached per input identity: per hass state update nothing here changes
+    const inputs = [manifest, this._layout && this._layout.model, this._layout && this._layout.floors, this._hass.floors, this._hass.areas, this._config];
+    const c = this._mbCache;
+    if (c && c.inputs.every((x, i) => x === inputs[i])) return c.value;
+    const value = this._computeBindings(manifest);
+    this._mbCache = { inputs, value };
+    return value;
+  }
+
+  _computeBindings(manifest) {
     const saved = (this._layout && this._layout.model) || {};
     const savedLevels = { ...(this._config.model ? levelsFromFloorMap(this._config.model_floors) : {}), ...(saved.levels || {}) };
     const haFloors = mergeFloors(this._hass, this._layout || {}); // HA floors plus layout-only floors
@@ -375,6 +385,7 @@ class Floorplan3dCard extends HTMLElement {
   connectedCallback() {
     if (!this._config) return; // setConfig renders once it arrives
     if (!this._view) this._render();
+    else if (this._editing) this._edit.attach();
     this._view.start();
     this._ro = new ResizeObserver(() => this._resize());
     this._ro.observe(this._stage);
@@ -383,6 +394,7 @@ class Floorplan3dCard extends HTMLElement {
 
   disconnectedCallback() {
     if (this._view) this._view.stop();
+    if (this._editing && this._edit) this._edit.detach(); // window listeners (keys, pick menu)
     if (this._ro) this._ro.disconnect();
     this._setCameraTimer(0);
   }
@@ -466,15 +478,17 @@ class Floorplan3dCard extends HTMLElement {
       this._edit.enter();
     } else {
       this._edit.exit();
+      if (this._floorOnly) { // back to the view the chips show (camera kept)
+        this._floorOnly = null;
+        this._applyViewVisibility();
+        this._applyMarkerStates();
+      }
     }
     this._built.rooms = undefined; // model look: outlines and labels only while editing
     this._schedule();
     this._syncToolbar();
-    // the panel changes the canvas size: reframe once the layout has settled
-    requestAnimationFrame(() => {
-      this._resize();
-      this._view.fit();
-    });
+    // the panel changes the canvas size: resize once the layout has settled; the camera stays
+    requestAnimationFrame(() => this._resize());
   }
 
   // Apply an edited layout: rebuild the plan and save it.
@@ -526,7 +540,12 @@ class Floorplan3dCard extends HTMLElement {
     const viewsChanged = this._resolveViewList(mb);
     const viewsOnly = viewsChanged === 'views'; // only layout.views / view_order: no scene or marker rebuild
     let viewRefreshed = false;
-    const modelKey = mb ? JSON.stringify([mb.levels, mb.rooms, this._modelAlign()]) : '';
+    const mkIn = [mb, this._config, l.model];
+    if (!b.modelKeyIn || mkIn.some((x, i) => x !== b.modelKeyIn[i])) {
+      b.modelKeyIn = mkIn;
+      b.modelKeyNow = mb ? JSON.stringify([mb.levels, mb.rooms, this._modelAlign()]) : '';
+    }
+    const modelKey = b.modelKeyNow;
     if (structure || (viewsChanged && !viewsOnly) || l.rooms !== b.rooms || l.floors !== b.lfloors || h.floors !== b.floors || h.areas !== b.areas
       || (mb && mb.manifest) !== b.manifest || modelKey !== b.modelKey) {
       b.manifest = mb && mb.manifest;
@@ -589,12 +608,13 @@ class Floorplan3dCard extends HTMLElement {
     const id = this._mowerMarkerId;
     if (p && id) {
       const pos = { x: p[0], y: p[1], z: MOWER_Z, floorId, auto: false, live: true };
+      const prev = this._positions.get(id);
       this._positions.set(id, pos);
       if (!this._view.markerObjects.has(id)) {
         this._buildMarkers();
         this._refreshStates();
-      } else {
-        this._view.moveMarker(id, pos.x, pos.y, pos.z, floorId);
+      } else if (!prev || prev.x !== pos.x || prev.y !== pos.y || prev.floorId !== floorId) {
+        this._view.moveMarker(id, pos.x, pos.y, pos.z, floorId); // only when it actually moved
       }
     }
     if (configChanged) this._trail = [];
@@ -683,6 +703,9 @@ class Floorplan3dCard extends HTMLElement {
     }
     this._floors = mergeFloors(h, { ...this._layout, floors: [...overrides, ...(this._layout.floors || [])] });
     this._modelRooms = mb ? modelRooms(mb.manifest.rooms, mb.levels, mb.rooms, align) : [];
+    // every model room / zone outline in card plan, for roomless markers (pins) by position
+    this._zones = mb ? mb.manifest.rooms.filter((r) => Array.isArray(r.outline) && r.outline.length > 2)
+      .map((r) => ({ id: r.id, level: r.level, polygon: r.outline.map((p) => transformPoint(p, align)) })) : [];
     if (mb) {
       this._view.setModelLevels(mb.levels);
       const levelOrder = levelOrders(mb.manifest.levels);
@@ -775,6 +798,10 @@ class Floorplan3dCard extends HTMLElement {
   // Returns true when they changed. A new model resets the node index and re-frames.
   _resolveViewList(mb) {
     const l = this._layout, b = this._built;
+    // same inputs (by identity) as last time: nothing to resolve (the usual per-state-update case)
+    const inputs = [mb, l.views, l.view_order, l.floors, l.model, this._hass.floors, this._config];
+    if (b.viewInputs && inputs.every((x, i) => x === b.viewInputs[i])) return false;
+    b.viewInputs = inputs;
     const manifest = mb ? mb.manifest : null;
     const haFloors = mergeFloors(this._hass, manifest ? { floors: [] } : l);
     const savedLevels = { ...(this._config.model ? levelsFromFloorMap(this._config.model_floors) : {}), ...((l.model && l.model.levels) || {}) };
@@ -874,15 +901,28 @@ class Floorplan3dCard extends HTMLElement {
     };
     const byId = new Map(this._markers.map((m) => [m.id, m]));
     const states = new Map();
+    const outdoor = exteriorShown(this._index, st.effective, mb.manifest.levels);
     for (const [id, p] of this._positions) {
       const m = byId.get(id);
-      // pins and the live mower are roomless: they follow their HA floor
-      const roomId = !m || p.auto === false || p.live ? null : roomByArea.get(m.areaId) || null;
+      // the live mower is outdoors: shown wherever an exterior level shows
+      if (p.live && outdoor !== null) { states.set(id, { shown: outdoor, faded: false }); continue; }
+      // pins (and the mower without exterior levels) are roomless: the room / zone under them, else their HA floor
+      const roomId = !m ? null : p.auto === false || p.live
+        ? roomAt([p.x, p.y], p.floorId, this._zones, L.levelFloor, visibleRooms) : roomByArea.get(m.areaId) || null;
       states.set(id, deviceState({
         roomId, roomLevelId: roomId ? roomLevel.get(roomId) : undefined, markerFloorId: p.floorId, floorLevelId: L.floorLevel[p.floorId],
       }, ctx));
     }
     vw.setMarkerStates(states);
+  }
+
+  // A view's cameras in card world (model cameras follow the model alignment).
+  viewCamera(v) {
+    return cameraToCard(v, this._view.model ? (p) => this._view.modelPointToWorld(p) : null);
+  }
+
+  viewTopCamera(v) {
+    return topCameraToCard(v, this._view.model ? this._modelAlign() : null);
   }
 
   // Chip switch. The camera moves only for a view with its own camera (no model: frame the floor, as before).
@@ -901,9 +941,9 @@ class Floorplan3dCard extends HTMLElement {
     this._applyZoomTo();
     if (this._mode === 'top') {
       // top view: its own camera when saved, else keep the current one (no model: frame the floor)
-      if (v.camera_top) this._view.setTopCamera(v.camera_top, { instant });
+      if (v.camera_top) this._view.setTopCamera(this.viewTopCamera(v), { instant });
       else if (!this._view.model) this._view.fit({ instant });
-    } else if (v.camera) this._view.setCamera(v.camera, { instant });
+    } else if (v.camera) this._view.setCamera(this.viewCamera(v), { instant });
     else if (!this._view.model || wasSection) this._view.fit({ instant });
     this._syncToolbar();
     if (this._editing) this._edit.onViewChanged();
@@ -914,10 +954,10 @@ class Floorplan3dCard extends HTMLElement {
     if (this._view.size.w <= 1) return; // _resize retries once the card has a size
     this._fitted = true;
     const v = this.currentView();
-    if (v && v.camera && this._mode === '3d') this._view.setCamera(v.camera, { instant: true });
+    if (v && v.camera && this._mode === '3d') this._view.setCamera(this.viewCamera(v), { instant: true });
     else {
       this._view.fit({ instant: true });
-      if (v && v.camera_top && this._mode === 'top') this._view.setTopCamera(v.camera_top, { instant: true });
+      if (v && v.camera_top && this._mode === 'top') this._view.setTopCamera(this.viewTopCamera(v), { instant: true });
     }
   }
 
@@ -926,9 +966,9 @@ class Floorplan3dCard extends HTMLElement {
     if (this._section) this.setSection(false, { camera: false });
     const v = this.currentView();
     if (this._mode === 'top') {
-      if (v && v.camera_top) this._view.setTopCamera(v.camera_top);
+      if (v && v.camera_top) this._view.setTopCamera(this.viewTopCamera(v));
       else this._view.fit();
-    } else this._view.resetCamera((v && v.camera) || null);
+    } else this._view.resetCamera(this.viewCamera(v));
   }
 
   // ---------- side section ----------
@@ -972,7 +1012,7 @@ class Floorplan3dCard extends HTMLElement {
     if (!this._section) return false;
     this.setSection(false, { camera: false });
     const v = this.currentView();
-    if (v && v.camera) this._view.setCamera(v.camera, { instant: true });
+    if (v && v.camera) this._view.setCamera(this.viewCamera(v), { instant: true });
     else this._view.fit({ instant: true });
     return true;
   }
@@ -1156,9 +1196,12 @@ class Floorplan3dCard extends HTMLElement {
     this._mode = mode;
     this._view.setMode(mode);
     const v = this.currentView(), own = v && !this._floorOnly ? v : null;
-    if (mode === 'top' && own && own.camera_top) this._view.setTopCamera(own.camera_top, { instant: true });
+    if (mode === 'top' && own && own.camera_top) this._view.setTopCamera(this.viewTopCamera(own), { instant: true });
     // back in 3D: the view's saved camera, else the camera before Top (setMode framed it otherwise)
-    else if (mode === '3d' && ((own && own.camera) || this._view._lastCam3d)) this._view.setCamera((own && own.camera) || this._view._lastCam3d, { instant: true });
+    else if (mode === '3d') {
+      const cam = (own && own.camera && this.viewCamera(own)) || this._view.lastCamera3d;
+      if (cam) this._view.setCamera(cam, { instant: true });
+    }
     this._syncToolbar();
     if (this._editing && this._edit.tab === 'views') this._edit.render();
   }

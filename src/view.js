@@ -114,6 +114,11 @@ export class FloorplanView {
     this._occBoxes = null; // [{ mesh, box }] world boxes of occluding model meshes (cached per placement)
     this._bounds = null; // { house: Box3, centre: Vector3, radius } for the depth range
     this._occGen = 0; // occlusion pass generation (a new schedule cancels running slices)
+    this._occFull = false; // a full pass is pending or running
+    this._occIds = null; // marker ids waiting for a partial pass (live mower)
+    this._occSig = null; // inputs of the last occlusion pass (shown markers, model visibility, cut, section)
+    this._shadowSig = null; // inputs of the last shadow map render (model visibility, cut, section)
+    this.stats = { occPasses: 0, occPartial: 0, shadow: 0 }; // counters for the headless checks
     this._depth = null;
 
     this.floors = [];
@@ -310,7 +315,7 @@ export class FloorplanView {
         this._bounds = this._sceneBounds();
       }
       if (this.model && this.daylight) this._fitShadow();
-      this.renderer.shadowMap.needsUpdate = true;
+      this._shadowDirty();
       this._applyFloorVisibility();
       this._scheduleOcclusion(0);
       this.dirty = true;
@@ -484,7 +489,7 @@ export class FloorplanView {
       r.toneMappingExposure = 1.25;
       r.shadowMap.enabled = true;
       r.shadowMap.autoUpdate = false; // re-rendered on demand (needsUpdate), not every frame
-      r.shadowMap.needsUpdate = true;
+      this._shadowDirty();
       r.shadowMap.type = THREE.PCFSoftShadowMap;
       hemi.color.setHex(day ? 0xcfdcff : 0x6f86c6);
       hemi.groundColor.setHex(day ? 0x7a6248 : 0x2a2622);
@@ -550,7 +555,7 @@ export class FloorplanView {
     cam.far = radius * 5;
     cam.updateProjectionMatrix();
     sun.target.updateMatrixWorld();
-    this.renderer.shadowMap.needsUpdate = true;
+    this._shadowDirty();
     this.dirty = true;
   }
 
@@ -641,11 +646,16 @@ export class FloorplanView {
     const m = this.markerObjects.get(id);
     if (!m) return;
     m.obj.position.copy(planToWorld(x, y, z, this.floorElevation(floorId)));
-    this._placeStem(id, m.obj.position, floorId);
     const g = this.glows.get(id);
     if (g) g.mesh.position.copy(planToWorld(x, y, 0.03, this.floorElevation(floorId)));
-    if (this.sectionClip) this._applyFloorVisibility(); // it may have crossed the cut
-    this._scheduleOcclusion();
+    // only this marker: visibility (it may have crossed the section cut) and its own occlusion
+    const c = this.cssObjects.find((o) => o.kind === 'marker' && o.id === id);
+    if (c) c.obj.visible = this._markerVisible(c);
+    if (g) g.mesh.visible = this._glowVisible(id, g);
+    const st = this.stems.get(id);
+    if (st) st.disc.visible = m.obj.visible;
+    this._placeStem(id, m.obj.position, floorId);
+    this._scheduleOcclusion(OCCLUSION_DELAY_MS, id);
     this.dirty = true;
   }
 
@@ -738,6 +748,7 @@ export class FloorplanView {
       this.cssObjects.push({ obj, floorId: m.floorId, kind: 'marker', id: m.id });
     }
     if (this._stemsOn) this._buildStems();
+    this._occSig = null; // new elements carry no occlusion state yet
     this._applyFloorVisibility();
     this.dirty = true;
   }
@@ -824,6 +835,7 @@ export class FloorplanView {
       entry.floorId = g.floorId;
       const { mesh } = entry;
       mesh.position.copy(planToWorld(g.x, g.y, 0.03, this.floorElevation(g.floorId)));
+      mesh.visible = this._glowVisible(g.id, entry); // glows cast no shadow and hide no marker
       const r = GLOW_RADIUS * (0.6 + 0.4 * g.strength) * 2;
       mesh.scale.set(r, 1, r);
       mesh.material.color.setRGB(g.rgb[0] / 255, g.rgb[1] / 255, g.rgb[2] / 255, THREE.SRGBColorSpace);
@@ -836,7 +848,6 @@ export class FloorplanView {
       entry.mesh.material.dispose();
       this.glows.delete(id);
     }
-    this._applyFloorVisibility();
     this.dirty = true;
   }
 
@@ -903,8 +914,7 @@ export class FloorplanView {
       this.renderer.clippingPlanes = [];
     }
     this._sectionMaterials();
-    this._applyFloorVisibility();
-    this.renderer.shadowMap.needsUpdate = true;
+    this._applyFloorVisibility(); // the section is part of the shadow / occlusion signatures
     this.dirty = true;
   }
 
@@ -953,6 +963,13 @@ export class FloorplanView {
     this.modelGroup.updateMatrixWorld(true);
     const p = new THREE.Plane(new THREE.Vector3(...plane.normal), plane.constant).applyMatrix4(this.model.root.matrixWorld);
     return { normal: p.normal.toArray(), constant: p.constant };
+  }
+
+  // a point in model world (glTF scene coordinates) -> card world, through the model's placement
+  modelPointToWorld(p) {
+    if (!this.model) return p;
+    this.modelGroup.updateMatrixWorld(true);
+    return new THREE.Vector3(...p).applyMatrix4(this.model.root.matrixWorld).toArray();
   }
 
   _cutAway(pos) {
@@ -1060,14 +1077,8 @@ export class FloorplanView {
     // markers live in one group for all floors, so visibility is set per object
     const ms = this._markerStates;
     const stateOf = (id) => (ms && id !== undefined ? ms.get(id) : null);
-    for (const c of this.cssObjects) {
-      const st = c.kind === 'marker' ? stateOf(c.id) : null;
-      c.obj.visible = (st ? !!st.shown : this._shows(c.floorId)) && !(c.kind !== 'handle' && this._cutAway(c.obj.position));
-    }
-    for (const [id, g] of this.glows) {
-      const st = stateOf(id);
-      g.mesh.visible = (st ? !!st.shown : this._shows(g.floorId)) && !this._cutAway(g.mesh.position);
-    }
+    for (const c of this.cssObjects) c.obj.visible = this._markerVisible(c);
+    for (const [id, g] of this.glows) g.mesh.visible = this._glowVisible(id, g);
     for (const [id, st] of this.stems) {
       const m = this.markerObjects.get(id);
       const shown = !!(m && m.obj.visible);
@@ -1087,7 +1098,6 @@ export class FloorplanView {
       const cut = this.visibleFloor === 'all' || this.isTagged() ? 1e6 : this.floorElevation(this.visibleFloor) + ((vf && vf.height) || 2.7);
       this.modelClip.constant = this._cutOverride === undefined ? cut : (this._cutOverride ?? 1e6);
       if (this.pickHelper) this.pickHelper.update();
-      this.renderer.shadowMap.needsUpdate = true;
     }
     // "top" = the highest floor that actually has markers (an empty attic must not fade everything)
     let top = null, topElev = -Infinity;
@@ -1102,7 +1112,59 @@ export class FloorplanView {
       c.obj.element.classList.toggle('fp-faded', st ? !!st.faded : !!this.model && this.visibleFloor === 'all' && c.floorId !== top);
     }
     if (this.mapPlane && this.mapPlane.material.map) this.mapPlane.visible = this._shows(this.mapPlane.userData.floorId);
-    this._scheduleOcclusion(0);
+    // shadow map and occlusion only when their inputs changed (not on every state update)
+    const model = this._modelSig();
+    if (model !== this._shadowSig) {
+      this._shadowSig = model;
+      if (this.model) this._shadowDirty();
+    }
+    const occ = model + '|' + this.mode + '|' + this._shownMarkersSig();
+    if (occ !== this._occSig) {
+      this._occSig = occ;
+      this._scheduleOcclusion(0);
+    }
+  }
+
+  // css object (marker, label, handle) visibility: marker state, else its floor; section cut
+  _markerVisible(c) {
+    const st = c.kind === 'marker' && this._markerStates && c.id !== undefined ? this._markerStates.get(c.id) : null;
+    return (st ? !!st.shown : this._shows(c.floorId)) && !(c.kind !== 'handle' && this._cutAway(c.obj.position));
+  }
+
+  _glowVisible(id, g) {
+    const st = this._markerStates ? this._markerStates.get(id) : null;
+    return (st ? !!st.shown : this._shows(g.floorId)) && !this._cutAway(g.mesh.position);
+  }
+
+  // What the shadow map depends on: the model, which of its nodes are shown, the cut, the section.
+  _modelSig() {
+    if (!this.model) return '';
+    const mv = this._modelVisibility;
+    const vis = mv ? mv.index.nodes.map((n) => (n.node.visible ? 1 : 0)).join('')
+      : this.model.manifest.levels.map((l) => (l.node.visible ? 1 : 0)).join('');
+    const s = this.sectionClip;
+    return [this.model.id, vis, this.modelClip.constant, s ? [...s.normal.toArray(), s.constant].map((v) => v.toFixed(4)).join() : ''].join('|');
+  }
+
+  // Shown markers and where they are (occlusion input).
+  _shownMarkersSig() {
+    const out = [];
+    for (const c of this.cssObjects) {
+      if (c.kind !== 'marker' || !c.obj.visible) continue;
+      const p = c.obj.position;
+      out.push(`${c.id}@${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}`);
+    }
+    return out.join(';');
+  }
+
+  _shadowDirty() {
+    this.renderer.shadowMap.needsUpdate = true;
+    this.stats.shadow++;
+  }
+
+  // The 3D camera before switching to Top (null until then).
+  get lastCamera3d() {
+    return this._lastCam3d || null;
   }
 
   setMode(mode) {
@@ -1113,6 +1175,7 @@ export class FloorplanView {
     if (mode === 'top') { this._cancelOcclusion(); this._clearOcclusion(); } // no occlusion in top view
     this._makeControls();
     this.fit();
+    if (mode === '3d') this._scheduleOcclusion(0);
   }
 
   // Frame the rooms of the visible floor(s); the model when there are no rooms (or asked to).
@@ -1243,11 +1306,19 @@ export class FloorplanView {
 
   // Occlusion pass once the camera has been still for 150 ms (debounced; never per frame). A new
   // schedule cancels the pending timer and any pass still running in slices.
-  _scheduleOcclusion(delay = OCCLUSION_DELAY_MS) {
+  // id: only that marker (a moving live marker); a pending or running full pass already covers it.
+  // Nothing runs while the card is detached (start() schedules a full pass again).
+  _scheduleOcclusion(delay = OCCLUSION_DELAY_MS, id = null) {
+    if (this._disposed || !this._raf) return;
+    if (id !== null) {
+      if (this._occFull) return;
+      (this._occIds = this._occIds || new Set()).add(id);
+    } else {
+      this._occFull = true;
+      this._occIds = null;
+    }
     if (this._occTimer) clearTimeout(this._occTimer);
-    this._occTimer = null;
     this._occGen++;
-    if (this._disposed) return;
     this._occTimer = setTimeout(() => this._runOcclusion(), delay);
   }
 
@@ -1255,6 +1326,8 @@ export class FloorplanView {
     if (this._occTimer) clearTimeout(this._occTimer);
     this._occTimer = null;
     this._occGen++;
+    this._occFull = false;
+    this._occIds = null;
   }
 
   _clearOcclusion() {
@@ -1278,18 +1351,32 @@ export class FloorplanView {
   _runOcclusion() {
     this._occTimer = null;
     if (this._disposed) return;
+    const full = this._occFull, ids = this._occIds;
     if (!this._occlusion || this.mode !== '3d' || !this.model || (this.model.opacity ?? 1) < 0.6) {
+      this._occFull = false;
+      this._occIds = null;
       this._clearOcclusion();
       return;
     }
     const since = performance.now() - (this._camMovedAt || 0);
-    if (since < OCCLUSION_DELAY_MS) { this._scheduleOcclusion(OCCLUSION_DELAY_MS - since); return; }
+    if (since < OCCLUSION_DELAY_MS) {
+      const wait = OCCLUSION_DELAY_MS - since;
+      if (full) this._scheduleOcclusion(wait);
+      else { this._occIds = null; for (const id of ids || []) this._scheduleOcclusion(wait, id); }
+      return;
+    }
+    this._occIds = null;
+    if (full) this.stats.occPasses++;
+    else this.stats.occPartial++;
     const cam = this.camera;
     cam.updateMatrixWorld();
     const origin = cam.getWorldPosition(new THREE.Vector3());
     const shown = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
     const boxes = this._occluders().filter((b) => shown(b.mesh));
-    const markers = this.cssObjects.filter((c) => c.kind === 'marker' && c.obj.visible).slice(0, OCCLUSION_MAX); // the rest keep their state
+    const shownMarkers = this.cssObjects.filter((c) => c.kind === 'marker' && c.obj.visible && (full || (ids && ids.has(c.id))));
+    const markers = shownMarkers.slice(0, OCCLUSION_MAX);
+    // past the budget: not tested, so not dimmed (a stale fp-occluded would leave them unclickable)
+    for (const c of shownMarkers.slice(OCCLUSION_MAX)) c.obj.element.classList.remove('fp-occluded');
     const gen = this._occGen;
     const rc = this._occRay, pos = new THREE.Vector3(), dir = new THREE.Vector3(), tmp = new THREE.Vector3();
     const cut = this.modelClip.constant;
@@ -1318,6 +1405,7 @@ export class FloorplanView {
         }
         c.obj.element.classList.toggle('fp-occluded', isOccluded(hitD, dist));
       }
+      if (full) this._occFull = false;
     };
     slice();
   }
@@ -1378,6 +1466,10 @@ export class FloorplanView {
         this.pivotMarker.position.copy(this.controls.target);
         this.dirty = true;
       }
+      if (this.pivotMarker && this.pivotMarker.visible === !!this.sectionClip) {
+        this.pivotMarker.visible = !this.sectionClip; // no rotation-centre cross over the section camera
+        this.dirty = true;
+      }
       if (!this.dirty) return;
       this.dirty = false;
       this._updateDepth();
@@ -1392,6 +1484,7 @@ export class FloorplanView {
   stop() {
     if (this._raf) cancelAnimationFrame(this._raf);
     this._raf = null;
+    this._cancelOcclusion(); // a detached card runs no passes
   }
 
   _removeCss(obj) {

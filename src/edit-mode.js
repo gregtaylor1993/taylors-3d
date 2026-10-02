@@ -118,6 +118,17 @@ export class EditMode {
     this._syncStageClasses();
   }
 
+  // card detached while editing / attached again: window listeners off / on (state kept)
+  detach() {
+    window.removeEventListener('keydown', this._onKey);
+    this._endWindowDrag();
+    this._closeMenu();
+  }
+
+  attach() {
+    window.addEventListener('keydown', this._onKey);
+  }
+
   exit() {
     window.removeEventListener('keydown', this._onKey);
     this._endWindowDrag();
@@ -303,7 +314,13 @@ export class EditMode {
   // only picks a loop. Fallback: the mesh's bounding rectangle.
   _traceOutline(mesh, hit) {
     const model = this.view.model;
-    if (this._outlineModel !== model) { this._outlineCache.clear(); this._outlineModel = model; }
+    // loops are in card world: a new model or a new alignment invalidates them
+    const placed = JSON.stringify(this.card._modelAlign());
+    if (this._outlineModel !== model || this._outlineAlign !== placed) {
+      this._outlineCache.clear();
+      this._outlineModel = model;
+      this._outlineAlign = placed;
+    }
     const b = Math.round(hit[1] / 0.05);
     const key = (n) => mesh.uuid + ':' + n;
     let entry = null;
@@ -1233,7 +1250,8 @@ export class EditMode {
     switch (act) {
       case 'vw-add': {
         const { id, n } = nextViewId([...card._views.map((x) => x.id), ...Object.keys(this.layout.views || {})]);
-        const views = { ...(this.layout.views || {}), [id]: { added: true, label: `View ${n}`, rules: this._layoutRules(v.id).map((r) => ({ ...r })) } };
+        // a copy of the current view: all its rules (model / generated base + saved), so it looks the same
+        const views = { ...(this.layout.views || {}), [id]: { added: true, label: `View ${n}`, rules: (v.rules || []).map((r) => ({ ...r })) } };
         this.vwSel = null;
         this.commit({ ...this.layout, views });
         after(() => card._setView(id));
@@ -1381,6 +1399,12 @@ export class EditMode {
     // alignment change of an uploaded model (YAML alignment overrides win): pins on the model follow it
     if (!this.card._config.model && ('position' in patch || 'rotation' in patch || 'scale' in patch)) {
       const align = (m) => ({ position: m.position || [0, 0, 0], rotation: m.rotation || 0, scale: m.scale || 1 });
+      // first alignment change with a model loaded: v0.2.x pins on floors bound to a model level follow it from now on
+      if (this.view.model && !cur.pins_migrated) {
+        const mb = this.card.modelBindings();
+        const bound = mb ? Object.values(mb.levels || {}).map((a) => a && a.floor).filter(Boolean) : [];
+        layout = E.migrateLegacyPins(layout, bound);
+      }
       layout = E.realignPins(layout, align(cur), align(layout.model));
     }
     this.card._commit(layout);
@@ -1795,10 +1819,10 @@ export class EditMode {
       const raw = JSON.parse(text);
       const parsed = E.parseImport(text);
       const haFloors = Object.values(this.hass.floors || {}).map((f) => ({ id: f.floor_id, elevation: (f.level ?? 0) * LEVEL_SPACING }));
-      const { layout: l, floorMap, unknownAreas } = E.fitImport(parsed, haFloors, Object.keys(this.hass.areas || {}));
-      // the uploaded model and the mower setup are not part of a plan export: keep ours
-      if (!('model' in raw)) l.model = this.layout.model || null;
-      if (!('mower' in raw) || raw.mower === null) l.mower = this.layout.mower || null;
+      const fit = E.fitImport(parsed, haFloors, Object.keys(this.hass.areas || {}));
+      const { floorMap, unknownAreas } = fit;
+      // the uploaded model, the mower setup and view settings missing from the file: keep ours
+      const l = E.mergeImport(fit.layout, raw, this.layout);
       this.selectedRoom = null;
       this.selectedMarker = null;
       const parts = [`Imported ${l.rooms.length} rooms, ${Object.keys(l.pins).length} pins.`];
