@@ -40,6 +40,8 @@ export function resolveLevels(levels, floors, saved = {}) {
     if (!isPlainObject(s)) continue;
     if (s.show && SHOW.includes(s.show) && s.show !== 'with' && s.show !== 'only') {
       out[l.id] = { show: s.show, floor: ids.has(s.floor) ? s.floor : null, auto: false };
+    } else if (s.floor === null && !s.show) {
+      out[l.id] = { show: 'always', floor: null, auto: false }; // "belongs to no HA floor"
     } else if (ids.has(s.floor)) {
       out[l.id] = { show: s.show === 'only' ? 'only' : 'with', floor: s.floor, auto: false };
     } else {

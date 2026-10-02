@@ -69,6 +69,12 @@ describe('resolveLevels', () => {
     expect(g.ground).toMatchObject({ show: 'with', floor: 'floor1', auto: true, stale: true });
   });
 
+  it('a saved { floor: null } puts the level on no floor (not stale)', () => {
+    const r = resolveLevels([L('ground', 'storey', 0), L('exterior', 'exterior')], floors, { exterior: { floor: null } });
+    expect(r.exterior).toEqual({ show: 'always', floor: null, auto: false });
+    expect(r.ground).toMatchObject({ show: 'with', floor: 'floor1', auto: true });
+  });
+
   it('falls back to defaults when a saved floor no longer exists', () => {
     const r = resolveLevels([L('ground', 'storey', 0)], floors, { ground: { floor: 'deleted' } });
     expect(r.ground).toMatchObject({ show: 'with', floor: 'floor1', auto: true, stale: true });

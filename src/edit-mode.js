@@ -1,11 +1,13 @@
-// Edit mode: side panel (Rooms / Devices / Mower / Data) and the pointer interactions on the
-// plan (drawing rooms, dragging corners, adding doors, dragging markers to pin them).
+// Edit mode: side panel (Rooms / Devices / Mower / Views / Model / Data) and the pointer interactions on
+// the plan (drawing rooms, dragging corners, adding doors, dragging markers to pin them, hiding model
+// parts per view).
 
 import * as E from './editor.js';
 import { roomFloorId, LEVEL_SPACING } from './layout.js';
 import { pointInPolygon, signedArea } from './placement.js';
 import { buildMarkers, areaName } from './registry.js';
 import { readSource, calibrationError } from './mower.js';
+import { ruleState, setRuleState, nextEyeState, viewTree, pickSelector, nextViewId, unmatchedSelectors } from './views.js';
 
 const CLICK_SLOP_PX = 5;
 const SNAP_PX = 10; // snap radius never smaller than this many screen pixels
@@ -62,6 +64,10 @@ export class EditMode {
     this._onWinMove = (e) => this._dragMove(e);
     this._onWinUp = (e) => this._dragEnd(e);
     this._handles = new Map();
+    this.vwSel = null; // a hidden view chosen in the Views tab (visible views follow the chips)
+    this.vwPick = null; // { sel, idx } last part clicked in 3D on the Views tab
+    this.menu = null;
+    this._onMenuAway = (e) => { if (this.menu && !e.composedPath().includes(this.menu)) this._closeMenu(); };
   }
 
   get layout() { return this.card._layout; }
@@ -69,9 +75,18 @@ export class EditMode {
   get view() { return this.card._view; }
   get floors() { return this.card._floors || []; }
 
+  // The floor that "Place", drawing and the door tool work on: the floor shown on its own, the view's
+  // single linked floor, else (overview, several or no linked floors) the HA floor of the view's
+  // primary level, else the first floor.
   activeFloor() {
-    const f = this.card._floor;
-    return !f || f === 'all' ? this.floors[0].id : f;
+    const c = this.card, has = (id) => !!id && this.floors.some((f) => f.id === id);
+    if (c._floorOnly && has(c._floor)) return c._floor;
+    const st = c._viewState;
+    if (st && !st.allFloors && st.floors.length === 1 && has(st.floors[0])) return st.floors[0];
+    const prim = st && st.primary && c._levels ? c._levels.levelFloor[st.primary] : null;
+    if (has(prim)) return prim;
+    if (!st && has(c._floor)) return c._floor;
+    return this.floors[0].id;
   }
 
   floorOf(room) {
@@ -103,6 +118,9 @@ export class EditMode {
     this.selectedRoom = null;
     this.selectedMarker = null;
     this.modelPick = null;
+    this.vwPick = null;
+    this.vwSel = null;
+    this._closeMenu();
     this.view.highlightModelNode(null);
     this.view.setOverlay({});
     this._syncStageClasses();
@@ -163,6 +181,10 @@ export class EditMode {
       this.setMower({ calibration: [...(this.mower().calibration || []), { src, plan }] });
       return;
     }
+    if (this.tab === 'views' && this.view.model && !this.drawing) {
+      this._pickView(e);
+      return;
+    }
     if (this.tab === 'model' && this.view.model && !this.drawing) {
       const owner = this.view.pickModel(e.clientX, e.clientY);
       this.modelPick = owner ? (owner.kind === 'untagged' ? { kind: 'untagged', path: owner.path } : { kind: owner.kind, id: owner.id }) : null;
@@ -219,10 +241,11 @@ export class EditMode {
   // ---------- drawing ----------
   startDrawing(areaId) {
     const area = this.hass.areas && this.hass.areas[areaId];
-    let floorId = this.card._floor;
-    if (!floorId || floorId === 'all') {
-      floorId = area && this.floors.some((f) => f.id === area.floor_id) ? area.floor_id : this.floors[0].id;
-    }
+    // the floor shown on its own (or the view's only floor), else the area's floor, else the active floor
+    const st = this.card._viewState;
+    const single = this.card._floorOnly || (st && !st.allFloors && st.floors.length === 1 ? st.floors[0] : null);
+    let floorId = single && this.floors.some((f) => f.id === single) ? single : null;
+    if (!floorId) floorId = area && this.floors.some((f) => f.id === area.floor_id) ? area.floor_id : this.activeFloor();
     if (floorId !== this.card._floor) this.card._setFloor(floorId);
     if (this.card._mode !== 'top') this.card._setMode('top');
     this.selectedRoom = null;
@@ -281,6 +304,11 @@ export class EditMode {
   _onKeyDown(e) {
     const target = e.composedPath()[0];
     if (target && /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName)) return;
+    if (this.menu && e.key === 'Escape') {
+      this._closeMenu();
+      e.preventDefault();
+      return;
+    }
     if (this.drawing) {
       if (e.key === 'Enter') this.finishDrawing();
       else if (e.key === 'Escape') this.cancelDrawing();
@@ -303,7 +331,9 @@ export class EditMode {
   _syncStageClasses() {
     this.card._stage.classList.toggle('drawing', !!this.drawing || this.doorMode || !!this.calibrating);
     this.card._stage.classList.toggle('moving', this.overlayMove);
-    this.card._stage.classList.toggle('picking', !!this.card._editing && this.tab === 'model' && !!this.view.model);
+    const picking = !!this.card._editing && (this.tab === 'model' || this.tab === 'views') && !!this.view.model;
+    this.card._stage.classList.toggle('picking', picking);
+    this.card._stage.classList.toggle('picking-views', picking && this.tab === 'views');
   }
 
   // Overlay move tool: grab the pointer before OrbitControls sees it (capture phase on the stage).
@@ -537,9 +567,14 @@ export class EditMode {
     const focusKey = active && active.dataset && active.dataset.field ? [active.dataset.field, active.dataset.id || ''] : null;
     const report = this.panel.querySelector('details.report');
     if (report) this._reportOpen = report.open;
+    const adv = this.panel.querySelector('details.advanced');
+    if (adv) this._advancedOpen = adv.open;
     this._renderedTab = this.tab;
-    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ['mower', 'Mower'], ['model', 'Model'], ['data', 'Data']];
-    const body = { rooms: () => this._roomsTab(), devices: () => this._devicesTab(), mower: () => this._mowerTab(), model: () => this._modelTab(), data: () => this._dataTab() }[this.tab]();
+    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ['mower', 'Mower'], ['views', 'Views'], ['model', 'Model'], ['data', 'Data']];
+    const body = {
+      rooms: () => this._roomsTab(), devices: () => this._devicesTab(), mower: () => this._mowerTab(), views: () => this._viewsTab(),
+      model: () => this._modelTab(), data: () => this._dataTab(),
+    }[this.tab]();
     const msg = this.message ? `<div class="msg ${this.message.error ? 'error' : this.message.warn ? 'warn' : ''}">${esc(this.message.text)}</div>` : '';
     this.panel.innerHTML = `
       <div class="tabs">${tabs.map(([id, label]) => `<button data-act="tab" data-id="${id}" class="${this.tab === id ? 'on' : ''}">${label}</button>`).join('')}</div>
@@ -629,9 +664,12 @@ export class EditMode {
     }
     if (!areas.length) out += '<p class="hint">No areas in Home Assistant yet. Create areas under Settings → Areas.</p>';
 
+    // floor heights come from the model when there is one; the table is for model-less layouts
+    if (this.view.model) return out;
     const stored = new Set((this.layout.floors || []).map((f) => f.id));
     const haFloors = new Set(Object.keys(this.hass.floors || {}));
-    out += '<div class="sub">Floors</div><table class="floors"><tr><th></th><th>Elevation m</th><th>Height m</th><th></th></tr>';
+    out += `<details class="advanced" ${this._advancedOpen ? 'open' : ''}><summary>Advanced (no model)</summary>
+      <div class="sub">Floors</div><table class="floors"><tr><th></th><th>Elevation m</th><th>Height m</th><th></th></tr>`;
     for (const f of this.floors) {
       out += `<tr><td>${esc(f.name)}</td>
         <td><input type="number" step="0.05" data-field="floor-elevation" data-id="${esc(f.id)}" value="${fmt(f.elevation)}"></td>
@@ -639,7 +677,7 @@ export class EditMode {
         <td>${!haFloors.has(f.id) && stored.has(f.id) ? `<button class="link" data-act="del-floor" data-id="${esc(f.id)}">Remove</button>` : ''}</td></tr>`;
     }
     out += `</table><p class="hint">Floors come from Home Assistant (Settings → Areas → Floors). Add one here only for a level HA doesn't have.</p>
-      <button data-act="add-floor">Add floor</button>`;
+      <button data-act="add-floor">Add floor</button></details>`;
     return out;
   }
 
@@ -751,6 +789,302 @@ export class EditMode {
     }
     out += '<div class="row"><button data-act="mower-remove" class="danger">Remove mower</button></div>';
     return out;
+  }
+
+  // ---------- views ----------
+  // The view the Views tab edits: a hidden view picked in its select, else the active chip.
+  _vwView() {
+    const vs = this.card._views || [];
+    // (kept while the view is visible: a hide is committed before the view list catches up)
+    const v = this.vwSel && vs.find((x) => x.id === this.vwSel);
+    if (v && v.hidden) return v;
+    return this.card.currentView();
+  }
+
+  // the card switched views (chip or select)
+  onViewChanged() {
+    this.vwSel = null;
+    this._closeMenu();
+    if (this.tab === 'views') this.render();
+  }
+
+  _layoutRules(id) {
+    const v = (this.layout.views || {})[id];
+    return v && Array.isArray(v.rules) ? v.rules : [];
+  }
+
+  _setRule(id, sel, state) {
+    this.card.saveViewPatch(id, { rules: setRuleState(this._layoutRules(id), sel, state) });
+  }
+
+  // Tree rows for the loaded model, with the manifest's labels (cached per node index).
+  _tree() {
+    const idx = this.card.viewIndex();
+    const mb = this.card._mb;
+    if (!idx || !mb) return null;
+    if (this._treeCache && this._treeCache.idx === idx) return this._treeCache.tree;
+    const labels = {};
+    for (const l of mb.manifest.levels) labels['level:' + l.id] = l.label;
+    for (const r of mb.manifest.rooms) labels[r.kind + ':' + r.id] = r.label;
+    for (const o of mb.manifest.objects || []) if (o.label) labels['object:' + o.id] = o.label;
+    const tree = viewTree(idx, labels);
+    const rowOf = new Map(); // node position -> selector of the row listing it
+    for (const r of [...tree.tree, ...tree.groups]) for (const i of r.nodes) if (!rowOf.has(i)) rowOf.set(i, r.sel);
+    tree.rowOf = rowOf;
+    this._treeCache = { idx, tree };
+    return tree;
+  }
+
+  _viewsTab() {
+    const card = this.card;
+    const views = card._views || [];
+    const v = this._vwView();
+    if (!v) return '<p class="hint">No views yet.</p>';
+    const st = card._stateFor(v);
+    const lv = (this.layout.views || {})[v.id] || {};
+    const i = views.indexOf(v);
+    const visible = views.filter((x) => !x.hidden).length;
+    const opts = views.map((x) => `<option value="${esc(x.id)}" ${x.id === v.id ? 'selected' : ''}>${esc(x.label)}${x.hidden ? ' (hidden)' : ''}</option>`).join('');
+    const hideLabel = v.source === 'added' ? 'Delete view' : v.hidden ? 'Unhide' : 'Hide';
+    let out = `<p class="hint">Each view is a button on the card. Choose what it shows: click a part of the model, or use the eyes below.</p>
+      <label>View <select data-field="vw-view">${opts}</select></label>
+      <label>Label <input data-field="vw-label" value="${esc(v.label)}"></label>
+      <div class="row"><button data-act="vw-add">Add view</button>
+        <button data-act="vw-hide" ${!v.hidden && v.source !== 'added' && visible <= 1 ? 'disabled' : ''} class="${v.source === 'added' ? 'danger' : ''}">${hideLabel}</button>
+        <button data-act="vw-up" ${i <= 0 ? 'disabled' : ''} title="Move left">Up</button>
+        <button data-act="vw-down" ${i < 0 || i >= views.length - 1 ? 'disabled' : ''} title="Move right">Down</button></div>
+      <div class="sub">Linked HA floors</div>
+      <div class="floor-links">${this.floors.map((f) => `<label class="check"><input type="checkbox" data-field="vw-floor" data-id="${esc(f.id)}" ${st.floors.includes(f.id) ? 'checked' : ''}> ${esc(f.name)}</label>`).join('')}</div>
+      <p class="hint">Devices on linked floors show in this view. None checked: the view belongs to no floor (e.g. a garden view).</p>
+      <div class="sub">Camera</div>
+      <p class="hint">${v.camera ? 'Opens with a saved camera.' : 'Opens framing the house.'}</p>
+      <div class="row"><button data-act="vw-save-cam" ${v.hidden ? 'disabled' : ''}>Save current view as start</button>
+        <button data-act="vw-reset-cam" ${lv.camera ? '' : 'disabled'}>Reset camera</button></div>`;
+    if (this.view.model && !this.view.isTagged()) {
+      out += `<label class="check"><input type="checkbox" data-field="vw-cut" ${(v.cut ?? v.id !== 'all') ? 'checked' : ''}> Cut at wall height</label>`;
+    }
+    const idx = card.viewIndex();
+    const tree = this._tree();
+    const rules = this._layoutRules(v.id);
+    if (idx && tree && this.view.model) {
+      const eff = st.effective;
+      const eyeTitle = { default: 'Default (from the model); click: show', shown: 'Shown here; click: hide', hidden: 'Hidden here; click: back to default' };
+      const eyeIcon = { default: 'mdi:eye-outline', shown: 'mdi:eye', hidden: 'mdi:eye-off' };
+      const row = (r, cls = '') => {
+        const on = eff ? r.nodes.some((n) => eff[n]) : true;
+        const state = ruleState(rules, r.sel);
+        const picked = this.vwPick && this.vwPick.sel === r.sel ? ' picked' : '';
+        return `<li data-sel="${esc(r.sel)}" class="${cls}${on ? '' : ' off'}${picked}" style="--d:${r.depth}" title="${esc(r.path || r.sel)}">
+          <span class="state" title="${on ? 'Visible' : 'Hidden'} in this view"><ha-icon icon="${on ? 'mdi:cube-outline' : 'mdi:cube-off-outline'}"></ha-icon></span>
+          <span class="name">${esc(r.label)}</span>
+          <button class="eye ${state}" data-act="vw-eye" data-sel="${esc(r.sel)}" title="${eyeTitle[state]}"><ha-icon icon="${eyeIcon[state]}"></ha-icon></button></li>`;
+      };
+      out += '<div class="sub">Model</div>';
+      out += tree.tree.length ? '<ul class="vtree">' + tree.tree.map((r) => row(r, r.sel.startsWith('level:') ? 'lvl' : '')).join('') + '</ul>'
+        : '<p class="dim">No tagged levels or rooms.</p>';
+      if (tree.layers.length) out += '<div class="sub">Layers</div><ul class="vtree">' + tree.layers.map((r) => row(r)).join('') + '</ul>';
+      if (tree.groups.length) out += '<div class="sub">Model groups</div><ul class="vtree">' + tree.groups.map((r) => row(r)).join('') + '</ul>';
+      const gone = unmatchedSelectors(idx, rules);
+      if (gone.length) {
+        out += '<div class="sub">Not in this model</div><ul class="vtree">' + gone.map((s) => `<li class="gone" data-sel="${esc(s)}"><span class="name">${esc(s)}</span>
+          <button class="link" data-act="vw-rm" data-sel="${esc(s)}">Remove</button></li>`).join('') + '</ul>';
+      }
+    } else if (!this.view.model) {
+      out += '<p class="hint">Upload a model (Model tab) to choose which parts each view shows.</p>';
+    }
+    out += `<div class="row"><button data-act="vw-reset" class="danger" ${rules.length || lv.camera ? '' : 'disabled'}>Reset this view</button></div>`;
+    return out;
+  }
+
+  _nodePos(idx, node) {
+    if (!this._posCache || this._posCache.idx !== idx) this._posCache = { idx, map: new Map(idx.nodes.map((n, i) => [n.node, i])) };
+    const p = this._posCache.map.get(node);
+    return p === undefined ? -1 : p;
+  }
+
+  // Click on the model (Views tab): highlight the part and offer hide/show.
+  _pickView(e) {
+    const idx = this.card.viewIndex();
+    const owner = idx ? this.view.pickModel(e.clientX, e.clientY) : null;
+    const p = owner && owner.hit ? pickSelector(idx, this._nodePos(idx, owner.hit.object), owner.kind === 'untagged' ? null : owner) : null;
+    this._closeMenu();
+    if (!p) {
+      this.vwPick = null;
+      this.view.highlightModelNode(null);
+      this.render();
+      return;
+    }
+    this.vwPick = { sel: p.sel, idx: p.idx };
+    this.view.highlightModelNode(idx.nodes[p.idx].node);
+    const tree = this._tree();
+    const r = tree && [...tree.tree, ...tree.layers, ...tree.groups].find((x) => x.sel === p.sel);
+    this._openMenu(e, r ? r.label : idx.nodes[p.idx].name || p.sel);
+    this.render();
+  }
+
+  _openMenu(e, title) {
+    const stage = this.card._stage;
+    const m = document.createElement('div');
+    m.className = 'fp-pickmenu';
+    m.innerHTML = `<div class="title" title="${esc(this.vwPick.sel)}">${esc(title)}</div>
+      <button data-act="vw-hide-here">Hide in this view</button>
+      <button data-act="vw-show-here">Show in this view</button>
+      <button data-act="vw-hide-all">Hide in all views</button>
+      <button data-act="vw-reveal">Reveal in tree</button>`;
+    m.addEventListener('click', (ev) => this._onMenuClick(ev));
+    stage.append(m);
+    const r = stage.getBoundingClientRect();
+    const w = m.offsetWidth, h = m.offsetHeight;
+    const x = Math.max(4, Math.min(e.clientX - r.left + 8, r.width - w - 4));
+    const y = Math.max(4, Math.min(e.clientY - r.top + 8, r.height - h - 4));
+    m.style.left = x + 'px';
+    m.style.top = y + 'px';
+    this.menu = m;
+    window.addEventListener('pointerdown', this._onMenuAway, true);
+  }
+
+  _closeMenu() {
+    if (!this.menu) return;
+    window.removeEventListener('pointerdown', this._onMenuAway, true);
+    this.menu.remove();
+    this.menu = null;
+  }
+
+  _onMenuClick(e) {
+    const btn = e.target.closest('[data-act]');
+    const pick = this.vwPick;
+    if (!btn || !pick) return;
+    const cur = this.card.currentView();
+    this._closeMenu();
+    switch (btn.dataset.act) {
+      case 'vw-hide-here':
+      case 'vw-show-here':
+        if (!cur) return;
+        this.vwPick = null;
+        this.view.highlightModelNode(null);
+        this._setRule(cur.id, pick.sel, btn.dataset.act === 'vw-hide-here' ? 'hidden' : 'shown');
+        return;
+      case 'vw-hide-all': {
+        const views = { ...(this.layout.views || {}) };
+        for (const v of this.card._views) {
+          if (v.hidden) continue;
+          views[v.id] = { ...(views[v.id] || {}), rules: setRuleState(this._layoutRules(v.id), pick.sel, 'hidden') };
+        }
+        this.vwPick = null;
+        this.view.highlightModelNode(null);
+        this.commit({ ...this.layout, views });
+        return;
+      }
+      case 'vw-reveal': this._reveal(pick); return;
+      default:
+    }
+  }
+
+  // Scroll the tree row of a picked part (or of its nearest listed ancestor) into view and flash it.
+  _reveal(pick) {
+    this.tab = 'views';
+    this.render();
+    const tree = this._tree();
+    const idx = this.card.viewIndex();
+    let sel = pick.sel;
+    const rows = () => [...this.panel.querySelectorAll('ul.vtree li[data-sel]')];
+    if (!rows().some((li) => li.dataset.sel === sel) && tree && idx) {
+      for (let p = pick.idx; p >= 0; p = idx.nodes[p].parent) if (tree.rowOf.has(p)) { sel = tree.rowOf.get(p); break; }
+    }
+    const li = rows().find((x) => x.dataset.sel === sel);
+    if (!li) return;
+    li.scrollIntoView({ block: 'nearest' });
+    li.classList.remove('flash');
+    void li.offsetWidth; // restart the animation
+    li.classList.add('flash');
+    setTimeout(() => li.classList.remove('flash'), 1300);
+  }
+
+  // Panel buttons of the Views tab. Returns true when handled.
+  _viewsClick(act, btn) {
+    const card = this.card;
+    const v = this._vwView();
+    if (!v) return false;
+    const after = (fn) => queueMicrotask(fn); // runs after the commit's rebuild (queued first)
+    switch (act) {
+      case 'vw-add': {
+        const { id, n } = nextViewId([...card._views.map((x) => x.id), ...Object.keys(this.layout.views || {})]);
+        const views = { ...(this.layout.views || {}), [id]: { added: true, label: `View ${n}`, rules: this._layoutRules(v.id).map((r) => ({ ...r })) } };
+        this.vwSel = null;
+        this.commit({ ...this.layout, views });
+        after(() => card._setView(id));
+        return true;
+      }
+      case 'vw-hide': {
+        if (v.source === 'added') {
+          const views = { ...(this.layout.views || {}) };
+          delete views[v.id];
+          const order = this.layout.view_order;
+          this.vwSel = null;
+          this.commit({ ...this.layout, views, ...(Array.isArray(order) ? { view_order: order.filter((x) => x !== v.id) } : {}) });
+        } else if (v.hidden) {
+          this.vwSel = null;
+          card.saveViewPatch(v.id, { hidden: false });
+          after(() => card._setView(v.id));
+        } else {
+          this.vwSel = v.id; // keep editing it, so it can be unhidden
+          card.saveViewPatch(v.id, { hidden: true });
+        }
+        return true;
+      }
+      case 'vw-up':
+      case 'vw-down': {
+        const ids = card._views.map((x) => x.id);
+        const i = ids.indexOf(v.id), j = i + (act === 'vw-up' ? -1 : 1);
+        if (i < 0 || j < 0 || j >= ids.length) return true;
+        [ids[i], ids[j]] = [ids[j], ids[i]];
+        this.commit({ ...this.layout, view_order: ids });
+        return true;
+      }
+      case 'vw-save-cam':
+        card.saveViewPatch(v.id, { camera: this.view.getCamera() });
+        this.message = { text: `Saved the current camera as the start of "${v.label}".` };
+        return true;
+      case 'vw-reset-cam':
+      case 'vw-reset':
+        card.saveViewPatch(v.id, act === 'vw-reset' ? { rules: [], camera: null } : { camera: null });
+        if (v.id === card._viewId) after(() => card._resetCamera());
+        return true;
+      case 'vw-eye': {
+        const sel = btn.dataset.sel;
+        this._setRule(v.id, sel, nextEyeState(ruleState(this._layoutRules(v.id), sel)));
+        return true;
+      }
+      case 'vw-rm':
+        this._setRule(v.id, btn.dataset.sel, 'default');
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  _viewsChange(f, el) {
+    const card = this.card;
+    if (f === 'vw-view') {
+      const v = card._views.find((x) => x.id === el.value);
+      if (!v) return;
+      this.vwPick = null;
+      this.view.highlightModelNode(null);
+      if (v.hidden) { this.vwSel = v.id; this.render(); return; }
+      this.vwSel = null;
+      if (v.id === card._viewId) this.render();
+      else card._setView(v.id);
+      return;
+    }
+    const v = this._vwView();
+    if (!v) return;
+    if (f === 'vw-label') card.saveViewPatch(v.id, { label: el.value.trim() || undefined });
+    else if (f === 'vw-cut') card.saveViewPatch(v.id, { cut: el.checked });
+    else if (f === 'vw-floor') {
+      const cur = card._stateFor(v).floors;
+      const floors = this.floors.map((x) => x.id).filter((id) => (id === el.dataset.id ? el.checked : cur.includes(id)));
+      card.saveViewPatch(v.id, { floors });
+    }
   }
 
   // ---------- model ----------
@@ -892,16 +1226,17 @@ export class EditMode {
     const sel = (k, id) => (this.modelPick && this.modelPick.kind !== 'untagged' && this.modelPick.id === id && k.includes(this.modelPick.kind) ? 'sel' : '');
 
     if (manifest.levels.length) {
-      const opts = (v) => [
-        ['auto', 'auto'],
-        ...this.floors.flatMap((f) => [[`floor:${f.id}`, `with ${f.name} and floors above`], [`only:${f.id}`, `only on ${f.name}`]]),
-        ['always', 'always shown'], ['all-only', 'only in "All"'], ['hidden', 'hidden'],
+      // which HA floor a level belongs to (devices, linked floors, elevations); what each view shows is set in Views
+      const opts = (v, a) => [
+        ['auto', a.auto ? `auto (${a.floor ? (this.floors.find((f) => f.id === a.floor) || {}).name || a.floor : 'no floor'})` : 'auto'],
+        ...this.floors.map((f) => [`floor:${f.id}`, f.name]),
+        ['none', 'no floor'],
       ].map(([val, label]) => `<option value="${esc(val)}" ${val === v ? 'selected' : ''}>${esc(label)}</option>`).join('');
-      out += '<div class="sub">Levels</div><table class="floors">' + manifest.levels.map((l) => {
+      out += '<div class="sub">Levels: belongs to HA floor</div><table class="floors">' + manifest.levels.map((l) => {
         const a = levels[l.id];
-        const v = a.auto ? 'auto' : a.show === 'with' ? `floor:${a.floor}` : a.show === 'only' ? `only:${a.floor}` : a.show;
+        const v = a.auto ? 'auto' : a.floor ? `floor:${a.floor}` : 'none';
         return `<tr data-pick="level:${esc(l.id)}" class="${sel(['level'], l.id)}"><td title="${esc(l.role)}">${esc(l.label)}</td>
-          <td><select data-field="md-level" data-id="${esc(l.id)}">${opts(v)}</select></td>
+          <td><select data-field="md-level" data-id="${esc(l.id)}">${opts(v, a)}</select></td>
           <td class="dim">${a.stale ? '<span class="bad">floor deleted</span>' : a.auto ? 'auto' : ''}</td></tr>`;
       }).join('') + '</table>';
     }
@@ -953,10 +1288,19 @@ export class EditMode {
     const id = btn.dataset.id;
     const sel = this.room(this.selectedRoom);
     this.message = null;
+    if (btn.dataset.act.startsWith('vw-') && this._viewsClick(btn.dataset.act, btn)) {
+      this.render();
+      return;
+    }
     switch (btn.dataset.act) {
       case 'tab':
+        if (id !== this.tab) {
+          this.modelPick = null;
+          this.vwPick = null;
+          this._closeMenu();
+          this.view.highlightModelNode(null);
+        }
         this.tab = id;
-        if (id !== 'model') { this.modelPick = null; this.view.highlightModelNode(null); }
         this._syncStageClasses();
         break;
       case 'md-ack': this._snapshotKnown(); return;
@@ -1054,7 +1398,8 @@ export class EditMode {
     const el = e.target;
     const f = el.dataset.field;
     const sel = this.room(this.selectedRoom);
-    if (f === 'room-area' && sel) this.commit(E.upsertRoom(this.layout, { ...sel, area_id: el.value }));
+    if (f && f.startsWith('vw-')) this._viewsChange(f, el);
+    else if (f === 'room-area' && sel) this.commit(E.upsertRoom(this.layout, { ...sel, area_id: el.value }));
     else if (f === 'room-outdoor' && sel) this.commit(E.upsertRoom(this.layout, { ...sel, outdoor: el.checked }));
     else if (f === 'room-floor' && sel) {
       const area = this.hass.areas && this.hass.areas[sel.area_id];
@@ -1105,10 +1450,9 @@ export class EditMode {
       const m = this.layout.model || {};
       const levels = { ...(m.levels || {}) };
       if (v === 'auto') delete levels[el.dataset.id]; // back to automatic
-      else {
-        const keep = (this.card.modelBindings()?.levels[el.dataset.id] || {}).floor || undefined; // zones stay on their floor
-        levels[el.dataset.id] = v.startsWith('floor:') ? { floor: v.slice(6) } : v.startsWith('only:') ? { show: 'only', floor: v.slice(5) } : { show: v, floor: keep };
-      }
+      else if (v.startsWith('floor:')) levels[el.dataset.id] = { floor: v.slice(6) };
+      else if (v === 'none') levels[el.dataset.id] = { floor: null };
+      else return;
       this.setModelProps({ levels });
     } else if (f === 'md-room') {
       const m = this.layout.model || {};

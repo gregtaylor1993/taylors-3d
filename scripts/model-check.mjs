@@ -227,25 +227,39 @@ try {
   check('renamed levels still map by order', (await lv()) === JSON.stringify({ lvl_a0: 'with:ground', lvl_a1: 'with:first', exterior: 'always:ground', roof: 'all-only:null' }), await lv());
   const vis = () => page.evaluate(`(() => { const l = ${card}._view.modelManifest().levels; return [l[0].node.visible, l[1].node.visible]; })()`);
   check('ground shows its own storey only', JSON.stringify(await vis()) === '[true,false]');
-  await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-level][data-id=exterior]'); s.value = 'always'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  // legacy show modes (written before levels became "belongs to HA floor") stay readable
+  const setLevel = (id, b) => page.evaluate(`${card}._edit.setModelProps({ levels: { ...(${card}._layout.model.levels || {}), ${JSON.stringify(id)}: ${JSON.stringify(b)} } })`);
+  const selectLevel = (id, value) => page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-level][data-id=${id}]'); s.value = ${JSON.stringify(value)}; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await setLevel('exterior', { show: 'always', floor: 'ground' });
   await sleep(300);
   check('exterior "always" keeps its zones', await page.evaluate(`${card}._modelRooms.some((r) => r.id === 'm:garden')`)
     && JSON.stringify(await page.evaluate(`${card}._layout.model.levels.exterior`)) === '{"show":"always","floor":"ground"}', JSON.stringify(await page.evaluate(`${card}._layout.model.levels.exterior`)));
   check('exterior "always" does not remap storeys', (await lv()) === JSON.stringify({ exterior: 'always:ground', lvl_a0: 'with:ground', lvl_a1: 'with:first', roof: 'all-only:null' }), await lv());
-  await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-level][data-id=exterior]'); s.value = 'hidden'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  check('legacy show mode reads as its floor in the dropdown', await page.evaluate(`${card}.shadowRoot.querySelector('[data-field=md-level][data-id=exterior]').value === 'floor:ground'`));
+  await setLevel('exterior', { show: 'hidden', floor: 'ground' });
   await sleep(300);
   check('exterior "hidden" does not remap storeys', (await lv()) === JSON.stringify({ exterior: 'hidden:ground', lvl_a0: 'with:ground', lvl_a1: 'with:first', roof: 'all-only:null' }), await lv());
-  await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-level][data-id=exterior]'); s.value = 'auto'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await selectLevel('exterior', 'auto');
   await sleep(200);
   check('mapped level visible on its floor', JSON.stringify(await vis()) === '[true,false]');
   check('level rows marked auto', (await page.evaluate(`${panel('table.floors')}.textContent`)).includes('auto'));
-  await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-level][data-id=lvl_a1]'); s.value = 'always'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  check('level dropdown: auto, HA floors, no floor', (await page.evaluate(`[...${card}.shadowRoot.querySelectorAll('[data-field=md-level][data-id=exterior] option')].map((o) => o.value).join()`)) === 'auto,floor:ground,floor:first,none',
+    await page.evaluate(`[...${card}.shadowRoot.querySelectorAll('[data-field=md-level][data-id=exterior] option')].map((o) => o.value).join()`));
+  await selectLevel('exterior', 'none');
   await sleep(200);
-  check('choose "always shown"', JSON.stringify(await page.evaluate(`${card}._layout.model.levels.lvl_a1`)).includes('"always"') && JSON.stringify(await vis()) === '[true,true]', JSON.stringify(await page.evaluate(`${card}._layout.model.levels`)));
-  await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-level][data-id=lvl_a0]'); s.value = 'hidden'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  check('"no floor" writes { floor: null }', JSON.stringify(await page.evaluate(`${card}._layout.model.levels.exterior`)) === '{"floor":null}'
+    && JSON.parse(await lv()).exterior === 'always:null' && await page.evaluate(`${card}.shadowRoot.querySelector('[data-field=md-level][data-id=exterior]').value === 'none'`), await lv());
+  await selectLevel('exterior', 'floor:first');
   await sleep(200);
-  check('choose "hidden"', JSON.stringify(await vis()) === '[false,true]');
-  await page.evaluate(`(() => { const s = ${card}.shadowRoot.querySelector('[data-field=md-level][data-id=lvl_a0]'); s.value = 'auto'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  check('choosing a floor writes { floor }', JSON.stringify(await page.evaluate(`${card}._layout.model.levels.exterior`)) === '{"floor":"first"}');
+  await selectLevel('exterior', 'auto');
+  await setLevel('lvl_a1', { show: 'always', floor: 'first' });
+  await sleep(200);
+  check('legacy "always shown"', JSON.stringify(await page.evaluate(`${card}._layout.model.levels.lvl_a1`)).includes('"always"') && JSON.stringify(await vis()) === '[true,true]', JSON.stringify(await page.evaluate(`${card}._layout.model.levels`)));
+  await setLevel('lvl_a0', { show: 'hidden', floor: 'ground' });
+  await sleep(200);
+  check('legacy "hidden"', JSON.stringify(await vis()) === '[false,true]');
+  await selectLevel('lvl_a0', 'auto');
   await sleep(200);
   check('choose "auto" removes the saved binding', !('lvl_a0' in (await page.evaluate(`${card}._layout.model.levels`))) && JSON.stringify(await vis()) === '[true,true]'
     && await page.evaluate(`${card}.shadowRoot.querySelector('[data-field=md-level][data-id=lvl_a0]').value === 'auto'`));

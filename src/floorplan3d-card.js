@@ -14,7 +14,7 @@ import {
 import { threeAdapter } from './manifest.js';
 import {
   nodeIndex, resolveViews, resolveVisibility, primaryLevel, defaultFloors, levelOrders, isOverview, floorLevels, deviceState,
-  defaultViewId, viewCut,
+  defaultViewId, viewCut, orderViews,
 } from './views.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 
@@ -182,6 +182,34 @@ const STYLE = `
   .fp-marker.fp-faded { opacity: .3; }
   .compact .fp-dot { width: 21px; height: 21px; --mdc-icon-size: 13px; border-width: 1px; }
   .compact .fp-val { font-size: 9.5px; padding: 0 4px; }
+  .stage.picking-views { cursor: pointer; }
+  .panel details.advanced { margin: 12px 0 4px; }
+  .panel details.advanced summary { cursor: pointer; color: var(--secondary-text-color); font-size: 12px; }
+  .panel .floor-links { display: flex; flex-wrap: wrap; gap: 0 12px; }
+  .panel .floor-links label.check { margin: 3px 0; }
+  .panel ul.vtree li { display: flex; align-items: center; gap: 4px; padding: 1px 0 1px calc(var(--d, 0) * 14px);
+    border-radius: 4px; min-height: 26px; }
+  .panel ul.vtree li .name { font-size: 12.5px; }
+  .panel ul.vtree li.off .name, .panel ul.vtree li.off .state { opacity: .45; }
+  .panel ul.vtree li.lvl > .name { font-weight: 500; }
+  .panel ul.vtree li.picked { background: rgba(3,169,244,.12); }
+  .panel ul.vtree .state { --mdc-icon-size: 15px; color: var(--secondary-text-color); display: flex; }
+  .panel ul.vtree button.eye { padding: 2px 5px; display: flex; align-items: center; --mdc-icon-size: 16px; line-height: 1; }
+  .panel ul.vtree button.eye.shown { color: var(--primary-color); border-color: var(--primary-color); }
+  .panel ul.vtree button.eye.hidden { color: var(--error-color, #db4437); border-color: var(--error-color, #db4437); }
+  .panel ul.vtree button.eye.default { opacity: .7; }
+  .panel ul.vtree li.flash { animation: fp-flash 1.2s ease-out; }
+  @keyframes fp-flash { 0%, 40% { background: color-mix(in srgb, var(--primary-color, #03a9f4) 35%, transparent); } 100% { background: transparent; } }
+  .panel ul.vtree li.gone .name { text-decoration: line-through; opacity: .6; }
+  .fp-pickmenu { position: absolute; z-index: 5; display: flex; flex-direction: column; gap: 2px; padding: 6px; min-width: 170px;
+    box-sizing: border-box; border-radius: 8px; font-size: 12.5px; color: var(--primary-text-color);
+    background: var(--card-background-color, #fff); border: 1px solid var(--divider-color, rgba(0,0,0,.12));
+    box-shadow: 0 4px 16px rgba(0,0,0,.28); }
+  .fp-pickmenu .title { padding: 2px 6px 4px; font-size: 11px; color: var(--secondary-text-color);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+  .fp-pickmenu button { font: inherit; text-align: left; padding: 6px 8px; border: none; border-radius: 5px; cursor: pointer;
+    background: none; color: inherit; }
+  .fp-pickmenu button:hover { background: color-mix(in srgb, var(--primary-color, #03a9f4) 14%, transparent); }
 `;
 
 function cssColor(el, name, fallback) {
@@ -706,7 +734,7 @@ class Floorplan3dCard extends HTMLElement {
     const manifest = mb ? mb.manifest : null;
     const haFloors = mergeFloors(this._hass, manifest ? { floors: [] } : l);
     const savedLevels = { ...(this._config.model ? levelsFromFloorMap(this._config.model_floors) : {}), ...((l.model && l.model.levels) || {}) };
-    const key = JSON.stringify([haFloors.map((f) => [f.id, f.name]), l.views || null, this._config.views || null, savedLevels, mb ? mb.levels : null]);
+    const key = JSON.stringify([haFloors.map((f) => [f.id, f.name]), l.views || null, l.view_order || null, this._config.views || null, savedLevels, mb ? mb.levels : null]);
     if (manifest === b.viewManifest && key === b.viewKey) return false;
     if (manifest !== b.viewManifest) {
       this._index = manifest && this._view.model ? nodeIndex(threeAdapter(this._view.model.root), manifest) : null;
@@ -714,7 +742,7 @@ class Floorplan3dCard extends HTMLElement {
     }
     b.viewManifest = manifest;
     b.viewKey = key;
-    this._views = resolveViews({ manifest, haFloors, layoutViews: l.views, yamlViews: this._config.views, savedLevels });
+    this._views = orderViews(resolveViews({ manifest, haFloors, layoutViews: l.views, yamlViews: this._config.views, savedLevels }), l.view_order);
     return true;
   }
 
@@ -813,6 +841,7 @@ class Floorplan3dCard extends HTMLElement {
     if (v.camera) this._view.setCamera(v.camera, { instant });
     else if (!this._view.model) this._view.fit({ instant });
     this._syncToolbar();
+    if (this._editing) this._edit.onViewChanged();
   }
 
   // First view after load / model change: its saved camera, else frame it.

@@ -256,3 +256,113 @@ export function viewCut(view, { tagged, elevations, wallHeight }) {
   if (tagged || !on || !elevations || !elevations.length) return null;
   return Math.max(...elevations) + Math.max(Number(wallHeight) || 0, 0.3);
 }
+
+// ---------- edit mode: per-view rule edits, element tree, picks, order ----------
+
+const selOf = (r) => (r ? r.show ?? r.hide : undefined);
+
+// 'shown' | 'hidden' | 'default' for a selector in a rule list (the last rule for it wins).
+export function ruleState(rules, sel) {
+  let s = 'default';
+  for (const r of rules || []) if (selOf(r) === sel) s = r.show !== undefined ? 'shown' : 'hidden';
+  return s;
+}
+
+// Drop every rule for the selector, then append the new one ('default' appends nothing).
+export function setRuleState(rules, sel, state) {
+  const out = (rules || []).filter((r) => selOf(r) !== sel).map((r) => ({ ...r }));
+  if (state === 'shown') out.push({ show: sel });
+  else if (state === 'hidden') out.push({ hide: sel });
+  return out;
+}
+
+export const nextEyeState = (s) => ({ default: 'shown', shown: 'hidden' }[s] || 'default');
+
+const TAG_SEL = { level: 'level', room: 'room', zone: 'zone', object: 'object' };
+
+// Rows for the Views tab: tree (levels -> rooms/zones -> objects), layers, untagged model groups
+// (named nodes with children, at most two levels below a level or the model root).
+// Each row: { sel, label, depth, nodes: [index positions], path? }.
+export function viewTree(index, labels = {}) {
+  const nodes = index.nodes;
+  const rows = new Map(); // sel -> row (several nodes may carry the same tag)
+  const row = (sel, i, depth, extra) => {
+    let r = rows.get(sel);
+    if (r) { r.nodes.push(i); return null; }
+    r = { sel, label: labels[sel] || nodes[i].name || sel, depth, nodes: [i], ...extra };
+    rows.set(sel, r);
+    return r;
+  };
+  const nearest = (i, kinds) => {
+    for (let p = nodes[i].parent; p >= 0; p = nodes[p].parent) if (nodes[p].tag && kinds.includes(nodes[p].tag.kind)) return p;
+    return -1;
+  };
+  const sel = (n) => TAG_SEL[n.tag.kind] + ':' + n.tag.id;
+  const tagged = (kinds) => nodes.map((n, i) => i).filter((i) => nodes[i].tag && kinds.includes(nodes[i].tag.kind));
+  const levels = tagged(['level']), places = tagged(['room', 'zone']), objects = tagged(['object']);
+  const tree = [];
+  const push = (r) => { if (r) tree.push(r); };
+  const objectsUnder = (p, depth) => objects.filter((o) => nearest(o, ['room', 'zone', 'level']) === p)
+    .forEach((o) => push(row(sel(nodes[o]), o, depth)));
+  const placesUnder = (lv, depth) => places.filter((p) => nearest(p, ['level']) === lv).forEach((p) => {
+    const r = row(sel(nodes[p]), p, depth);
+    push(r);
+    objectsUnder(p, depth + 1);
+  });
+  for (const lv of levels) {
+    const r = row(sel(nodes[lv]), lv, 0);
+    if (!r) continue;
+    push(r);
+    placesUnder(lv, 1);
+    objectsUnder(lv, 1);
+  }
+  placesUnder(-1, 0); // rooms/zones outside any level
+  objectsUnder(-1, 0);
+
+  const layers = [];
+  nodes.forEach((n, i) => n.layers.forEach((name) => {
+    const r = row('layer:' + name, i, 0);
+    if (r) layers.push(r);
+  }));
+
+  const depth = new Array(nodes.length);
+  const groups = [];
+  nodes.forEach((n, i) => {
+    depth[i] = n.tag && n.tag.kind === 'level' ? 0 : (n.parent >= 0 ? depth[n.parent] : 0) + 1;
+    if (!n.tag && n.name && n.children.length && depth[i] <= 2) {
+      const r = row('node:' + n.path, i, depth[i] - 1, { path: n.path });
+      if (r) groups.push(r);
+    }
+  });
+  return { tree, layers, groups };
+}
+
+// Selector for a click in 3D: a tagged room/zone/object owner by its tag; otherwise (untagged, or
+// inside a level) the nearest named group with children above the hit node, not past the owning
+// level; a mesh directly in a level picks the mesh. hitIdx = index position of the hit node.
+export function pickSelector(index, hitIdx, owner) {
+  const nodes = index.nodes;
+  if (!(hitIdx >= 0 && hitIdx < nodes.length)) return null;
+  const ownerIdx = owner && owner.node ? nodes.findIndex((n) => n.node === owner.node) : -1;
+  if (owner && ownerIdx >= 0 && TAG_SEL[owner.kind] && (owner.kind !== 'level' || ownerIdx === hitIdx)) {
+    return { sel: TAG_SEL[owner.kind] + ':' + owner.id, idx: ownerIdx };
+  }
+  for (let p = nodes[hitIdx].parent; p >= 0 && p !== ownerIdx; p = nodes[p].parent) {
+    if (nodes[p].name && nodes[p].children.length) return { sel: 'node:' + nodes[p].path, idx: p };
+  }
+  return { sel: 'node:' + nodes[hitIdx].path, idx: hitIdx };
+}
+
+// Views sorted by a stored id order; ids not in it keep their relative place after the ordered ones.
+export function orderViews(views, order) {
+  const pos = new Map((Array.isArray(order) ? order : []).map((id, i) => [id, i]));
+  const n = pos.size + 1;
+  return (views || []).map((v, i) => [v, pos.has(v.id) ? pos.get(v.id) : n + i]).sort((a, b) => a[1] - b[1]).map((x) => x[0]);
+}
+
+export function nextViewId(ids) {
+  const used = new Set(ids || []);
+  let n = 1;
+  while (used.has('view_' + n)) n++;
+  return { id: 'view_' + n, n };
+}
