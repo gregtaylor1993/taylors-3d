@@ -643,6 +643,7 @@ export class FloorplanView {
     st.line.scale.set(1, Math.max(h, 1e-4), 1);
     st.line.userData.height = h;
     st.disc.position.set(world.x, floor + 0.05, world.z); // above room fills (+0.02), glows, trail
+    st.line.visible = st.disc.visible && h > 0.01;
   }
 
   _disposeStems() {
