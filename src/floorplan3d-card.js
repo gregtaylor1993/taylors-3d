@@ -240,6 +240,19 @@ const STYLE = `
   .panel ul.vtree button.eye.shown { color: var(--primary-color); border-color: var(--primary-color); }
   .panel ul.vtree button.eye.hidden { color: var(--error-color, #db4437); border-color: var(--error-color, #db4437); }
   .panel ul.vtree button.eye.default { opacity: .7; }
+  .panel ul.otree { list-style: none; margin: 4px 0; padding: 0; }
+  .panel ul.otree li.room { display: flex; align-items: center; gap: 4px; padding: 2px 0 2px calc(var(--d, 0) * 14px); font-size: 12.5px; }
+  .panel ul.otree li.lvl { font-weight: 500; }
+  .panel ul.otree li.obj { padding: 4px 6px; margin: 2px 0 2px 28px; border-radius: 6px; border: 1px solid var(--divider-color); }
+  .panel ul.otree li.obj.sel { background: rgba(3,169,244,.12); border-color: var(--primary-color); }
+  .panel ul.otree li.obj.hid .name { opacity: .5; }
+  .panel ul.otree li.obj .orow { display: flex; align-items: center; gap: 6px; --mdc-icon-size: 16px; margin-bottom: 3px; }
+  .panel ul.otree li.obj .orow .name { flex: 1; font-size: 12.5px; }
+  .panel ul.otree li.obj .orow label.check { margin: 0; font-size: 12px; }
+  .panel ul.otree li.obj input[type=text], .panel ul.otree li.obj input:not([type]) { width: 100%; box-sizing: border-box; }
+  .panel ul.otree .badge { font-size: 9.5px; padding: 0 4px; border-radius: 4px; background: var(--secondary-background-color, rgba(127,127,127,.2)); color: var(--secondary-text-color); }
+  .panel ul.otree .badge.warn { background: none; color: var(--error-color, #db4437); border: 1px solid currentColor; }
+  .panel ul.otree li.flash { animation: fp-flash 1.2s ease-out; }
   .panel ul.vtree li.flash { animation: fp-flash 1.2s ease-out; }
   @keyframes fp-flash { 0%, 40% { background: color-mix(in srgb, var(--primary-color, #03a9f4) 35%, transparent); } 100% { background: transparent; } }
   .panel ul.vtree li.part .state { color: var(--primary-color); }
@@ -1198,7 +1211,7 @@ class Floorplan3dCard extends HTMLElement {
   }
 
   // The nearest tappable object (visible, bound, not hidden, level shown) within radius px of a client point.
-  _objectHit(x, y, radius) {
+  _objectHit(x, y, radius, all = false) {
     const layer = this._objects;
     if (!layer || !layer.model || !this._hass) return null;
     const groups = (this._layout && this._layout.groups) || {};
@@ -1207,7 +1220,7 @@ class Floorplan3dCard extends HTMLElement {
     for (const a of layer.anchors()) {
       const o = layer.objectAt(a.id);
       const b = o && o.binding;
-      if (!b || b.hidden || (!b.missing && !actionTarget(o.obj, b, groups))) continue;
+      if (!all && (!b || b.hidden || (!b.missing && !actionTarget(o.obj, b, groups)))) continue;
       if (!levelShown(o.obj.level) || !nodeShown(o.obj.node)) continue;
       const p = this._view.projectWorld(a.world);
       if (p) pts.push({ id: a.id, x: p[0], y: p[1] });
@@ -1225,15 +1238,18 @@ class Floorplan3dCard extends HTMLElement {
     }
     if (!this._objectTapsOn() || e.button !== 0 || !e.isPrimary) return;
     if ((this._popup.el && path.includes(this._popup.el)) || path.some((n) => n.classList && n.classList.contains('toolbar'))) return;
-    const id = this._objectHit(e.clientX, e.clientY, e.pointerType === 'touch' ? OBJECT_HIT_PX.touch : OBJECT_HIT_PX.mouse);
+    const id = this._objectHit(e.clientX, e.clientY, e.pointerType === 'touch' ? OBJECT_HIT_PX.touch : OBJECT_HIT_PX.mouse, this._editing);
     if (!id) return; // markers and the model as before
     if (e.target !== canvas) e.stopPropagation(); // the object wins over a marker under the finger
     const g = { id, x: e.clientX, y: e.clientY, pointerId: e.pointerId, long: false };
-    g.timer = setTimeout(() => {
-      g.long = true;
-      g.timer = null;
-      this._runObjectAction(id, 'hold');
-    }, LONG_PRESS_MS);
+    // edit mode (Objects tab): a tap selects the object's row; no hold action
+    if (!this._editing) {
+      g.timer = setTimeout(() => {
+        g.long = true;
+        g.timer = null;
+        this._runObjectAction(id, 'hold');
+      }, LONG_PRESS_MS);
+    }
     g.move = (ev) => {
       if (ev.pointerId === g.pointerId && Math.hypot(ev.clientX - g.x, ev.clientY - g.y) >= CLICK_SLOP_PX) this._endGesture();
     };
@@ -1241,7 +1257,10 @@ class Floorplan3dCard extends HTMLElement {
       if (ev.pointerId !== g.pointerId) return;
       const tap = !g.long && Math.hypot(ev.clientX - g.x, ev.clientY - g.y) < CLICK_SLOP_PX;
       this._endGesture();
-      if (tap) this._runObjectAction(id, 'tap');
+      if (tap) {
+        if (this._editing) this._edit.selectObject(id);
+        else this._runObjectAction(id, 'tap');
+      }
     };
     g.cancel = () => this._endGesture();
     g.menu = (ev) => ev.preventDefault(); // a touch hold opens no context menu
@@ -1262,6 +1281,17 @@ class Floorplan3dCard extends HTMLElement {
     window.removeEventListener('pointercancel', g.cancel, true);
     // the contextmenu of a touch hold follows the pointerup
     setTimeout(() => window.removeEventListener('contextmenu', g.menu, true), 400);
+  }
+
+  // Objects tab "Test": the tap toggle (own entity, else the group controller). False when nothing can be toggled.
+  testObject(id) {
+    const o = this._objects && this._objects.objectAt(id);
+    if (!o || !this._hass) return false;
+    const target = actionTarget(o.obj, o.binding, (this._layout && this._layout.groups) || {}, this._hass.states);
+    const st = target && this._hass.states[target];
+    if (!st || st.state === 'unavailable' || st.state === 'unknown') return false;
+    this._hass.callService(...toggleCall(target));
+    return true;
   }
 
   // toggle: own entity, else the group controller; nothing usable (missing / unavailable): the popup says so.

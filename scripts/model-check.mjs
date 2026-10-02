@@ -447,6 +447,62 @@ try {
   if (p) await page.mouse.click(p[0], p[1]);
   await sleep(200);
   check('edit mode: tapping the lamp does not toggle it', (await calls()) === n1);
+  {
+  // Objects tab (edit mode)
+  const sr = `${card}.shadowRoot`;
+  const tabBtn = () => page.evaluate(`!![...${sr}.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === 'Objects')`);
+  check('Objects tab is shown (the model has objects)', await tabBtn());
+  check('Objects tab sits after Devices', await page.evaluate(`[...${sr}.querySelectorAll('.tabs button')].map((b) => b.textContent.trim()).slice(0, 3).join()`) === 'Rooms,Devices,Objects');
+  await page.evaluate(`[...${sr}.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === 'Objects').click()`);
+  await sleep(200);
+  check('rooms start collapsed (no object rows)', (await page.evaluate(`${sr}.querySelectorAll('li.obj').length`)) === 0);
+  // click the lamp in 3D: selects (expands) its row, does not toggle
+  const nObj = await calls();
+  const hall0 = await hall();
+  p = await at();
+  await page.mouse.click(p[0], p[1]);
+  await sleep(300);
+  const rowInfo = () => page.evaluate(`(() => { const li = ${sr}.querySelector('li.obj[data-obj=test_lamp]'); if (!li) return null;
+    const inp = li.querySelector('[data-field=obj-entity]'); return { sel: li.classList.contains('sel'), ph: inp.placeholder, val: inp.value, badge: (li.querySelector('.badge') || {}).textContent || '' }; })()`);
+  let ri = await rowInfo();
+  check('tapping the lamp in 3D selects its row', !!ri && ri.sel, JSON.stringify(ri));
+  check('the tap did not toggle it', (await calls()) === nObj && (await hall()) === hall0);
+  check('row shows the auto entity', !!ri && ri.badge === 'auto' && ri.ph === 'light.hall' && ri.val === '', JSON.stringify(ri));
+  // rebind to another entity
+  const other = await page.evaluate(`Object.keys(${card}._hass.states).find((e) => e.startsWith('light.') && e !== 'light.hall')`);
+  const setEntity = (v) => page.evaluate(`(() => { const i = ${sr}.querySelector('[data-field=obj-entity][data-id=test_lamp]'); i.value = ${JSON.stringify(v)}; i.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await setEntity(other);
+  await sleep(300);
+  const bound = () => page.evaluate(`(() => { const b = ${card}._bindings.get('test_lamp'); const o = ${card}._objects.objectAt('test_lamp'); return { cfg: ${card}._layout.objects && ${card}._layout.objects.test_lamp, e: b.entity, layer: o.binding.entity }; })()`);
+  let bd = await bound();
+  check('changing the entity rebinds the object', bd.e === other && bd.layer === other && bd.cfg && bd.cfg.entity === other, JSON.stringify(bd));
+  await setEntity('light.does_not_exist');
+  await sleep(300);
+  ri = await rowInfo();
+  check('an unknown entity shows "entity not found"', !!ri && ri.badge === 'entity not found', JSON.stringify(ri));
+  await setEntity('');
+  await sleep(300);
+  bd = await bound();
+  check('clearing the entity returns to auto', bd.e === 'light.hall' && !bd.cfg, JSON.stringify(bd));
+  // Test toggles through callService
+  const c0 = await calls();
+  const h0 = await hall();
+  await page.evaluate(`${sr}.querySelector('li.obj[data-obj=test_lamp] button[data-act=obj-test]').click()`);
+  await sleep(200);
+  check('Test toggles the bound light', (await calls()) === c0 + 1 && (await hall()) !== h0, `${c0} -> ${await calls()}`);
+  // Hide
+  await page.evaluate(`(() => { const c = ${sr}.querySelector('[data-field=obj-hidden][data-id=test_lamp]'); c.checked = true; c.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await sleep(300);
+  check('hide marks the object hidden', await page.evaluate(`!!${card}._bindings.get('test_lamp').hidden && ${card}._layout.objects.test_lamp.hidden === true`));
+  await page.evaluate(`(() => { const c = ${sr}.querySelector('[data-field=obj-hidden][data-id=test_lamp]'); c.checked = false; c.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await sleep(300);
+  check('un-hide drops the entry', await page.evaluate(`!${card}._bindings.get('test_lamp').hidden && !(${card}._layout.objects || {}).test_lamp`));
+  await page.screenshot({ path: path.join(root, 'screenshots', 'objects-tab.png') });
+  // leaving the tab turns object taps off again
+  await page.evaluate(`[...${sr}.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === 'Devices').click()`);
+  await sleep(200);
+  check('object taps are off again outside the Objects tab', await page.evaluate(`!${card}._objectTapsOn()`));
+  }
   allErrors.push(...s.errors);
 } finally {
   await s.close();

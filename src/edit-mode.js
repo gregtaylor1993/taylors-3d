@@ -75,6 +75,8 @@ export class EditMode {
     this.vwSel = null; // a hidden view chosen in the Views tab (visible views follow the chips)
     this.vwPick = null; // { sel, idx } last part clicked in 3D on the Views tab
     this.vwExpanded = new Set(); // room/zone rows showing their objects
+    this.objExpanded = new Set(); // Objects tab: room rows showing their objects (collapsed by default)
+    this.objSel = null; // Objects tab: object picked in 3D / its row
     this.menu = null;
     this._onMenuAway = (e) => { if (this.menu && !e.composedPath().includes(this.menu)) this._closeMenu(); };
   }
@@ -213,6 +215,7 @@ export class EditMode {
       this._pickRoom(e);
       return;
     }
+    if (this.tab === 'objects' && this.view.model && !this.drawing) return; // object taps: the card's gesture
     if (this.tab === 'views' && this.view.model && !this.drawing) {
       this._pickView(e);
       return;
@@ -712,9 +715,11 @@ export class EditMode {
     const adv = this.panel.querySelector('details.advanced');
     if (adv) this._advancedOpen = adv.open;
     this._renderedTab = this.tab;
-    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ['mower', 'Mower'], ['views', 'Views'], ['model', 'Model'], ['data', 'Data']];
+    const hasObjects = this._hasObjects();
+    if (this.tab === 'objects' && !hasObjects) this.tab = 'devices';
+    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ...(hasObjects ? [['objects', 'Objects']] : []), ['mower', 'Mower'], ['views', 'Views'], ['model', 'Model'], ['data', 'Data']];
     const body = {
-      rooms: () => this._roomsTab(), devices: () => this._devicesTab(), mower: () => this._mowerTab(), views: () => this._viewsTab(),
+      rooms: () => this._roomsTab(), devices: () => this._devicesTab(), objects: () => this._objectsTab(), mower: () => this._mowerTab(), views: () => this._viewsTab(),
       model: () => this._modelTab(), data: () => this._dataTab(),
     }[this.tab]();
     const msg = this.message ? `<div class="msg ${this.message.error ? 'error' : this.message.warn ? 'warn' : ''}">${esc(this.message.text)}</div>` : '';
@@ -884,6 +889,104 @@ export class EditMode {
       out += '</ul>';
     } else out += '<p class="dim">Nothing hidden.</p>';
     return out;
+  }
+
+  _hasObjects() {
+    const mb = this.view.model && this.card.modelBindings();
+    return !!(mb && mb.manifest.objects && mb.manifest.objects.length);
+  }
+
+  // Objects tab: model objects by level -> room (rooms collapsed), each with its entity binding.
+  _objectsTab() {
+    const mb = this.card.modelBindings();
+    const objs = (mb && mb.manifest.objects) || [];
+    const states = this.hass.states;
+    const bindings = this.card._bindings || new Map();
+    const ids = Object.keys(states).sort();
+    const DOMAINS = {
+      light: ['light', 'switch'], light_strip: ['light', 'switch'], mower: ['lawn_mower'], dock: ['lawn_mower', 'binary_sensor'],
+      ev_charger: ['sensor', 'switch', 'binary_sensor'], climate: ['climate'],
+    };
+    const ICONS = {
+      light: 'mdi:lightbulb', light_strip: 'mdi:led-strip-variant', mower: 'mdi:robot-mower', dock: 'mdi:home-lightning-bolt',
+      ev_charger: 'mdi:ev-station', climate: 'mdi:thermostat',
+    };
+    const listFor = (type) => {
+      const d = DOMAINS[type];
+      return d ? ids.filter((id) => d.includes(id.split('.')[0])) : ids;
+    };
+    const types = [...new Set(objs.map((o) => (DOMAINS[o.type] ? o.type : 'other')))];
+    const datalists = types.map((t) => `<datalist id="fp-obj-${t}">${listFor(t).map((x) => `<option value="${esc(x)}">`).join('')}</datalist>`).join('');
+    const lo = this.layout.objects || {};
+    const rowHtml = (o) => {
+      const b = bindings.get(o.id) || {};
+      const t = DOMAINS[o.type] ? o.type : 'other';
+      const saved = lo[o.id] || {};
+      const explicit = saved.entity !== undefined;
+      const sug = (o.suggest || {}).entity;
+      let badge = '', value = '', ph = 'auto: none';
+      if (explicit) {
+        value = saved.entity === null ? 'none' : saved.entity;
+        if (b.missing) badge = '<span class="badge warn">entity not found</span>';
+      } else if (b.entity) { badge = '<span class="badge">auto</span>'; ph = b.entity; } else if (sug) {
+        badge = '<span class="badge warn">entity not found</span>';
+        ph = `auto: ${sug}`;
+      }
+      const sel = this.objSel === o.id;
+      return `<li class="obj${sel ? ' sel' : ''}${b.hidden ? ' hid' : ''}" data-obj="${esc(o.id)}">
+        <div class="orow"><ha-icon icon="${ICONS[t] || 'mdi:cube-outline'}"></ha-icon><span class="name">${esc(o.label || o.id)}</span>${badge}
+          <button data-act="obj-test" data-id="${esc(o.id)}" title="Toggle it like a tap in the view">Test</button>
+          <label class="check"><input type="checkbox" data-field="obj-hidden" data-id="${esc(o.id)}" ${b.hidden ? 'checked' : ''}> Hide</label></div>
+        <input list="fp-obj-${t}" data-field="obj-entity" data-id="${esc(o.id)}" value="${esc(value)}" placeholder="${esc(ph)}" title="Empty: automatic; type none to leave it unbound">
+        ${o.group ? `<div class="dim">Group ${esc(o.group)}</div>` : ''}</li>`;
+    };
+    const levelOf = new Map(mb.manifest.levels.map((l) => [l.id, l]));
+    const roomOf = new Map(mb.manifest.rooms.map((r) => [r.id, r]));
+    const order = [...new Set([...mb.manifest.levels.map((l) => l.id), ...objs.map((o) => o.level)])];
+    let out = datalists + '<p class="hint">Bind each model object to a Home Assistant entity. Empty means automatic; "none" leaves it unbound. Click an object in the plan to find its row.</p>';
+    out += '<ul class="otree">';
+    for (const lid of order) {
+      const inLevel = objs.filter((o) => o.level === lid);
+      if (!inLevel.length) continue;
+      const lv = levelOf.get(lid);
+      out += `<li class="room lvl"><span class="name">${esc(lv ? lv.label : lid || 'No level')}</span></li>`;
+      const roomIds = [...new Set(inLevel.map((o) => o.room || ''))];
+      for (const rid of roomIds) {
+        const list = inLevel.filter((o) => (o.room || '') === rid);
+        const key = `${lid}/${rid}`;
+        const open = this.objExpanded.has(key) || list.some((o) => o.id === this.objSel);
+        const r = roomOf.get(rid);
+        out += `<li class="room" style="--d:1"><button class="link expand" data-act="obj-expand" data-key="${esc(key)}">${open ? '\u25be' : '\u25b8'}</button>
+          <span class="name">${esc(r ? r.label : rid ? rid : 'No room')}</span><span class="dim">${list.length}</span></li>`;
+        if (open) out += list.map(rowHtml).join('');
+      }
+    }
+    out += '</ul>';
+    const groups = [...new Set(objs.map((o) => o.group).filter(Boolean))].sort();
+    if (groups.length) {
+      const lg = this.layout.groups || {};
+      const gl = ids.filter((id) => /^(light|switch)\./.test(id));
+      out += `<div class="sub">Groups</div><p class="hint">A group controller must be on too: a fixture is lit only while its own entity and the controller are both on.</p>
+        <datalist id="fp-grp-ents">${gl.map((x) => `<option value="${esc(x)}">`).join('')}</datalist>`;
+      out += groups.map((g) => `<label>${esc(g)} <input list="fp-grp-ents" data-field="grp-entity" data-id="${esc(g)}"
+        value="${esc((lg[g] && lg[g].entity) || '')}" placeholder="no controller"></label>`).join('');
+    }
+    return out;
+  }
+
+  // A click on an object in 3D (Objects tab): open its room, select and show its row.
+  selectObject(id) {
+    const mb = this.card.modelBindings();
+    const o = mb && mb.manifest.objects.find((x) => x.id === id);
+    if (!o) return;
+    this.objSel = id;
+    this.objExpanded.add(`${o.level}/${o.room || ''}`);
+    this.render();
+    const row = [...this.panel.querySelectorAll('li.obj')].find((x) => x.dataset.obj === id);
+    if (row) {
+      row.scrollIntoView({ block: 'nearest' });
+      row.classList.add('flash');
+    }
   }
 
   _mowerTab() {
@@ -1600,9 +1703,19 @@ export class EditMode {
           this._closeMenu();
           this.view.highlightModelNode(null);
         }
+        if (id !== 'objects') this.objSel = null;
         this.tab = id;
         this._syncStageClasses();
         break;
+      case 'obj-expand':
+        if (this.objExpanded.has(btn.dataset.key)) this.objExpanded.delete(btn.dataset.key);
+        else this.objExpanded.add(btn.dataset.key);
+        this.render();
+        return;
+      case 'obj-test':
+        if (!this.card.testObject(id)) this.message = { text: 'Nothing to toggle: bind a working entity first.', warn: true };
+        this.render();
+        return;
       case 'md-ack': this._snapshotKnown(); return;
       case 'md-copy-report': {
         const mb = this.card.modelBindings();
@@ -1724,6 +1837,16 @@ export class EditMode {
       const pos = this.card._positions.get(this.selectedMarker);
       if (!Number.isFinite(v) || !pos) return;
       this.commit(E.setPin(this.layout, this.selectedMarker, { x: pos.x, y: pos.y, z: v, floor_id: pos.floorId, on_model: this._onModel(this.selectedMarker) }));
+    } else if (f === 'obj-entity') {
+      const v = el.value.trim();
+      this.commit(E.setObject(this.layout, el.dataset.id, { entity: v === '' ? undefined : v.toLowerCase() === 'none' ? null : v }));
+      this.render();
+    } else if (f === 'obj-hidden') {
+      this.commit(E.setObject(this.layout, el.dataset.id, { hidden: el.checked }));
+      this.render();
+    } else if (f === 'grp-entity') {
+      this.commit(E.setGroup(this.layout, el.dataset.id, { entity: el.value.trim() }));
+      this.render();
     } else if (f === 'mower-entity') {
       this.setMower({ entity: el.value.trim() });
     } else if (f === 'mower-source') {

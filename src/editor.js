@@ -263,3 +263,27 @@ export function migrateLegacyPins(layout, boundFloors) {
     p && !p.on_model && bound.has(p.floor_id) ? { ...p, on_model: true } : p]));
   return { ...layout, pins, model: { ...m, pins_migrated: true } };
 }
+
+// layout.objects[id] = { entity?, hidden? }: merge a patch. `entity: undefined` removes the key
+// (back to automatic binding); `hidden: false` drops the flag. An entry with nothing left is removed.
+export function setObject(layout, id, patch) {
+  const cur = { ...((layout.objects || {})[id] || {}) };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === undefined || (k === 'hidden' && !v)) delete cur[k];
+    else cur[k] = v;
+  }
+  const objects = { ...(layout.objects || {}) };
+  if (Object.keys(cur).length) objects[id] = cur;
+  else delete objects[id];
+  return { ...layout, objects };
+}
+
+// layout.groups[name] = { entity }: the optional controller of a fixture group. No entity: no entry.
+export function setGroup(layout, name, patch) {
+  const cur = { ...((layout.groups || {})[name] || {}), ...patch };
+  if (!cur.entity) delete cur.entity;
+  const groups = { ...(layout.groups || {}) };
+  if (Object.keys(cur).length) groups[name] = cur;
+  else delete groups[name];
+  return { ...layout, groups };
+}

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   snapPoint, floorVertices, nearestEdge, newRoomId, upsertRoom, deleteRoom, moveVertex, insertVertex,
   removeVertex, addDoor, removeDoor, cleanPolygon, setPin, clearPin, hide, unhide, upsertFloor, deleteFloor,
-  newFloorId, parseImport, fitImport,
+  newFloorId, parseImport, fitImport, setObject, setGroup,
 } from '../src/editor.js';
 
 const square = { id: 'r1', polygon: [[0, 0], [4, 0], [4, 3], [0, 3]] };
@@ -163,5 +163,31 @@ describe('fitImport', () => {
     const { floorMap, layout: l } = fitImport(layout, [], []);
     expect(floorMap).toEqual({});
     expect(l.rooms).toEqual(layout.rooms);
+  });
+});
+
+describe('setObject / setGroup', () => {
+  it('merges into layout.objects without mutating', () => {
+    const l = { objects: { a: { entity: 'light.x' } } };
+    const n = setObject(l, 'a', { hidden: true });
+    expect(n.objects.a).toEqual({ entity: 'light.x', hidden: true });
+    expect(l.objects.a).toEqual({ entity: 'light.x' });
+    expect(setObject({}, 'b', { entity: 'light.y' }).objects.b).toEqual({ entity: 'light.y' });
+  });
+  it('entity undefined returns to auto, null stays explicit', () => {
+    const l = { objects: { a: { entity: 'light.x', hidden: true } } };
+    expect(setObject(l, 'a', { entity: undefined }).objects.a).toEqual({ hidden: true });
+    expect(setObject(l, 'a', { entity: null }).objects.a).toEqual({ entity: null, hidden: true });
+  });
+  it('un-hiding the last flag removes the entry', () => {
+    const l = { objects: { a: { hidden: true }, b: { entity: 'light.b' } } };
+    const n = setObject(l, 'a', { hidden: false });
+    expect(n.objects).toEqual({ b: { entity: 'light.b' } });
+  });
+  it('setGroup sets and clears a controller', () => {
+    const l = { groups: { g: { entity: 'light.g' } } };
+    expect(setGroup({}, 'g', { entity: 'switch.s' }).groups.g).toEqual({ entity: 'switch.s' });
+    expect(setGroup(l, 'g', { entity: '' }).groups).toEqual({});
+    expect(l.groups.g.entity).toBe('light.g');
   });
 });
