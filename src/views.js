@@ -92,3 +92,84 @@ export function unmatchedSelectors(index, rules) {
   }
   return [...new Set(out)];
 }
+
+const byOrder = (a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.minY ?? 0) - (b.minY ?? 0);
+const isStorey = (l) => l.role === 'storey' || l.role === 'basement';
+
+export function modelViewRules(v) {
+  const show = (v.show || []).map((s) => ({ show: s }));
+  const hide = (v.hide || []).map((s) => ({ hide: s }));
+  return show.length ? [{ hide: 'all' }, ...show, ...hide] : hide;
+}
+
+export function generatedViews(levels) {
+  const storeys = levels.filter(isStorey).sort(byOrder);
+  const out = storeys.map((l, i) => ({
+    id: l.id, label: l.label || l.id,
+    rules: [{ hide: 'all' }, ...storeys.slice(0, i + 1).map((s) => ({ show: 'level:' + s.id })), { show: 'role:exterior' }],
+  }));
+  out.push({ id: 'all', label: 'All', rules: [] });
+  return out;
+}
+
+export function migrateShowModes(savedLevels) {
+  const all = [], floorViews = [];
+  for (const [id, b] of Object.entries(savedLevels || {})) {
+    if (!b || typeof b !== 'object') continue;
+    if (b.show === 'hidden') all.push({ hide: 'level:' + id });
+    else if (b.show === 'always') all.push({ show: 'level:' + id });
+    else if (b.show === 'all-only') floorViews.push({ hide: 'level:' + id });
+  }
+  return { all, floorViews };
+}
+
+const isCam = (c) => c && Array.isArray(c.position) && Array.isArray(c.target);
+const obj = (o) => (o && typeof o === 'object' && !Array.isArray(o) ? o : {});
+
+export function resolveViews({ manifest, haFloors, layoutViews, yamlViews, savedLevels }) {
+  let base;
+  if (!manifest) {
+    base = [...haFloors.map((f) => ({ id: f.id, label: f.name, rules: [], floors: [f.id], source: 'floors' })),
+      { id: 'all', label: 'All', rules: [], floors: null, source: 'floors' }];
+  } else if (manifest.views && manifest.views.length) {
+    base = manifest.views.map((v) => ({ id: v.id, label: v.label, rules: modelViewRules(v), camera: v.camera, floors: null, source: 'model' }));
+  } else {
+    const mig = migrateShowModes(savedLevels);
+    base = generatedViews(manifest.levels).map((v) => ({
+      ...v, floors: null, source: 'generated',
+      rules: [...v.rules, ...(v.id === 'all' ? mig.all : [...mig.all, ...mig.floorViews])],
+    }));
+  }
+  const lv = obj(layoutViews), yv = obj(yamlViews);
+  const added = Object.entries(lv).filter(([id, v]) => obj(v).added && !base.some((b) => b.id === id))
+    .map(([id, v]) => ({ id, label: obj(v).label || id, rules: [], floors: null, source: 'added' }));
+  return [...base, ...added].map((b) => {
+    const l = obj(lv[b.id]), y = obj(yv[b.id]);
+    const pick = (k, d) => (y[k] !== undefined ? y[k] : l[k] !== undefined ? l[k] : d);
+    const rules = [...b.rules, ...(Array.isArray(l.rules) ? l.rules : []), ...(Array.isArray(y.rules) ? y.rules : [])];
+    const camera = isCam(y.camera) ? y.camera : isCam(l.camera) ? l.camera : (b.camera || null);
+    const floors = Array.isArray(y.floors) ? y.floors : Array.isArray(l.floors) ? l.floors : b.floors;
+    return { id: b.id, label: pick('label', b.label), rules, camera, floors, cut: pick('cut', null), source: b.source, hidden: !!pick('hidden', false) };
+  });
+}
+
+export function primaryLevel(index, effective, levels) {
+  const visible = new Set(index.nodes.filter((n, i) => effective[i] && n.tag && n.tag.kind === 'level').map((n) => n.tag.id));
+  const storeys = levels.filter((l) => isStorey(l) && visible.has(l.id)).sort(byOrder);
+  return storeys.length ? storeys[storeys.length - 1].id : null;
+}
+
+export function defaultFloors(primaryLevelId, levelFloor) {
+  const f = primaryLevelId && levelFloor[primaryLevelId];
+  return f ? [f] : [];
+}
+
+export function markerState({ roomId, roomLevelId, markerFloorId }, ctx) {
+  if (roomId) {
+    const shown = ctx.visibleRooms.has(roomId);
+    const order = ctx.levelOrder[roomLevelId];
+    const faded = shown && ctx.primaryOrder !== null && order !== undefined && order < ctx.primaryOrder;
+    return { shown, faded };
+  }
+  return { shown: ctx.isAll || ctx.viewFloors.has(markerFloorId), faded: false };
+}

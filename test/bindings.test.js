@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   levelsFromFloorMap, migrateModel, resolveLevels, resolveRoomAreas, transformPoint, modelRooms,
-  combineRooms, levelFloorOverrides, bindingDiff, snapshotDiff, levelVisible,
+  combineRooms, levelFloorOverrides, bindingDiff, snapshotDiff, levelVisible, measuredElevations,
 } from '../src/bindings.js';
 
 const L = (id, role = 'storey', order = null, extra = {}) => ({ kind: 'level', id, role, order, elevation: null, height: null, ...extra });
@@ -248,5 +248,18 @@ describe('levelVisible (stacking)', () => {
   it('falls back to equality when elevations are unknown', () => {
     expect(levelVisible(w('x'), 'y', () => undefined)).toBe(false);
     expect(levelVisible(w('x'), 'x', () => undefined)).toBe(true);
+  });
+});
+
+describe('measuredElevations', () => {
+  it('ground at 0, others from their lowest point, heights from the next storey', () => {
+    expect(measuredElevations([
+      { id: 'ground', role: 'storey', order: null, minY: -0.3, elevation: null },
+      { id: 'attic', role: 'storey', order: null, minY: 2.89, elevation: null },
+      { id: 'site', role: 'exterior', order: null, minY: -0.25, elevation: null },
+    ])).toEqual({ ground: { elevation: 0, height: 2.9 }, attic: { elevation: 2.9, height: 2.7 } });
+  });
+  it('keeps tagged elevations out', () => {
+    expect(measuredElevations([{ id: 'g', role: 'storey', order: 0, minY: 0, elevation: 0 }])).toEqual({});
   });
 });

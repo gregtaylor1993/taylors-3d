@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parseSelector, nodeIndex, matches, resolveVisibility, unmatchedSelectors } from '../src/views.js';
+import { parseSelector, nodeIndex, matches, resolveVisibility, unmatchedSelectors,
+  modelViewRules, generatedViews, migrateShowModes, resolveViews, primaryLevel, defaultFloors, markerState } from '../src/views.js';
 import { buildManifest } from '../src/manifest.js';
 
 const tree = (roots) => {
@@ -103,5 +104,71 @@ describe('views edge cases', () => {
     const i2 = nodeIndex(a2, buildManifest(a2));
     const hit = i2.nodes.filter((n) => matches(parseSelector('node:root/a.b[1]'), n)).map((n) => n.name);
     expect(hit).toEqual(['a.b[1]']);
+  });
+});
+
+
+describe('view sources', () => {
+  const levels = [
+    { id: 'attic', label: 'Attic', role: 'storey', order: 1 },
+    { id: 'ground', label: 'Ground floor', role: 'storey', order: 0 },
+    { id: 'exterior', label: 'Exterior', role: 'exterior', order: null },
+    { id: 'roof', label: 'roof', role: 'roof', order: null },
+  ];
+  it('model view {show, hide} → rules', () => {
+    expect(modelViewRules({ show: ['level:ground'], hide: ['role:roof'] })).toEqual([{ hide: 'all' }, { show: 'level:ground' }, { hide: 'role:roof' }]);
+    expect(modelViewRules({ show: [], hide: ['role:roof'] })).toEqual([{ hide: 'role:roof' }]);
+  });
+  it('generated views stack storeys and keep the exterior (legacy generated views)', () => {
+    expect(generatedViews(levels)).toEqual([
+      { id: 'ground', label: 'Ground floor', rules: [{ hide: 'all' }, { show: 'level:ground' }, { show: 'role:exterior' }] },
+      { id: 'attic', label: 'Attic', rules: [{ hide: 'all' }, { show: 'level:ground' }, { show: 'level:attic' }, { show: 'role:exterior' }] },
+      { id: 'all', label: 'All', rules: [] },
+    ]);
+  });
+  it('migrates legacy level show modes', () => {
+    expect(migrateShowModes({ roof: { show: 'hidden' }, attic: { show: 'all-only' }, site: { show: 'always' }, ground: { floor: 'f' } }))
+      .toEqual({ all: [{ hide: 'level:roof' }, { show: 'level:site' }], floorViews: [{ hide: 'level:attic' }] });
+  });
+  it('merges model → layout → yaml, with added and hidden views', () => {
+    const manifest = { levels, views: [{ id: 'ground', label: 'Ground', show: ['level:ground'], hide: [], camera: null }, { id: 'all', label: 'Everything', show: [], hide: [], camera: null }] };
+    const v = resolveViews({
+      manifest, haFloors: [{ id: 'floor1', name: 'Floor1' }],
+      layoutViews: { ground: { rules: [{ hide: 'layer:ceiling' }], camera: { position: [1, 1, 1], target: [0, 0, 0] }, floors: ['floor1'] }, all: { hidden: true }, night: { added: true, label: 'Night', rules: [{ show: 'role:exterior' }] } },
+      yamlViews: { ground: { label: 'GF', rules: [{ hide: 'type:light' }] } },
+      savedLevels: {},
+    });
+    expect(v.map((x) => [x.id, x.label, x.source, x.hidden])).toEqual([['ground', 'GF', 'model', false], ['all', 'Everything', 'model', true], ['night', 'Night', 'added', false]]);
+    expect(v[0].rules).toEqual([{ hide: 'all' }, { show: 'level:ground' }, { hide: 'layer:ceiling' }, { hide: 'type:light' }]);
+    expect(v[0].floors).toEqual(['floor1']);
+    expect(v[0].camera).toEqual({ position: [1, 1, 1], target: [0, 0, 0] });
+  });
+  it('without a model: one view per HA floor plus all', () => {
+    const v = resolveViews({ manifest: null, haFloors: [{ id: 'f1', name: 'F1' }, { id: 'f2', name: 'F2' }], layoutViews: {}, yamlViews: {}, savedLevels: {} });
+    expect(v.map((x) => [x.id, x.label, x.source, x.floors])).toEqual([['f1', 'F1', 'floors', ['f1']], ['f2', 'F2', 'floors', ['f2']], ['all', 'All', 'floors', null]]);
+  });
+  it('generated views get migrated show-mode rules', () => {
+    const v = resolveViews({ manifest: { levels, views: [] }, haFloors: [], layoutViews: {}, yamlViews: {}, savedLevels: { attic: { show: 'all-only' } } });
+    expect(v.find((x) => x.id === 'ground').rules.at(-1)).toEqual({ hide: 'level:attic' });
+    expect(v.find((x) => x.id === 'all').rules).toEqual([]);
+  });
+});
+
+describe('primary level, floors, devices', () => {
+  const lv = [{ id: 'ground', role: 'storey', order: 0 }, { id: 'attic', role: 'storey', order: 1 }, { id: 'exterior', role: 'exterior', order: null }];
+  it('primary = highest visible storey; default floors follow it', () => {
+    const v = resolveVisibility(idx, [{ hide: 'all' }, { show: 'level:ground' }, { show: 'level:attic' }]);
+    expect(primaryLevel(idx, v, lv)).toBe('attic');
+    expect(defaultFloors('attic', { attic: 'mansard', ground: 'floor1' })).toEqual(['mansard']);
+    expect(defaultFloors(null, {})).toEqual([]);
+  });
+  it('device follows its visible room, fades below the primary level, falls back to linked floors', () => {
+    const ctx = { visibleRooms: new Set(['kitchen', 'lawn']), primaryOrder: 1, levelOrder: { ground: 0, attic: 1 }, viewFloors: new Set(['mansard']), isAll: false };
+    expect(markerState({ roomId: 'kitchen', roomLevelId: 'ground', markerFloorId: 'floor1' }, ctx)).toEqual({ shown: true, faded: true });
+    expect(markerState({ roomId: 'lawn', roomLevelId: 'exterior', markerFloorId: 'floor1' }, ctx)).toEqual({ shown: true, faded: false });
+    expect(markerState({ roomId: 'bath', roomLevelId: 'ground', markerFloorId: 'floor1' }, ctx)).toEqual({ shown: false, faded: false });
+    expect(markerState({ roomId: null, roomLevelId: null, markerFloorId: 'mansard' }, ctx)).toEqual({ shown: true, faded: false });
+    expect(markerState({ roomId: null, roomLevelId: null, markerFloorId: 'floor1' }, ctx)).toEqual({ shown: false, faded: false });
+    expect(markerState({ roomId: null, roomLevelId: null, markerFloorId: 'floor1' }, { ...ctx, isAll: true })).toEqual({ shown: true, faded: false });
   });
 });

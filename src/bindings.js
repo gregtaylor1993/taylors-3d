@@ -180,3 +180,21 @@ export function snapshotDiff(manifest, known) {
   const k = isPlainObject(known) ? known : {};
   return { levels: one(m.levels, k.levels), rooms: one(m.rooms, k.rooms) };
 }
+
+// Elevation/height for levels the model did not tag with numbers, measured from their geometry.
+export function measuredElevations(levels) {
+  const storeys = levels.filter((l) => (l.role === 'storey' || l.role === 'basement')).slice()
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.minY ?? 0) - (b.minY ?? 0));
+  const snap = (v) => Math.round(v / 0.05) * 0.05;
+  const elev = new Map();
+  const ground = storeys.find((l) => l.role === 'storey' && (l.minY ?? 0) <= 0.5);
+  for (const l of storeys) elev.set(l.id, l === ground ? 0 : snap(l.minY ?? 0));
+  const out = {};
+  storeys.forEach((l, i) => {
+    if (Number.isFinite(l.elevation)) return;
+    const e = Math.round(elev.get(l.id) * 1000) / 1000;
+    const next = storeys[i + 1];
+    out[l.id] = { elevation: e, height: next ? Math.round((elev.get(next.id) - e) * 1000) / 1000 : 2.7 };
+  });
+  return out;
+}
