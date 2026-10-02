@@ -442,8 +442,34 @@ export class FloorplanView {
   // The tagged part under a screen point: nearest tagged ancestor of the first visible hit below
   // the cut; untagged meshes come back as { kind: 'untagged' } so the UI can say so.
   pickModel(clientX, clientY) {
+    const hit = this._modelHit(clientX, clientY);
+    if (!hit) return null;
+    const fn = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : null;
+    const hitInfo = { point: hit.point.toArray(), object: hit.object, up: !fn || Math.abs(fn.y) >= Math.cos((25 * Math.PI) / 180) };
+    const owner = this.model.manifest.ownerOf(hit.object);
+    if (owner) return { ...owner, hit: hitInfo };
+    const names = [];
+    for (let p = hit.object; p && p !== this.model.root; p = p.parent) names.unshift((p.userData && p.userData.name) || p.name || '?');
+    return { kind: 'untagged', node: hit.object, path: names.join('/'), hit: hitInfo };
+  }
+
+  // The model surface under a screen point (visible, opaque meshes below the cut, section respected):
+  // { point, normal (unit, facing the camera), object, owner (manifest entry or null) } or null.
+  surfaceAt(clientX, clientY) {
+    const hit = this._modelHit(clientX, clientY);
+    if (!hit) return null;
+    const normal = hit.face
+      ? hit.face.normal.clone().applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld)).normalize()
+      : new THREE.Vector3(0, 1, 0);
+    if (normal.dot(this.raycaster.ray.direction) > 0) normal.negate(); // double-sided / flipped faces: the side we look at
+    return { point: hit.point.clone(), normal, object: hit.object, owner: this.model.manifest.ownerOf(hit.object) };
+  }
+
+  // First visible model intersection under a screen point (raycaster left set to that ray).
+  _modelHit(clientX, clientY) {
     if (!this.model) return null;
     const r = this.renderer.domElement.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
     const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.camera);
     const shown = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
@@ -458,14 +484,7 @@ export class FloorplanView {
     };
     const hit = this.raycaster.intersectObject(this.model.root, true)
       .find((h) => candidate(h.object) && shown(h.object) && h.point.y <= this.modelClip.constant + 1e-6 && !this._cutAway(h.point));
-    if (!hit) return null;
-    const fn = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : null;
-    const hitInfo = { point: hit.point.toArray(), object: hit.object, up: !fn || Math.abs(fn.y) >= Math.cos((25 * Math.PI) / 180) };
-    const owner = this.model.manifest.ownerOf(hit.object);
-    if (owner) return { ...owner, hit: hitInfo };
-    const names = [];
-    for (let p = hit.object; p && p !== this.model.root; p = p.parent) names.unshift((p.userData && p.userData.name) || p.name || '?');
-    return { kind: 'untagged', node: hit.object, path: names.join('/'), hit: hitInfo };
+    return hit || null;
   }
 
   highlightModelNode(node) {

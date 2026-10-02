@@ -90,8 +90,9 @@ export function wallSegments(rooms, { doorWidth = 0.9, doorSnap = 0.3 } = {}) {
 
 // Positions for all markers: pins win, otherwise auto placement inside the first room drawn
 // for the marker's area. Returns Map id -> {x, y, z, floorId, auto}. Markers without a room
-// and without a pin are left out (the editor lists them).
-export function markerPositions(markers, layout, hass, floors) {
+// and without a pin are left out (the editor lists them). attachAt(pin, floorId) resolves pins
+// attached to a model object ({ x, y, z } or null = object not there: the stored position).
+export function markerPositions(markers, layout, hass, floors, attachAt = null) {
   const out = new Map();
   const floorById = new Map(floors.map((f) => [f.id, f]));
   const roomByArea = new Map();
@@ -102,7 +103,9 @@ export function markerPositions(markers, layout, hass, floors) {
     const pin = layout.pins && layout.pins[m.id];
     if (pin) {
       const floorId = floorById.has(pin.floor_id) ? pin.floor_id : floors[0].id;
-      out.set(m.id, { x: pin.x, y: pin.y, z: pin.z ?? 1.2, floorId, auto: false });
+      const at = pin.attach && attachAt ? attachAt(pin, floorId) : null;
+      out.set(m.id, at ? { x: at.x, y: at.y, z: at.z, floorId, auto: false, attached: pin.attach }
+        : { x: pin.x, y: pin.y, z: pin.z ?? 1.2, floorId, auto: false });
       continue;
     }
     const room = roomByArea.get(m.areaId);

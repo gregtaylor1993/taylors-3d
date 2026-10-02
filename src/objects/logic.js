@@ -129,3 +129,27 @@ export function screenNearest(points, x, y, radius) {
   }
   return best;
 }
+
+// ---------- magnetic drag ----------
+const vec = (v) => (Array.isArray(v) ? { x: v[0], y: v[1], z: v[2] } : v);
+export const SNAP_OFFSET = 0.05; // markers float 5 cm off the surface they stick to
+
+// A model surface hit ({ point, normal } in card world) -> plan pin 5 cm off the surface along its normal.
+export function snapPin(hit, floorElevation, floorId) {
+  const p = vec(hit.point), n = vec(hit.normal);
+  const wx = p.x + n.x * SNAP_OFFSET, wy = p.y + n.y * SNAP_OFFSET, wz = p.z + n.z * SNAP_OFFSET;
+  return { x: wx, y: -wz, z: wy - (floorElevation || 0), floor_id: floorId };
+}
+
+// Offset (world metres, mm) of a plan position { x, y, z } on a floor at floorElevation from an anchor.
+export function attachOffset(anchor, pos, floorElevation) {
+  const a = vec(anchor), r = (v) => Math.round(v * 1000) / 1000 || 0;
+  return [r(pos.x - a.x), r((floorElevation || 0) + pos.z - a.y), r(-pos.y - a.z)];
+}
+
+// Plan position { x, y, z } of an attached marker: anchor + offset, z above floorElevation.
+export function attachedPosition(anchor, offset, floorElevation) {
+  if (!anchor || !Array.isArray(offset) || offset.length !== 3 || !offset.every(Number.isFinite)) return null;
+  const a = vec(anchor);
+  return { x: a.x + offset[0], y: -(a.z + offset[2]), z: a.y + offset[1] - (floorElevation || 0) };
+}

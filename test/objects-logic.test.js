@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bindObjects, chainState, lightColor, lightLevel, lightBudget, nightFactor, sunVector, screenNearest, sunStrength, clampSunDir } from '../src/objects/logic.js';
+import { bindObjects, chainState, lightColor, lightLevel, lightBudget, nightFactor, sunVector, screenNearest, sunStrength, clampSunDir, snapPin, attachedPosition, attachOffset } from '../src/objects/logic.js';
 
 const st = (entity_id, state, attributes = {}) => ({ entity_id, state, attributes });
 
@@ -169,5 +169,53 @@ describe('sun below the horizon', () => {
     expect(v[0]).toBeGreaterThan(0.99);
     expect(clampSunDir([0, 0.5, 0.5])).toEqual([0, 0.5, 0.5]);
     expect(clampSunDir([0, -1, 0])).toEqual([0, 1, 0]);
+  });
+});
+
+describe('snapPin', () => {
+  const v = (x, y, z) => ({ x, y, z });
+  it('wall hit: 5 cm off the wall along the normal, height above the floor', () => {
+    // wall facing east (+x) at world x = 2, plan y = 3 (world z = -3), 1.4 m up on a floor at 3 m
+    const p = snapPin({ point: v(2, 4.4, -3), normal: v(1, 0, 0) }, 3, 'upper');
+    expect(p.x).toBeCloseTo(2.05, 9);
+    expect(p.y).toBeCloseTo(3, 9);
+    expect(p.z).toBeCloseTo(1.4, 9);
+    expect(p.floor_id).toBe('upper');
+  });
+  it('wall facing north (world -z) moves the pin north in plan', () => {
+    const p = snapPin({ point: v(1, 1, -2), normal: v(0, 0, -1) }, 0, 'g');
+    expect(p.y).toBeCloseTo(2.05, 9);
+    expect(p.x).toBeCloseTo(1, 9);
+  });
+  it('ceiling hit: just below the ceiling', () => {
+    const p = snapPin({ point: v(1, 2.7, -1), normal: v(0, -1, 0) }, 0, 'g');
+    expect(p.z).toBeCloseTo(2.65, 9);
+    expect([p.x, p.y]).toEqual([1, 1]);
+  });
+  it('accepts arrays', () => {
+    const p = snapPin({ point: [0, 1, 0], normal: [0, 1, 0] }, 0, 'g');
+    expect(p.z).toBeCloseTo(1.05, 9);
+  });
+});
+
+describe('attached pins', () => {
+  it('offset = marker world point - anchor (mm), round trip through attachedPosition', () => {
+    const anchor = { x: 1, y: 2.5, z: -2 };
+    const off = attachOffset(anchor, { x: 1.2, y: 2.1, z: 0.4, floorId: 'g' }, 0.3);
+    // marker world: (1.2, 0.3 + 0.4, -2.1)
+    expect(off).toEqual([0.2, -1.8, -0.1]);
+    const p = attachedPosition(anchor, off, 0.3);
+    expect(p.x).toBeCloseTo(1.2, 9);
+    expect(p.y).toBeCloseTo(2.1, 9);
+    expect(p.z).toBeCloseTo(0.4, 9);
+  });
+  it('follows the anchor', () => {
+    const p = attachedPosition({ x: 5, y: 1, z: -5 }, [0, 0.2, 0], 0);
+    expect([p.x, p.y]).toEqual([5, 5]);
+    expect(p.z).toBeCloseTo(1.2, 9);
+  });
+  it('bad offset -> null', () => {
+    expect(attachedPosition({ x: 0, y: 0, z: 0 }, null, 0)).toBeNull();
+    expect(attachedPosition(null, [0, 0, 0], 0)).toBeNull();
   });
 });

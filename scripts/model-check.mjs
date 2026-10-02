@@ -1233,6 +1233,148 @@ try {
   await s.close();
 }
 
+// 2g. magnetic drag (demo/house.glb uploaded): a marker sticks to a wall, attaches to a model object
+// (an injected lamp), follows it when the model is realigned, Alt-drag never attaches, Detach keeps the spot
+s = await openDemo({ view: '3d', height: '560px' }, { width: 1500, height: 680 });
+try {
+  const { page } = s;
+  const sr = `${card}.shadowRoot`;
+  const clickText = async (t) => {
+    const ok = await page.evaluate((t) => {
+      const b = [...document.querySelector('floorplan3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === t);
+      if (b) b.click();
+      return !!b;
+    }, t);
+    await sleep(200);
+    return ok;
+  };
+  await page.evaluate(`${sr}.querySelector('button.edit').click()`);
+  await sleep(300);
+  await clickText('Model');
+  const input = await page.evaluateHandle(`${sr}.querySelector('.panel [data-field=model-file]')`);
+  await input.uploadFile(path.join(root, 'demo', 'house.glb'));
+  await page.waitForFunction(`${card}._view.model && ${card}._view.modelManifest().levels.length === 4`, { timeout: 10000 });
+  await sleep(400);
+  await page.evaluate(`${sr}.querySelector('.chip[data-view=ground]').click()`);
+  await settle(page, card);
+  await clickText('Devices');
+  // the sofa becomes a lamp object (manifest entry + owner lookup), unbound
+  const injected = await page.evaluate(`(() => { const c = ${card}, v = c._view, m = v.model;
+    const node = m.root.getObjectByName('sofa');
+    if (!node) return null;
+    let mesh = node.isMesh ? node : null;
+    node.traverse((n) => { if (!mesh && n.isMesh) mesh = n; });
+    const entry = { kind: 'object', id: 'test_lamp', type: 'light', label: 'Test lamp', node, glow: mesh.name, level: 'level0', room: null, group: null, suggest: {} };
+    m.manifest.objects = (m.manifest.objects || []).concat([entry]);
+    m.manifest.byNode.set(node, entry);
+    c._objects.setModel(null); c._objects.setModel(m);
+    c._bindKey = null; c._syncBindings(); c._buildMarkers(); c._refreshStates(); c._updateObjects();
+    v.dirty = true;
+    return node.name; })()`);
+  check('magnetic: lamp object injected into the uploaded model', !!injected, String(injected));
+  await sleep(200);
+  // screen points: a wall face (vertical normal, 0.7–2.3 m up) and the lamp
+  const targets = await page.evaluate(`(() => { const c = ${card}, v = c._view, r = v.renderer.domElement.getBoundingClientRect();
+    let wall = null, lamp = null;
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    for (let y = r.top + 20; y < r.bottom - 20; y += 12) for (let x = r.left + 20; x < r.right - 20; x += 12) {
+      const h = v.surfaceAt(x, y);
+      if (!h) continue;
+      const d = Math.hypot(x - cx, y - cy);
+      if (h.owner && h.owner.id === 'test_lamp') { if (!lamp || d < lamp.d) lamp = { x, y, d }; continue; }
+      if (Math.abs(h.normal.y) < 0.1 && h.point.y > 0.7 && h.point.y < 2.3 && (!wall || d < wall.d))
+        wall = { x, y, d, point: [h.point.x, -h.point.z], n: [h.normal.x, -h.normal.z] };
+    }
+    return { wall, lamp }; })()`);
+  check('magnetic: found a wall face and the lamp on screen', !!targets.wall && !!targets.lamp, JSON.stringify(targets));
+  // draggable markers: shown, not the mower, the pointer at their centre reaches them
+  const markers = await page.evaluate(`(() => { const c = ${card}, out = [];
+    for (const [id, el] of c._markerEls) {
+      const o = c._view.markerObjects.get(id);
+      if (!o || !o.obj.visible || id === c._mowerMarkerId) continue;
+      const b = el.querySelector('.fp-dot').getBoundingClientRect();
+      const x = b.left + b.width / 2, y = b.top + b.height / 2;
+      const hit = c.shadowRoot.elementFromPoint(x, y);
+      if (hit && el.contains(hit)) out.push({ id, x, y });
+    }
+    return out; })()`);
+  check('magnetic: three draggable markers', markers.length >= 3, String(markers.length));
+  const drag = async (m, to, alt = false) => {
+    await page.mouse.move(m.x, m.y);
+    if (alt) await page.keyboard.down('Alt');
+    await page.mouse.down();
+    await page.mouse.move((m.x + to.x) / 2, (m.y + to.y) / 2, { steps: 4 });
+    await page.mouse.move(to.x, to.y, { steps: 6 });
+    await sleep(50);
+    await page.mouse.up();
+    if (alt) await page.keyboard.up('Alt');
+    await sleep(250);
+  };
+  const pinOf = (id) => page.evaluate(`JSON.stringify((${card}._layout.pins || {})[${JSON.stringify(id)}] || null)`).then(JSON.parse);
+  if (targets.wall && targets.lamp && markers.length >= 3) {
+    const [a, b, c3] = markers;
+    // 1) wall
+    await drag(a, targets.wall);
+    let pin = await pinOf(a.id);
+    const w = targets.wall;
+    const dist = pin ? Math.hypot(pin.x - w.point[0], pin.y - w.point[1]) : 99;
+    check('magnetic: marker dropped on a wall sticks to it (z 0.5–2.6, x/y on the wall ±0.1, on_model, not attached)',
+      !!pin && pin.z > 0.5 && pin.z < 2.6 && dist <= 0.1 && pin.on_model === true && !pin.attach, JSON.stringify({ pin, wall: w, dist }));
+    check('magnetic: the wall marker sits off the wall towards the viewer', !!pin && ((pin.x - w.point[0]) * w.n[0] + (pin.y - w.point[1]) * w.n[1]) > 0.02, JSON.stringify(pin));
+    check('magnetic: highlight cleared after the drop', await page.evaluate(`!${card}._view.pickHelper`));
+    // 2) lamp
+    await drag(b, targets.lamp);
+    pin = await pinOf(b.id);
+    check('magnetic: drop on the lamp attaches (attach + offset, on_model)', !!pin && pin.attach === 'test_lamp' && Array.isArray(pin.offset) && pin.on_model === true, JSON.stringify(pin));
+    const where = (id) => page.evaluate(`(() => { const c = ${card}; const p = c._positions.get(${JSON.stringify(id)}); const o = c._view.markerObjects.get(${JSON.stringify(id)});
+      const a = c._objects.anchorOf('test_lamp');
+      return { pos: p, world: o && o.obj.position.toArray(), anchor: a && a.toArray() }; })()`);
+    const w0 = await where(b.id);
+    const off0 = w0.world.map((v, i) => v - w0.anchor[i]);
+    check('magnetic: attached marker = anchor + stored offset', pin && off0.every((v, i) => Math.abs(v - pin.offset[i]) < 0.002), JSON.stringify({ off0, offset: pin && pin.offset }));
+    // 3) realign the model: the attached marker follows the lamp, its pin is not realigned
+    await page.evaluate(`${card}._edit.setModelProps({ position: [0.5, 0, 0] }, false)`);
+    await sleep(400);
+    const w1 = await where(b.id);
+    const pin1 = await pinOf(b.id);
+    const off1 = w1.world.map((v, i) => v - w1.anchor[i]);
+    check('magnetic: realigned model -> the attached marker follows the lamp (+0.5 m east)',
+      Math.abs(w1.anchor[0] - w0.anchor[0] - 0.5) < 0.01 && Math.abs(w1.world[0] - w0.world[0] - 0.5) < 0.01 && off1.every((v, i) => Math.abs(v - off0[i]) < 0.002),
+      JSON.stringify({ w0, w1 }));
+    check('magnetic: realign leaves the attached pin as stored', JSON.stringify(pin1) === JSON.stringify(pin), JSON.stringify(pin1));
+    // the lamp moved: find it on screen again
+    const lamp2 = await page.evaluate(`(() => { const c = ${card}, v = c._view, r = v.renderer.domElement.getBoundingClientRect();
+      for (let y = r.top + 20; y < r.bottom - 20; y += 10) for (let x = r.left + 20; x < r.right - 20; x += 10) {
+        const h = v.surfaceAt(x, y);
+        if (h && h.owner && h.owner.id === 'test_lamp' && !c.shadowRoot.elementFromPoint(x, y)?.closest?.('.fp-marker')) return { x, y };
+      }
+      return null; })()`);
+    // 4) Alt-drag onto the lamp: free drag, no attach
+    if (lamp2) {
+      const z0 = (await page.evaluate(`${card}._positions.get(${JSON.stringify(c3.id)}).z`));
+      await drag(c3, lamp2, true);
+      const pc = await pinOf(c3.id);
+      check('magnetic: Alt-drag onto the lamp does not attach and keeps the height', !!pc && !pc.attach && Math.abs(pc.z - z0) < 0.001, JSON.stringify({ pc, z0 }));
+    } else check('magnetic: lamp found again after the realign', false);
+    // 5) Detach: select the attached marker, Detach keeps its spot as a normal pin on the model
+    const before = (await where(b.id)).pos;
+    await page.evaluate(`${card}._edit.selectMarker(${JSON.stringify(b.id)})`);
+    await sleep(150);
+    check('magnetic: selected attached marker shows "Attached to Test lamp" and Detach',
+      await page.evaluate(`${sr}.querySelector('.panel').textContent.includes('Attached to Test lamp') && !!${sr}.querySelector('.panel [data-act=detach]')`));
+    await page.evaluate(`${sr}.querySelector('.panel [data-act=detach]').click()`);
+    await sleep(250);
+    const pd = await pinOf(b.id);
+    check('magnetic: Detach -> normal pin (on_model) at the same spot',
+      !!pd && !pd.attach && !pd.offset && pd.on_model === true && Math.abs(pd.x - before.x) < 0.002 && Math.abs(pd.y - before.y) < 0.002 && Math.abs(pd.z - before.z) < 0.002,
+      JSON.stringify({ pd, before }));
+    await page.screenshot({ path: path.join(root, 'screenshots', 'magnetic-drag.png') });
+  }
+  allErrors.push(...s.errors);
+} finally {
+  await s.close();
+}
+
 // 2c. no model: today's look
 s = await openDemo({ view: '3d' });
 try {

@@ -11,6 +11,7 @@ import { ruleState, setRuleState, nextEyeState, viewTree, pickSelector, nextView
   SECTION_DIRS, sectionDir, sectionPos, sectionAt, sectionRange, zoomToFor } from './views.js';
 import { levelsFromFloorMap } from './bindings.js';
 import { outlineLoops, pickLoop, rasterGrid, outlineFromGrid } from './outline.js';
+import { snapPin, attachOffset } from './objects/logic.js';
 
 const DENSE_TRIS = 150000;
 
@@ -605,6 +606,9 @@ export class EditMode {
   }
 
   _endWindowDrag() {
+    const d = this.drag;
+    if (d && d.raf) { cancelAnimationFrame(d.raf); d.raf = 0; }
+    if (d && d.kind === 'marker' && d.attach !== undefined && this.view) this.view.highlightModelNode(null);
     window.removeEventListener('pointermove', this._onWinMove);
     window.removeEventListener('pointerup', this._onWinUp);
     window.removeEventListener('pointercancel', this._onWinUp);
@@ -653,11 +657,15 @@ export class EditMode {
       return;
     }
     if (d.kind === 'marker') {
-      const p = this._planPoint(e, d.pos.floorId, d.pos.z);
-      if (!p) return;
-      d.pos.x = p[0];
-      d.pos.y = p[1];
-      this.view.moveMarker(d.id, p[0], p[1], d.pos.z, d.pos.floorId);
+      d.last = { clientX: e.clientX, clientY: e.clientY };
+      if (!e.altKey && this.view.model) {
+        // magnetic: raycast at most once per frame, on the latest pointer position
+        if (!d.raf) d.raf = requestAnimationFrame(() => { d.raf = 0; this._magnet(d); });
+        return;
+      }
+      if (d.raf) { cancelAnimationFrame(d.raf); d.raf = 0; }
+      this._setDragTarget(d, null);
+      this._freeMarker(d, e);
       return;
     }
     let room = this.room(d.roomId);
@@ -681,8 +689,53 @@ export class EditMode {
     this.refreshOverlay(d.preview);
   }
 
+  // Free drag (Alt, no model, nothing under the cursor): the plan point at the current height.
+  _freeMarker(d, e) {
+    d.snapped = false;
+    const p = this._planPoint(e, d.pos.floorId, d.pos.z);
+    if (!p) return;
+    d.pos.x = p[0];
+    d.pos.y = p[1];
+    this.view.moveMarker(d.id, p[0], p[1], d.pos.z, d.pos.floorId);
+  }
+
+  // Magnetic drag: stick to the model surface under the pointer (5 cm off it); over a model object
+  // highlight it, the drop attaches. Floor = the HA floor of the hit's level (else the current one).
+  _magnet(d) {
+    if (this.drag !== d || !d.last) return;
+    const hit = this.view.surfaceAt(d.last.clientX, d.last.clientY);
+    if (!hit) {
+      this._setDragTarget(d, null);
+      this._freeMarker(d, d.last);
+      return;
+    }
+    const owner = hit.owner;
+    const level = owner ? (owner.kind === 'level' ? owner.id : owner.level) : null;
+    const lf = (this.card._levels && this.card._levels.levelFloor) || {};
+    const floorId = level && lf[level] && this.floors.some((f) => f.id === lf[level]) ? lf[level] : d.pos.floorId;
+    const pin = snapPin(hit, this.view.floorElevation(floorId), floorId);
+    d.pos = { ...d.pos, x: pin.x, y: pin.y, z: pin.z, floorId };
+    d.snapped = true;
+    const layer = this.card._objects;
+    const obj = owner && owner.kind === 'object' && layer && layer.objectAt(owner.id) ? owner : null;
+    this._setDragTarget(d, obj);
+    this.view.moveMarker(d.id, pin.x, pin.y, pin.z, floorId);
+  }
+
+  _setDragTarget(d, owner) {
+    const id = owner ? owner.id : null;
+    if ((d.attach || null) === id) return;
+    d.attach = id;
+    this.view.highlightModelNode(owner ? owner.node : null);
+  }
+
   _dragEnd() {
     const d = this.drag;
+    if (d && d.kind === 'marker' && d.raf) { // the last move is still waiting for its frame
+      cancelAnimationFrame(d.raf);
+      d.raf = 0;
+      this._magnet(d);
+    }
     this._endWindowDrag();
     if (!d || !d.moved) {
       if (d && d.kind !== 'marker') this.refreshOverlay();
@@ -691,7 +744,14 @@ export class EditMode {
     if (d.kind === 'overlay') {
       this.render();
     } else if (d.kind === 'marker') {
-      this.commit(E.setPin(this.layout, d.id, { x: d.pos.x, y: d.pos.y, z: d.pos.z, floor_id: d.pos.floorId, on_model: this._onModel(d.id) }));
+      const at = { x: d.pos.x, y: d.pos.y, z: d.pos.z, floor_id: d.pos.floorId };
+      const anchor = d.attach && this.card._objects && this.card._objects.anchorOf(d.attach);
+      if (anchor) {
+        const offset = attachOffset(anchor, d.pos, this.view.floorElevation(d.pos.floorId));
+        this.commit(E.attachPin(this.layout, d.id, d.attach, offset, at));
+      } else {
+        this.commit(E.setPin(this.layout, d.id, { ...at, on_model: this._onModel(d.id) }, { grid: !d.snapped }));
+      }
     } else if (d.preview) {
       this.commit(E.upsertRoom(this.layout, d.preview));
     } else {
@@ -850,7 +910,10 @@ export class EditMode {
     const m = this.selectedMarker && byId.get(this.selectedMarker);
     if (m) {
       const pos = this.card._positions && this.card._positions.get(m.id);
-      const pinned = !!(this.layout.pins || {})[m.id];
+      const pin = (this.layout.pins || {})[m.id];
+      const pinned = !!pin;
+      const attached = pin && pin.attach;
+      const target = attached && this.card._objects && this.card._objects.objectAt(attached);
       if (m.id === this.card._mowerMarkerId) {
         return out + `<section class="box"><h3>${esc(m.name)}</h3><p class="dim">${esc(m.entityId)}</p>
           <p>Follows the live mower position. Set it up in the Mower tab.</p>
@@ -858,15 +921,16 @@ export class EditMode {
       }
       out += `<section class="box"><h3>${esc(m.name)}</h3>
         <p class="dim">${esc(m.entityId)}${m.areaId ? ' · ' + esc(areaName(this.hass, m.areaId)) : ''}</p>
-        <p>${pinned ? 'Pinned' : 'Auto placed'}</p>
+        <p>${attached ? `Attached to ${esc((target && target.obj.label) || attached)}${target ? '' : ' (not in the model)'}` : pinned ? 'Pinned' : 'Auto placed'}</p>
         ${pos ? `<label>Height above floor (m) <input type="number" step="0.05" min="0" data-field="marker-z" value="${fmt(pos.z)}"></label>` : ''}
         <div class="row">
+          ${attached ? '<button data-act="detach">Detach</button>' : ''}
           ${pinned ? '<button data-act="unpin">Return to auto placement</button>' : ''}
           <button data-act="hide">Hide</button>
           <button data-act="deselect-marker">Done</button>
         </div></section>`;
     }
-    out += '<p class="hint">Drag any marker on the plan to pin it there. Click a marker to select it.</p>';
+    out += `<p class="hint">Drag any marker on the plan to pin it there${this.view.model ? ' (it sticks to the model surface; drop on a model object to attach it, hold Alt for a free drag)' : ''}. Click a marker to select it.</p>`;
 
     const unplaced = all.filter((x) => !hidden.includes(x.id) && !hidden.includes(x.entityId) && !(this.card._positions || new Map()).has(x.id));
     out += `<div class="sub">Devices without a room (${unplaced.length})</div>`;
@@ -1769,6 +1833,13 @@ export class EditMode {
       }
       case 'del-floor': this.commit(E.deleteFloor(this.layout, id)); return;
       case 'unpin': this.commit(E.clearPin(this.layout, this.selectedMarker)); return;
+      case 'detach': { // keep where it is now, as a normal pin on the model
+        const pos = this.card._positions && this.card._positions.get(this.selectedMarker);
+        const pin = (this.layout.pins || {})[this.selectedMarker];
+        const at = pos ? { x: pos.x, y: pos.y, z: pos.z, floor_id: pos.floorId } : pin;
+        if (at) this.commit(E.setPin(this.layout, this.selectedMarker, { ...at, on_model: true }, { grid: false }));
+        return;
+      }
       case 'hide': {
         const mid = this.selectedMarker;
         this.selectMarker(null);
@@ -1836,7 +1907,13 @@ export class EditMode {
       const v = Number(el.value);
       const pos = this.card._positions.get(this.selectedMarker);
       if (!Number.isFinite(v) || !pos) return;
-      this.commit(E.setPin(this.layout, this.selectedMarker, { x: pos.x, y: pos.y, z: v, floor_id: pos.floorId, on_model: this._onModel(this.selectedMarker) }));
+      const pin = (this.layout.pins || {})[this.selectedMarker];
+      if (pin && pin.attach && Array.isArray(pin.offset) && pos.attached) { // attached: raise / lower the offset
+        const o = pin.offset;
+        this.commit(E.attachPin(this.layout, this.selectedMarker, pin.attach, [o[0], o[1] + v - pos.z, o[2]], { x: pos.x, y: pos.y, z: v, floor_id: pos.floorId }));
+        return;
+      }
+      this.commit(E.setPin(this.layout, this.selectedMarker, { x: pos.x, y: pos.y, z: v, floor_id: pos.floorId, on_model: this._onModel(this.selectedMarker) }, { grid: !pin }));
     } else if (f === 'obj-entity') {
       const v = el.value.trim();
       this.commit(E.setObject(this.layout, el.dataset.id, { entity: v === '' ? undefined : v.toLowerCase() === 'none' ? null : v }));

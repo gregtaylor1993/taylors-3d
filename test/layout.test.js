@@ -133,3 +133,17 @@ describe('roomLabel', () => {
     expect(roomLabel('Bedroom', poly, 'size')).toBe('Bedroom · 2.0 × 3.0 m');
   });
 });
+
+describe('markerPositions: attached pins', () => {
+  const floors = [{ id: 'g', elevation: 0, height: 2.7 }];
+  const markers = [{ id: 'device:a', domain: 'light', areaId: null }];
+  const layout = { rooms: [], pins: { 'device:a': { x: 1, y: 1, z: 1, floor_id: 'g', on_model: true, attach: 'lamp', offset: [0, 0.1, 0] } } };
+  it('resolve to the object anchor + offset', () => {
+    const pos = markerPositions(markers, layout, {}, floors, (pin, fid) => (pin.attach === 'lamp' && fid === 'g' ? { x: 3, y: 4, z: 2 } : null));
+    expect(pos.get('device:a')).toEqual({ x: 3, y: 4, z: 2, floorId: 'g', auto: false, attached: 'lamp' });
+  });
+  it('fall back to the stored position when the object is not there', () => {
+    const pos = markerPositions(markers, layout, {}, floors, () => null);
+    expect(pos.get('device:a')).toEqual({ x: 1, y: 1, z: 1, floorId: 'g', auto: false });
+  });
+});

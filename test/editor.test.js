@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   snapPoint, floorVertices, nearestEdge, newRoomId, upsertRoom, deleteRoom, moveVertex, insertVertex,
   removeVertex, addDoor, removeDoor, cleanPolygon, setPin, clearPin, hide, unhide, upsertFloor, deleteFloor,
-  newFloorId, parseImport, fitImport, setObject, setGroup,
+  newFloorId, parseImport, fitImport, setObject, setGroup, attachPin, realignPins,
 } from '../src/editor.js';
 
 const square = { id: 'r1', polygon: [[0, 0], [4, 0], [4, 3], [0, 3]] };
@@ -189,5 +189,31 @@ describe('setObject / setGroup', () => {
     expect(setGroup({}, 'g', { entity: 'switch.s' }).groups.g).toEqual({ entity: 'switch.s' });
     expect(setGroup(l, 'g', { entity: '' }).groups).toEqual({});
     expect(l.groups.g.entity).toBe('light.g');
+  });
+});
+
+describe('attachPin', () => {
+  const base = { pins: { 'device:a': { x: 1, y: 2, z: 1.5, floor_id: 'g', on_model: true } } };
+  it('stores attach + offset, keeps on_model and the drop position as a fallback', () => {
+    const l = attachPin(base, 'device:a', 'lamp1', [0.1234, -0.2, 0.05], { x: 1.23, y: 2.01, z: 1.4567, floor_id: 'g' });
+    expect(l.pins['device:a']).toEqual({ x: 1.23, y: 2.01, z: 1.457, floor_id: 'g', on_model: true, attach: 'lamp1', offset: [0.123, -0.2, 0.05] });
+    expect(base.pins['device:a'].attach).toBeUndefined();
+  });
+  it('works without a previous pin', () => {
+    const l = attachPin({}, 'device:b', 'lamp1', [0, 0, 0], { x: 0, y: 0, z: 1, floor_id: 'g' });
+    expect(l.pins['device:b'].attach).toBe('lamp1');
+    expect(l.pins['device:b'].on_model).toBe(true);
+  });
+  it('setPin detaches (normal pin, no attach / offset)', () => {
+    const l = attachPin(base, 'device:a', 'lamp1', [0, 0, 0], { x: 1, y: 2, z: 1, floor_id: 'g' });
+    const d = setPin(l, 'device:a', { x: 1.234, y: 2, z: 1, floor_id: 'g', on_model: true }, { grid: false });
+    expect(d.pins['device:a']).toEqual({ x: 1.234, y: 2, z: 1, floor_id: 'g', on_model: true });
+  });
+  it('attached pins are skipped by realignPins', () => {
+    const l = attachPin(base, 'device:a', 'lamp1', [0, 0.1, 0], { x: 1, y: 2, z: 1, floor_id: 'g' });
+    const withFree = { ...l, pins: { ...l.pins, 'device:c': { x: 1, y: 0, z: 1, floor_id: 'g', on_model: true } } };
+    const out = realignPins(withFree, { position: [0, 0, 0], rotation: 0, scale: 1 }, { position: [2, 0, 0], rotation: 0, scale: 1 });
+    expect(out.pins['device:a']).toBe(withFree.pins['device:a']);
+    expect(out.pins['device:c'].x).toBe(3);
   });
 });

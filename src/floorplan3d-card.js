@@ -18,7 +18,7 @@ import {
 } from './views.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 import { ObjectLayer } from './objects/layer.js';
-import { bindObjects, nightFactor, sunVector, sunStrength, clampSunDir, screenNearest } from './objects/logic.js';
+import { bindObjects, nightFactor, sunVector, sunStrength, clampSunDir, screenNearest, attachedPosition } from './objects/logic.js';
 import { ObjectPopup, objectAction, actionTarget, toggleCall } from './objects/popup.js';
 
 const VERSION = '0.3.1';
@@ -386,6 +386,7 @@ class Floorplan3dCard extends HTMLElement {
         this._refreshStates();
       }
       this._updateObjects();
+      this._refreshAttached(); // the model (re)placed: attached markers follow their objects
       this._notice.textContent = err || '';
       this._notice.hidden = !err;
       // a new model resets the views; the first view applied frames it (see _resolveViewList)
@@ -702,6 +703,7 @@ class Floorplan3dCard extends HTMLElement {
     const p = reading && this._mowerFn ? this._mowerFn(reading) : null;
     this._mowerLive = p ? { x: p[0], y: p[1], floorId, reading } : (reading ? { reading } : null);
     this._poseMowerObject(p, floorId);
+    this._refreshAttached(); // markers attached to the mower ride along
     const id = this._mowerMarkerId;
     if (p && id) {
       const pos = { x: p[0], y: p[1], z: MOWER_Z, floorId, auto: false, live: true };
@@ -1317,7 +1319,7 @@ class Floorplan3dCard extends HTMLElement {
     // light hides the whole device marker (its other entities, e.g. a power sensor, included).
     const bound = this._boundEntities;
     this._markers = buildMarkers(h, this._layout, { group_by: this._config.group_by }).filter((m) => !bound.has(m.entityId));
-    this._positions = markerPositions(this._markers, { ...this._layout, rooms: this._allRooms() }, h, this._floors);
+    this._positions = markerPositions(this._markers, { ...this._layout, rooms: this._allRooms() }, h, this._floors, (pin, fid) => this._attachAt(pin, fid));
 
     // the mower's device marker follows the live position instead of being auto placed
     const cfg = this._layout.mower;
@@ -1356,6 +1358,27 @@ class Floorplan3dCard extends HTMLElement {
     }
     this._view.setMarkers(list);
     this._applyMarkerStates();
+  }
+
+  // Plan position of a marker attached to a model object (its anchor + offset), null when the object is not there.
+  _attachAt(pin, floorId) {
+    const a = this._objects && this._objects.anchorOf(pin.attach);
+    return a ? attachedPosition(a, pin.offset, this._view.floorElevation(floorId)) : null;
+  }
+
+  // Attached markers follow their object (mower pose, model placement): move the ones that moved.
+  _refreshAttached() {
+    const pins = (this._layout && this._layout.pins) || {};
+    if (!this._positions || !this._view) return;
+    for (const [id, pos] of this._positions) {
+      const pin = pins[id];
+      if (!pin || !pin.attach) continue;
+      const at = this._attachAt(pin, pos.floorId);
+      if (!at) continue;
+      if (pos.attached && Math.abs(at.x - pos.x) < 1e-6 && Math.abs(at.y - pos.y) < 1e-6 && Math.abs(at.z - pos.z) < 1e-6) continue;
+      this._positions.set(id, { ...pos, x: at.x, y: at.y, z: at.z, attached: pin.attach });
+      this._view.moveMarker(id, at.x, at.y, at.z, pos.floorId);
+    }
   }
 
   _markerElement(m) {

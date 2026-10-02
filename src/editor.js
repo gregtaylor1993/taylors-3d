@@ -117,9 +117,21 @@ export function cleanPolygon(points) {
 }
 
 // ---------- devices ----------
-export function setPin(layout, id, pin) {
-  const p = { x: round(snap(pin.x, GRID)), y: round(snap(pin.y, GRID)), z: round(pin.z), floor_id: pin.floor_id };
+// grid: false keeps the exact position (mm), e.g. a marker stuck to a model surface.
+export function setPin(layout, id, pin, { grid = true } = {}) {
+  const g = (v) => round(grid ? snap(v, GRID) : v);
+  const p = { x: g(pin.x), y: g(pin.y), z: round(pin.z), floor_id: pin.floor_id };
   if (pin.on_model) p.on_model = true; // placed on the model: follows its alignment (realignPins)
+  return { ...layout, pins: { ...(layout.pins || {}), [id]: p } };
+}
+
+// Attach a marker to a model object: it follows the object's anchor + offset (world metres).
+// `at` (plan position at drop time) is kept as the fallback while the object is not there.
+export function attachPin(layout, id, objectId, offset, at) {
+  const prev = (layout.pins || {})[id] || {};
+  const src = at || prev;
+  const p = { x: round(src.x ?? 0), y: round(src.y ?? 0), z: round(src.z ?? 1.2), floor_id: src.floor_id ?? prev.floor_id,
+    on_model: true, attach: objectId, offset: offset.map((v) => round(v)) };
   return { ...layout, pins: { ...(layout.pins || {}), [id]: p } };
 }
 
@@ -131,7 +143,7 @@ export function realignPins(layout, oldAlign, newAlign) {
   let changed = false;
   const out = {};
   for (const [id, p] of Object.entries(pins)) {
-    if (!p || !p.on_model) { out[id] = p; continue; }
+    if (!p || !p.on_model || p.attach) { out[id] = p; continue; } // attached pins follow their object
     const [x, y] = transformPoint(inverseTransformPoint([p.x, p.y], oldAlign), newAlign);
     const z = p.z * (ns / os);
     // micrometre precision: slider ticks realign step by step, mm rounding would accumulate drift
