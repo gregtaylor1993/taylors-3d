@@ -186,15 +186,15 @@ export function measuredElevations(levels) {
   const storeys = levels.filter((l) => (l.role === 'storey' || l.role === 'basement')).slice()
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.minY ?? 0) - (b.minY ?? 0));
   const snap = (v) => Math.round(v / 0.05) * 0.05;
-  const elev = new Map();
-  const ground = storeys.find((l) => l.role === 'storey' && (l.minY ?? 0) <= 0.5);
-  for (const l of storeys) elev.set(l.id, l === ground ? 0 : snap(l.minY ?? 0));
+  const r3 = (v) => Math.round(v * 1000) / 1000 + 0;
+  const ground = storeys.find((l) => l.role === 'storey' && (l.minY ?? 0) <= 0.5) || storeys.find((l) => l.role === 'storey');
+  const elev = (l) => (Number.isFinite(l.elevation) ? l.elevation : l === ground ? ((l.minY ?? 0) <= 0.5 ? 0 : Math.max(0, Math.round(l.minY))) : snap(l.minY ?? 0));
   const out = {};
   storeys.forEach((l, i) => {
     if (Number.isFinite(l.elevation)) return;
-    const e = Math.round(elev.get(l.id) * 1000) / 1000;
+    const e = elev(l);
     const next = storeys[i + 1];
-    out[l.id] = { elevation: e, height: next ? Math.round((elev.get(next.id) - e) * 1000) / 1000 : 2.7 };
+    out[l.id] = { elevation: r3(e), height: next ? r3(elev(next) - e) : 2.7 };
   });
   return out;
 }

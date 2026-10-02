@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { parseSelector, nodeIndex, matches, resolveVisibility, unmatchedSelectors,
   modelViewRules, generatedViews, migrateShowModes, resolveViews, primaryLevel, defaultFloors, markerState } from '../src/views.js';
 import { buildManifest } from '../src/manifest.js';
@@ -170,5 +170,38 @@ describe('primary level, floors, devices', () => {
     expect(markerState({ roomId: null, roomLevelId: null, markerFloorId: 'mansard' }, ctx)).toEqual({ shown: true, faded: false });
     expect(markerState({ roomId: null, roomLevelId: null, markerFloorId: 'floor1' }, ctx)).toEqual({ shown: false, faded: false });
     expect(markerState({ roomId: null, roomLevelId: null, markerFloorId: 'floor1' }, { ...ctx, isAll: true })).toEqual({ shown: true, faded: false });
+  });
+});
+
+describe('review fixes', () => {
+  const levels = [
+    { id: 'ground', label: 'Ground', role: 'storey', order: 0 },
+    { id: 'attic', label: 'Attic', role: 'storey', order: 1 },
+  ];
+  it('all-only keeps the level in its own view; only hides it in lower views', () => {
+    const v = resolveViews({ manifest: { levels, views: [] }, haFloors: [], layoutViews: {}, yamlViews: {}, savedLevels: { attic: { show: 'all-only' } } });
+    expect(v.find((x) => x.id === 'attic').rules.at(-1)).toEqual({ show: 'role:exterior' });
+    const w = resolveViews({ manifest: { levels, views: [] }, haFloors: [], layoutViews: {}, yamlViews: {}, savedLevels: { attic: { show: 'only' } } });
+    expect(w.find((x) => x.id === 'ground').rules.at(-1)).toEqual({ hide: 'level:attic' });
+    expect(w.find((x) => x.id === 'attic').rules.some((r) => r.hide === 'level:attic')).toBe(false);
+  });
+  it('room hidden by a rule falls back to the linked floor, with fading', () => {
+    const ctx = { visibleRooms: new Set(), primaryOrder: 1, levelOrder: { ground: 0 }, viewFloors: new Set(['f1']), isAll: false };
+    expect(markerState({ roomId: 'kitchen', roomLevelId: 'ground', markerFloorId: 'f1' }, ctx)).toEqual({ shown: true, faded: true });
+  });
+  it('tolerates missing levels/floors, unlabelled and duplicate model views, and copies inputs', () => {
+    const v = resolveViews({ manifest: { views: [{ id: 'a', show: [], hide: [] }, { id: 'a', label: 'dup', show: [], hide: [] }] }, haFloors: undefined, layoutViews: {}, yamlViews: {}, savedLevels: {} });
+    expect(v.map((x) => [x.id, x.label])).toEqual([['a', 'a']]);
+    const floors = ['f'], camera = { position: [1, 2, 3], target: [0, 0, 0] }, rules = [{ hide: 'all' }];
+    const r = resolveViews({ manifest: null, haFloors: [], layoutViews: { n: { added: true, floors, camera, rules } }, yamlViews: {}, savedLevels: {} });
+    const n = r.find((x) => x.id === 'n');
+    expect(n.floors).not.toBe(floors); expect(n.camera.position).not.toBe(camera.position); expect(n.rules[0]).not.toBe(rules[0]);
+  });
+  it('warns once about unknown yaml view ids', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const args = { manifest: null, haFloors: [], layoutViews: {}, yamlViews: { zzz: { label: 'x' } }, savedLevels: {} };
+    resolveViews(args); resolveViews(args);
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
   });
 });

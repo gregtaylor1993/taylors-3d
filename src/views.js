@@ -123,32 +123,58 @@ export function migrateShowModes(savedLevels) {
   return { all, floorViews };
 }
 
+// Per-view migrated rules: all-only levels stay visible in their own view; `only` levels are hidden
+// in the views of lower storeys.
+function migratedRules(viewId, mig, savedLevels, levels) {
+  if (viewId === 'all') return mig.all;
+  const order = new Map(levels.map((l) => [l.id, l.order ?? 0]));
+  const own = order.get(viewId) ?? 0;
+  const only = Object.entries(savedLevels || {})
+    .filter(([id, b]) => b && b.show === 'only' && order.has(id) && own < order.get(id))
+    .map(([id]) => ({ hide: 'level:' + id }));
+  return [...mig.all, ...mig.floorViews.filter((r) => r.hide !== 'level:' + viewId), ...only];
+}
+
 const isCam = (c) => c && Array.isArray(c.position) && Array.isArray(c.target);
 const obj = (o) => (o && typeof o === 'object' && !Array.isArray(o) ? o : {});
 
+const warned = new Set();
+
 export function resolveViews({ manifest, haFloors, layoutViews, yamlViews, savedLevels }) {
   let base;
+  haFloors = haFloors || [];
+  const mLevels = (manifest && manifest.levels) || [];
   if (!manifest) {
     base = [...haFloors.map((f) => ({ id: f.id, label: f.name, rules: [], floors: [f.id], source: 'floors' })),
       { id: 'all', label: 'All', rules: [], floors: null, source: 'floors' }];
   } else if (manifest.views && manifest.views.length) {
-    base = manifest.views.map((v) => ({ id: v.id, label: v.label, rules: modelViewRules(v), camera: v.camera, floors: null, source: 'model' }));
+    base = manifest.views.filter((v, i, a) => a.findIndex((x) => x.id === v.id) === i)
+      .map((v) => ({ id: v.id, label: v.label || v.id, rules: modelViewRules(v), camera: v.camera, floors: null, source: 'model' }));
   } else {
     const mig = migrateShowModes(savedLevels);
-    base = generatedViews(manifest.levels).map((v) => ({
+    base = generatedViews(mLevels).map((v) => ({
       ...v, floors: null, source: 'generated',
-      rules: [...v.rules, ...(v.id === 'all' ? mig.all : [...mig.all, ...mig.floorViews])],
+      rules: [...v.rules, ...migratedRules(v.id, mig, savedLevels, mLevels)],
     }));
   }
   const lv = obj(layoutViews), yv = obj(yamlViews);
   const added = Object.entries(lv).filter(([id, v]) => obj(v).added && !base.some((b) => b.id === id))
     .map(([id, v]) => ({ id, label: obj(v).label || id, rules: [], floors: null, source: 'added' }));
-  return [...base, ...added].map((b) => {
+  const all = [...base, ...added];
+  for (const id of Object.keys(yv)) {
+    if (!all.some((b) => b.id === id) && !warned.has(id)) {
+      warned.add(id);
+      console.warn(`floorplan3d: card YAML views.${id} does not match any view; ignored`);
+    }
+  }
+  return all.map((b) => {
     const l = obj(lv[b.id]), y = obj(yv[b.id]);
     const pick = (k, d) => (y[k] !== undefined ? y[k] : l[k] !== undefined ? l[k] : d);
-    const rules = [...b.rules, ...(Array.isArray(l.rules) ? l.rules : []), ...(Array.isArray(y.rules) ? y.rules : [])];
-    const camera = isCam(y.camera) ? y.camera : isCam(l.camera) ? l.camera : (b.camera || null);
-    const floors = Array.isArray(y.floors) ? y.floors : Array.isArray(l.floors) ? l.floors : b.floors;
+    const rules = [...b.rules, ...(Array.isArray(l.rules) ? l.rules : []), ...(Array.isArray(y.rules) ? y.rules : [])].map((r) => ({ ...r }));
+    const cam = isCam(y.camera) ? y.camera : isCam(l.camera) ? l.camera : b.camera;
+    const camera = isCam(cam) ? { position: [...cam.position], target: [...cam.target] } : null;
+    const fl = Array.isArray(y.floors) ? y.floors : Array.isArray(l.floors) ? l.floors : b.floors;
+    const floors = Array.isArray(fl) ? [...fl] : null;
     return { id: b.id, label: pick('label', b.label), rules, camera, floors, cut: pick('cut', null), source: b.source, hidden: !!pick('hidden', false) };
   });
 }
@@ -165,11 +191,10 @@ export function defaultFloors(primaryLevelId, levelFloor) {
 }
 
 export function markerState({ roomId, roomLevelId, markerFloorId }, ctx) {
-  if (roomId) {
-    const shown = ctx.visibleRooms.has(roomId);
-    const order = ctx.levelOrder[roomLevelId];
-    const faded = shown && ctx.primaryOrder !== null && order !== undefined && order < ctx.primaryOrder;
-    return { shown, faded };
-  }
-  return { shown: ctx.isAll || ctx.viewFloors.has(markerFloorId), faded: false };
+  const order = ctx.levelOrder[roomLevelId];
+  const fade = (lvlOrder) => lvlOrder !== undefined && ctx.primaryOrder !== null && lvlOrder < ctx.primaryOrder;
+  if (roomId && ctx.visibleRooms.has(roomId)) return { shown: true, faded: fade(order) };
+  // no room, or the room is hidden here: fall back to the marker's HA floor linked to the view
+  const shown = ctx.isAll || ctx.viewFloors.has(markerFloorId);
+  return { shown, faded: shown && !!roomId && fade(order) };
 }

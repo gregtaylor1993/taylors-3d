@@ -263,3 +263,12 @@ describe('measuredElevations', () => {
     expect(measuredElevations([{ id: 'g', role: 'storey', order: 0, minY: 0, elevation: 0 }])).toEqual({});
   });
 });
+
+describe('measuredElevations fixes', () => {
+  it('no -0, fallback ground, tagged neighbour boundary', () => {
+    const r = measuredElevations([{ id: 'g', role: 'storey', order: 0, minY: -0.0, elevation: null }, { id: 'a', role: 'storey', order: 1, minY: 3, elevation: 3 }]);
+    expect(Object.is(r.g.elevation, 0)).toBe(true);
+    expect(r.g.height).toBe(3);
+    expect(measuredElevations([{ id: 'x', role: 'storey', order: null, minY: 1.4, elevation: null }]).x.elevation).toBe(1);
+  });
+});
