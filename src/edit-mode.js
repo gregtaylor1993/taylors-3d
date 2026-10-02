@@ -9,6 +9,9 @@ import { buildMarkers, areaName } from './registry.js';
 import { readSource, calibrationError } from './mower.js';
 import { ruleState, setRuleState, nextEyeState, viewTree, pickSelector, nextViewId, unmatchedSelectors, legacyShowRules } from './views.js';
 import { levelsFromFloorMap } from './bindings.js';
+import { outlineFromTriangles, outlineFromRaster } from './outline.js';
+
+const DENSE_TRIS = 150000;
 
 const CLICK_SLOP_PX = 5;
 const SNAP_PX = 10; // snap radius never smaller than this many screen pixels
@@ -39,6 +42,9 @@ export class EditMode {
     this.selectedRoom = null;
     this.selectedMarker = null;
     this.drawing = null; // { areaId, floorId, points, cursor }
+    this.picking = null; // { areaId, busy, poly, floorId, note }
+    this._outlineCache = new Map();
+    this._outlineModel = null;
     this.doorMode = false;
     this.calibrating = null; // { src } waiting for a click on the plan
     this.overlayMove = false;
@@ -114,6 +120,7 @@ export class EditMode {
     window.removeEventListener('keydown', this._onKey);
     this._endWindowDrag();
     this.drawing = null;
+    this.picking = null;
     this.doorMode = false;
     this.calibrating = null;
     this.overlayMove = false;
@@ -183,6 +190,10 @@ export class EditMode {
       this.setMower({ calibration: [...(this.mower().calibration || []), { src, plan }] });
       return;
     }
+    if (this.picking && !this.drawing) {
+      this._pickRoom(e);
+      return;
+    }
     if (this.tab === 'views' && this.view.model && !this.drawing) {
       this._pickView(e);
       return;
@@ -217,6 +228,88 @@ export class EditMode {
       .filter((r) => this.floorOf(r) === fid && r.polygon && pointInPolygon(p, r.polygon))
       .sort((a, b) => Math.abs(signedArea(a.polygon)) - Math.abs(signedArea(b.polygon)));
     this.selectRoom(hits.length ? hits[0].id : null);
+  }
+
+  // ---------- pick a room's outline from the model ----------
+  startPicking(areaId) {
+    this.selectedRoom = null;
+    this.selectedMarker = null;
+    this.card._applyMarkerSelection(null);
+    this.picking = { areaId, busy: false, poly: null };
+    this.tab = 'rooms';
+    this.message = null;
+    this.refreshOverlay();
+    this.render();
+  }
+
+  cancelPicking() {
+    this.picking = null;
+    this.refreshOverlay();
+    this.render();
+  }
+
+  _pickRoom(e) {
+    const pk = this.picking;
+    if (pk.busy) return;
+    const owner = this.view.pickModel(e.clientX, e.clientY);
+    if (!owner) {
+      this.message = { text: "Click on a room's floor", warn: true };
+      this.render();
+      return;
+    }
+    if (owner.kind === 'room' || owner.kind === 'zone') {
+      const cur = this.layout.model || {};
+      this.picking = null;
+      this.message = { text: `Linked ${owner.label || owner.id} to ${areaName(this.hass, pk.areaId)}` };
+      this.setModelProps({ rooms: { ...(cur.rooms || {}), [owner.id]: { area: pk.areaId } } });
+      this.refreshOverlay();
+      return;
+    }
+    pk.busy = true;
+    pk.poly = null;
+    this.message = { text: 'Tracing…' };
+    this.render();
+    const mesh = owner.hit.object, hit = owner.hit.point;
+    setTimeout(() => {
+      if (this.picking !== pk) return;
+      pk.busy = false;
+      try {
+        const r = this._traceOutline(mesh, hit);
+        pk.poly = r.poly;
+        pk.floorId = this.activeFloor();
+        this.message = r.note ? { text: r.note, warn: true } : null;
+      } catch (err) {
+        this.message = { text: `Could not trace this floor: ${err.message}`, error: true };
+      }
+      this.refreshOverlay();
+      this.render();
+    }, 0);
+  }
+
+  // traced outline -> raster (dense meshes) -> the mesh's rectangle; cached per mesh and hit height
+  _traceOutline(mesh, hit) {
+    const model = this.view.model;
+    if (this._outlineModel !== model) { this._outlineCache.clear(); this._outlineModel = model; }
+    const k = mesh.uuid + ':' + Math.round(hit[1] / 0.05);
+    // the cache holds the polygon for the mesh; a different click can pick another loop of a merged mesh
+    const hitKey = k + ':' + hit[0].toFixed(1) + ',' + hit[2].toFixed(1);
+    if (this._outlineCache.has(hitKey)) return this._outlineCache.get(hitKey);
+    const tris = this.view.meshTriangles(mesh);
+    const dense = tris.length / 9 > DENSE_TRIS;
+    let poly = dense ? null : outlineFromTriangles(tris, hit);
+    if (!poly && dense) poly = outlineFromRaster(tris, hit);
+    const res = poly ? { poly } : { poly: this.view.meshPlanRect(mesh), note: "Used the floor piece's rectangle" };
+    this._outlineCache.set(hitKey, res);
+    return res;
+  }
+
+  usePickedOutline() {
+    const pk = this.picking;
+    if (!pk || !pk.poly) return;
+    const room = { id: E.newRoomId(this.layout), area_id: pk.areaId, polygon: pk.poly, doors: [], outdoor: false, floor_id: pk.floorId || this.activeFloor() };
+    this.picking = null;
+    this.selectedRoom = room.id;
+    this.commit(E.upsertRoom(this.layout, room));
   }
 
   selectRoom(id) {
@@ -331,7 +424,7 @@ export class EditMode {
   }
 
   _syncStageClasses() {
-    this.card._stage.classList.toggle('drawing', !!this.drawing || this.doorMode || !!this.calibrating);
+    this.card._stage.classList.toggle('drawing', !!this.drawing || !!this.picking || this.doorMode || !!this.calibrating);
     this.card._stage.classList.toggle('moving', this.overlayMove);
     const picking = !!this.card._editing && (this.tab === 'model' || this.tab === 'views') && !!this.view.model;
     this.card._stage.classList.toggle('picking', picking);
@@ -438,6 +531,13 @@ export class EditMode {
         });
       }
       (room.doors || []).forEach(([x, y], i) => handle('d' + i, 'door', x, y, fid));
+    }
+
+    const pk = this.picking;
+    if (pk && pk.poly) {
+      const fid = pk.floorId || this.activeFloor();
+      fills.push({ points: pk.poly, floorId: fid, color, opacity: 0.25 });
+      lines.push({ points: pk.poly, closed: true, floorId: fid, color });
     }
 
     const d = this.drawing;
@@ -612,6 +712,16 @@ export class EditMode {
         <button data-act="undo-point" ${d.points.length ? '' : 'disabled'}>Undo point</button>
         <button data-act="cancel-draw">Cancel</button></div></section>`;
     }
+    const pk = this.picking;
+    if (pk) {
+      return `<section class="box">
+        <h3>Pick: ${esc(areaName(this.hass, pk.areaId))}</h3>
+        ${pk.busy ? '<p class="hint">Tracing…</p>' : pk.poly
+    ? `<p>${pk.poly.length} corners</p><div class="row"><button data-act="pick-use" class="primary">Use this outline</button>
+        <button data-act="pick-draw">Draw instead</button></div>`
+    : "<p class=\"hint\">Click on this room's floor in the model.</p>"}
+        <div class="row"><button data-act="pick-cancel">Cancel</button></div></section>`;
+    }
     const sel = this.room(this.selectedRoom);
     const rooms = this.layout.rooms || [];
     const areas = this._areas();
@@ -654,7 +764,7 @@ export class EditMode {
         const r = rooms.find((x) => x.area_id === a.area_id);
         out += `<li class="${r && r.id === this.selectedRoom ? 'sel' : ''}"><span class="name">${esc(a.name)}</span>
           <span class="pill ${r ? 'ok' : 'missing'}">${r ? 'drawn' : 'missing'}</span>
-          ${r ? `<button data-act="select-room" data-id="${esc(r.id)}">Select</button>` : `<button data-act="draw" data-id="${esc(a.area_id)}">Draw</button>`}</li>`;
+          ${r ? `<button data-act="select-room" data-id="${esc(r.id)}">Select</button>` : `${this.view.model ? `<button data-act="pick" data-id="${esc(a.area_id)}">Pick</button>` : ''}<button data-act="draw" data-id="${esc(a.area_id)}">Draw</button>`}</li>`;
       }
       out += '</ul>';
     }
@@ -1320,6 +1430,7 @@ export class EditMode {
     switch (btn.dataset.act) {
       case 'tab':
         if (id !== this.tab) {
+          this.picking = null;
           this.modelPick = null;
           this.vwPick = null;
           this._closeMenu();
@@ -1350,6 +1461,10 @@ export class EditMode {
         return;
       }
       case 'draw': this.startDrawing(id); return;
+      case 'pick': this.startPicking(id); return;
+      case 'pick-cancel': this.cancelPicking(); return;
+      case 'pick-use': this.usePickedOutline(); return;
+      case 'pick-draw': { const a = this.picking && this.picking.areaId; this.picking = null; if (a) this.startDrawing(a); return; }
       case 'finish': this.finishDrawing(); return;
       case 'undo-point': this.drawing.points.pop(); this.refreshOverlay(); break;
       case 'cancel-draw': this.cancelDrawing(); return;

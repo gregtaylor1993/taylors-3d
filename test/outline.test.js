@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { outlineFromTriangles } from '../src/outline.js';
+import { outlineFromTriangles, outlineFromRaster } from '../src/outline.js';
 import { pointInPolygon, signedArea } from '../src/placement.js';
 
 // a horizontal quad at height y from plan rect (x0..x1, y0..y1) → two triangles (world z = -plan y), CCW from above
@@ -88,5 +88,25 @@ describe('outlineFromTriangles', () => {
     const elapsed = Date.now() - start;
     expect(elapsed).toBeLessThan(1000);
     expect(area(out)).toBeCloseTo(12);
+  });
+});
+
+describe('outlineFromRaster', () => {
+  it('rectangle', () => {
+    const out = outlineFromRaster(quad(0, 0, 4, 3), [2, 0, -1.5]);
+    expect(out).toHaveLength(4);
+    expect(area(out)).toBeCloseTo(12, 0);
+  });
+  it('L-shape', () => {
+    const out = outlineFromRaster([...quad(0, 0, 2, 2), ...quad(2, 0, 4, 2), ...quad(0, 2, 2, 5)], [1, 0, -1]);
+    expect(out).toHaveLength(6);
+    expect(area(out)).toBeCloseTo(14, 0);
+  });
+  it('hit outside any floor -> null', () => {
+    expect(outlineFromRaster([...quad(0, 0, 4, 3), ...quad(6, 0, 9, 3)], [5, 0, -1.5])).toBeNull();
+  });
+  it('picks only the connected slab', () => {
+    const out = outlineFromRaster([...quad(0, 0, 4, 3), ...quad(6, 0, 9, 3)], [7, 0, -1]);
+    expect(area(out)).toBeCloseTo(9, 0);
   });
 });

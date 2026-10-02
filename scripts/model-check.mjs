@@ -83,6 +83,23 @@ try {
   await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
   await sleep(400);
   check('edit mode shows room labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label').length`)) > 0);
+  const traced = await page.evaluate(`(() => {
+    const ed = ${card}._edit, v = ${card}._view;
+    let found = null;
+    v.model.root.traverse((m) => {
+      if (found || !m.isMesh) return;
+      const t = v.meshTriangles(m);
+      for (let i = 0; i + 8 < t.length && !found; i += 9) {
+        const ux = t[i+3]-t[i], uz = t[i+5]-t[i+2], vx = t[i+6]-t[i], vz = t[i+8]-t[i+2];
+        if (Math.abs(uz * vx - ux * vz) > 1e-3 && Math.abs(t[i+1] - t[i+4]) < 1e-6 && Math.abs(t[i+1] - t[i+7]) < 1e-6)
+          found = { m, hit: [(t[i]+t[i+3]+t[i+6])/3, t[i+1], (t[i+2]+t[i+5]+t[i+8])/3] };
+      }
+    });
+    if (!found) return null;
+    const r = ed._traceOutline(found.m, found.hit);
+    return r.poly ? r.poly.length : 0;
+  })()`);
+  check('pick: a floor piece of the model gives an outline polygon', traced >= 3, String(traced));
   await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
   await sleep(400);
   check('leaving edit mode restores the view\'s labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label').length`)) === look.labels);

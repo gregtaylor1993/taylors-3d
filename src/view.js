@@ -721,6 +721,14 @@ export class FloorplanView {
     return out;
   }
 
+  // Plan-space bounding rectangle of a mesh (fallback when its floor cannot be traced).
+  meshPlanRect(mesh) {
+    const b = new THREE.Box3().setFromObject(mesh);
+    const x0 = b.min.x, x1 = b.max.x, y0 = -b.max.z, y1 = -b.min.z;
+    const r = (v) => Math.round(v / 0.05) * 0.05;
+    return [[r(x0), r(y0)], [r(x1), r(y0)], [r(x1), r(y1)], [r(x0), r(y1)]].map((q) => q.map((v) => Math.round(v * 1000) / 1000));
+  }
+
   floorElevation(floorId) {
     const f = this.floors.find((x) => x.id === floorId);
     return f ? f.elevation : 0;
