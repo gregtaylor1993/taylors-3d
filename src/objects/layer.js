@@ -40,6 +40,7 @@ export class ObjectLayer {
     this._budgetSig = null;
     this._slots = new Map(); // fixture id -> { light, shadow, factor }
     this._placeSig = null;
+    this.stats = { updates: 0, evaluated: 0, budget: 0, shadowRequests: 0 }; // counters for the headless checks
     view.objectLayer = this; // the view resets us when it drops the model
   }
 
@@ -110,6 +111,7 @@ export class ObjectLayer {
 
   update(states, ctx = {}) {
     if (!this.model) return;
+    this.stats.updates++;
     const visibleLevel = ctx.visibleLevel || (() => true);
     const lightsOn = ctx.lightsOn !== false;
     let changed = false;
@@ -128,6 +130,7 @@ export class ObjectLayer {
         const prev = p.result;
         p.inputs = inputs;
         p.ents = ents;
+        this.stats.evaluated++;
         p.chain = hidden ? { lit: false, unavailable: false, source: null, entities: [], reason: null }
           : chainState(p.obj, binding, this.groups, states);
         p.result = p.type.update(p.part, p.chain, { ...ctx, states, entity: hidden ? null : (binding && binding.entity) || null, mowerEntity });
@@ -157,8 +160,9 @@ export class ObjectLayer {
       const before = this._slotSig();
       const hadShadow = [...this._slots.values()].some((x) => x.shadow);
       this._assign(fixtures);
+      this.stats.budget++;
       // shadow maps only depend on the shadow slots; nothing lit before or after: nothing to redraw
-      if (hadShadow || [...this._slots.values()].some((x) => x.shadow)) this.view.requestShadowUpdate();
+      if (hadShadow || [...this._slots.values()].some((x) => x.shadow)) { this.stats.shadowRequests++; this.view.requestShadowUpdate(); }
       if (before !== this._slotSig()) changed = true;
     } else {
       // colour / brightness only: shadow maps depend on light positions, so no redraw

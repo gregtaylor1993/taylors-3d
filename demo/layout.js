@@ -25,6 +25,8 @@ export const DEMO_LAYOUT = {
     'device:floor_lamp': { x: 0.6, y: 4.3, z: 1.5, floor_id: 'ground' },
   },
   hidden: [],
+  // the facade lamps (one group in demo/house.glb) also need the facade switch on
+  groups: { facade: { entity: 'switch.demo_facade' } },
   mower: {
     entity: 'device_tracker.sunseeker_position',
     source: 'gps',

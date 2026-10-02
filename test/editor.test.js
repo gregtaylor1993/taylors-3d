@@ -190,6 +190,12 @@ describe('setObject / setGroup', () => {
     expect(setGroup(l, 'g', { entity: '' }).groups).toEqual({});
     expect(l.groups.g.entity).toBe('light.g');
   });
+  it('setGroup: "none" (any case, padded) removes the controller, never stored literally', () => {
+    const l = { groups: { g: { entity: 'light.g' } } };
+    expect(setGroup(l, 'g', { entity: 'none' }).groups).toEqual({});
+    expect(setGroup(l, 'g', { entity: ' None ' }).groups).toEqual({});
+    expect(setGroup(l, 'g', { entity: '  switch.s ' }).groups.g).toEqual({ entity: 'switch.s' });
+  });
 });
 
 describe('attachPin', () => {

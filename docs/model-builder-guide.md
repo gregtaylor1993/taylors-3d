@@ -2,8 +2,9 @@
 
 Instructions for whoever builds the house model. Hand this whole file to the model builder
 session. The model describes **what exists**; Home Assistant decides **what it is connected to**
-(floors, areas, entities, actions). Do not put Home Assistant ids in the model unless asked:
-suggestions are fine, the user assigns everything in the card and re-exports never break that.
+(floors, areas, entities, actions). Home Assistant ids in the model are suggestions only: an
+object's `suggest.entity` lets the card bind it without setup, the user can change every binding
+in the card and re-exports never break that.
 
 Full design: [specs/2026-10-01-model-contract-design.md](superpowers/specs/2026-10-01-model-contract-design.md).
 
@@ -158,72 +159,86 @@ or level. Tag the group of a piece (the sofa group, not each cushion) so a click
 
 ## Objects
 
-Tag anything that should react to Home Assistant or be controllable:
+Tag anything that should react to Home Assistant or be controllable. The card binds each object
+to an entity by itself (from `suggest.entity`), so a well-tagged model works without any setup.
 
 ```json
-{ "kind": "object", "id": "terrace_ceiling_1", "type": "light",
-  "label": "Terrace ceiling lamp 1",
-  "group": "terrace_lights",
-  "glow": "lamp_glass",
-  "anchor": [0, -0.05, 0],
-  "hints": { "beam": "down", "range": 4 },
-  "suggest": { "domain": "light", "area": "terrace" },
-  "ui": { "tap": { "action": "toggle" }, "hold": { "action": "popup" },
-          "popup": ["toggle", "brightness", "color"] } }
+{ "kind": "object", "id": "facade_lamp_1", "type": "light",
+  "label": "Facade lamp 1",
+  "group": "facade",
+  "glow": "glow",
+  "hints": { "beam": "down", "max": 5, "distance": 6, "decay": 2, "castShadow": false, "offset": [0, 0, 0.12] },
+  "suggest": { "entity": "light.facade" },
+  "ui": { "tap": "toggle", "hold": "popup", "popup": ["toggle", "brightness", "color"] } }
 ```
 
-- `type`: one of the types below. Unknown types still work as `generic`.
-- `glow`: name of the child mesh that should light up or change colour (the bulb, glass, LED);
-  give that mesh its own material. Without `glow` the whole object is used.
-- `anchor`: local point where the light comes from / the label and popup attach (default: centre).
-- `group`: lamps of one circuit (all facade lamps) share a group. In Home Assistant the group
-  gets its main switch and each lamp can additionally get its own controller; a lamp is lit only
-  when every controller in its chain is on (main AND its own). You only set the group name; the
-  wiring is done in the card, so rewiring never needs a re-export.
-- `suggest`: optional hints for automatic binding: `domain`, `area`, or an exact `entity` if you
-  know it. The user can change all of it.
-- `ui`: optional default controls (see Actions). The user can change all of it.
-- Model each object at its real place and size, pivot at the natural centre (doors and gates:
-  see `hinge`). Keep the moving part as its own node (door leaf, gate wing, blind slat pack).
+What the card reads (everything else in `fp` is kept for later and ignored):
 
-### Types and hints
+- `id` (required, stable): the binding key. `label`: the name in the popup and the Objects tab.
+- `type`: one of the types below. Unknown types work as `generic` (more-info / state popup).
+- `glow`: name of the mesh inside the object that lights up or changes colour (bulb, glass, LED).
+  Default `glow`. **One glow mesh per fixture**, with its own material: the card clones that
+  material once and drives its emissive colour; a mesh shared by two fixtures shows the brighter one.
+  Without a glow mesh the object gets no emissive look; its light still comes from the anchor.
+- `anchor`: optional local point used when there is no glow mesh (default: the object's box centre).
+  With a glow mesh the light, popup and labels sit at the glow mesh centre.
+- `group`: fixtures of one circuit (all facade lamps) share a group name. They usually share one
+  entity; the user can also give the group a controller entity in the card (a relay). A fixture is
+  lit only while its own entity **and** the group controller are both on. A lit group gets one real
+  light (at its middle fixture, 1.5 × brighter), not one per fixture.
+- `suggest.entity`: the exact entity id to bind to automatically, if it exists in Home Assistant.
+  Missing in HA: the object stays unbound and the Objects tab says "entity not found". There is no
+  guessing by area or domain; the user can rebind any object in the Objects tab.
+- `hints`: see below. Invalid values fall back to the defaults.
+- `ui`: optional tap / hold actions and popup rows (see Actions).
+- Model each object at its real place and size. Keep moving parts as their own nodes.
 
-| type | use for | hints |
+### Types
+
+| type | look in the card | tap / hold (default) | hints read |
+|---|---|---|---|
+| `light` | glow mesh emissive in the light colour (brightness / 255 × 3) + a real light | toggle / popup | `beam`, `max`, `distance`, `decay`, `angle`, `penumbra`, `target`, `castShadow`, `offset` |
+| `light_strip` | the whole glow mesh emissive; a real light only when `max` is set | toggle / popup | as `light` |
+| `mower` | the node follows the mower's live position and heading; glow green mowing, amber returning, red error | popup / more-info | `front`: `+x` / `-x` / `+z` / `-z` (which local axis is the nose, default `+x`) |
+| `dock` | LED mesh lit while the mower is docked | more-info / more-info | `led`: LED mesh name (default `led`) |
+| `ev_charger` | LED green charging, blue ready, red error; a power label while charging | more-info / popup | `led` |
+| `climate` | a label with the current temperature; glow warm heating, cool cooling | more-info / popup | — |
+| anything else | no change in look | more-info / popup | — |
+
+Later types (`door`, `gate`, `cover`, `fan`, `vacuum`, …) can be tagged already; they behave as
+`generic` until the card supports them.
+
+### Light hints
+
+| key | meaning | default |
 |---|---|---|
-| `light` | any lamp or bulb, RGB or white | `beam`: point (default) / spot / up / down; `range` m; `angle` deg (spot) |
-| `light_strip` | LED strips, light coves | — |
-| `mower` | robot lawn mower body | `front`: +x / -x / +z / -z (which local axis is the nose) |
-| `vacuum` | robot vacuum | `front` |
-| `dock` | mower / vacuum charging station | `led`: name of the LED mesh |
-| `ev_charger` | car charger | — |
-| `door` | doors | `opens`: swing / slide; `hinge`: [x, y, z] local hinge point; `axis`: y; `travel`: degrees (swing) or metres (slide) |
-| `window` | windows | `opens`: swing / tilt / slide; `hinge`; `axis`; `travel` |
-| `gate` | gates | `opens`: swing / slide; `hinge`; `travel` |
-| `garage_door` | garage doors | `opens`: roll / tilt / slide; `travel` m |
-| `cover` | blinds, shutters, awnings | `direction`: down / up / out; `travel` m |
-| `fan` | fans, hoods | `axis`: local spin axis |
-| `climate` | radiators, AC units, heat pumps | — |
-| `screen` | TV, monitors (the screen surface is `glow`) | — |
-| `sprinkler` | irrigation heads | `direction`, `reach` m |
-| `camera` | security cameras | `fov` deg, `range` m |
-| `display` | a spot that shows a value (thermometer, meter) | `format`, e.g. `"{state} {unit}"` |
-| `generic` | anything else | — |
+| `beam` | `point`, `spot`, `down` or `up` (`down` / `up` are point lights for now) | `point` |
+| `max` | light intensity at full brightness (real light = brightness / 255 × `max`) | 5 |
+| `distance` | metres the light reaches (0 = no limit) | 0 |
+| `decay` | fall-off (2 = physical) | 2 |
+| `angle` | spot cone, degrees (5–80) | 24 |
+| `penumbra` | spot edge softness 0–1 | 0.6 |
+| `target` | `[x, y, z]` model point a spot aims at | straight down |
+| `castShadow` | `false` keeps the lamp out of the (at most 4) shadow casters | true |
+| `offset` | `[x, y, z]` metres added to the light position (model axes) | none |
 
-New types are added in the card over time; using a type the card doesn't know yet is fine, it
-behaves as `generic` until the type exists.
+The card owns a fixed pool of 12 real lights (8 point, 4 spot) and gives them to the lit fixtures in
+view, largest `max` first; the rest glow without a light. At most 4 point fixtures without a group
+cast shadows. Give the important room lamps the larger `max`.
+
+**Wall lamps:** put the light 12 cm in front of the wall, either by placing the glow mesh there or
+with `offset` (e.g. `[0, 0, 0.12]` on a south wall), otherwise the lamp lights its own wall harshly.
+**Decals and glow planes** on a surface (LED dots, light panels) sit 2–5 mm in front of it so they
+don't flicker (z-fighting).
 
 ### Actions (optional `ui`)
 
-Same shapes as Home Assistant dashboard actions:
-- `{ "action": "toggle" }`
-- `{ "action": "more-info" }`
-- `{ "action": "popup" }`: the card's popup next to the object
-- `{ "action": "perform-action", "perform_action": "light.turn_on", "data": { "brightness_pct": 100 } }`
-- `{ "action": "navigate", "navigation_path": "/lovelace/garden" }`
-- `{ "action": "none" }`
-
-Popup rows: `toggle`, `brightness`, `color`, `color_temp`, `speed`, `cover_controls`,
-`mower_controls`, `vacuum_controls`, `battery`, `state`, `attributes`, `attribute:<name>`.
+- `ui.tap`, `ui.hold`: `"toggle"`, `"more-info"`, `"popup"` or `"none"` (the type default otherwise).
+  Toggle acts on the object's entity, else its group controller.
+- `ui.popup`: rows of the popup, in order: `toggle`, `brightness`, `color`, `state`, `battery`,
+  `power`, `energy`, `temperature`, `mode`, `start_dock` (mower start / dock). Rows that don't apply
+  to the bound entity are left out. Grouped fixtures also show the group controller and why a
+  fixture is dark ("Facade switch is off").
 
 ## Re-exporting
 
@@ -265,7 +280,7 @@ const lamp = buildCeilingLamp();              // a Group with a child mesh named
 lamp.name = 'kitchen_ceiling_1';
 lamp.position.set(8.8, 2.85, -2.3);           // plan (8.8, 2.3) at 2.85 m
 lamp.userData.fp = { kind: 'object', id: 'kitchen_ceiling_1', type: 'light', glow: 'lamp_glass',
-  hints: { beam: 'down', range: 4 }, suggest: { domain: 'light', area: 'kitchen' } };
+  hints: { beam: 'point', max: 20, distance: 8, decay: 2 }, suggest: { entity: 'light.kitchen_ceiling' } };
 kitchen.add(lamp);
 
 const exterior = new THREE.Group();
@@ -273,6 +288,6 @@ exterior.name = 'exterior';
 exterior.userData.fp = { kind: 'level', id: 'exterior', role: 'exterior' };
 const dock = buildDock();
 dock.userData.fp = { kind: 'object', id: 'mower_dock', type: 'dock', hints: { led: 'dock_led' },
-  suggest: { domain: 'lawn_mower' } };
+  suggest: { entity: 'lawn_mower.mower' } };
 exterior.add(dock);
 ```

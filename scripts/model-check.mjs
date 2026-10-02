@@ -17,6 +17,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // wait until the 400 ms camera tween has finished (fixed sleeps flake under load)
 const settle = async (page, card) => { await page.waitForFunction(`!${card}._view._tween`, { timeout: 5000 }).catch(() => {}); await sleep(100); };
 const card = 'document.querySelector("floorplan3d-card")';
+// move the camera and wait for the occlusion pass that follows it to finish (no fixed sleeps)
+const camAndOcclusion = async (page, cam) => {
+  const before = await page.evaluate(`${card}._view.stats.occDone`);
+  // an explicit full pass too: the camera may already be there (no change event, no pass of its own)
+  await page.evaluate(`(() => { const v = ${card}._view; v.setCamera(${typeof cam === 'string' ? cam : JSON.stringify(cam)}, { instant: true }); v._scheduleOcclusion(0); })()`);
+  await page.waitForFunction(`(() => { const v = ${card}._view; return !v._tween && v.stats.occDone > ${before} && !v._occFull && !v._occTimer; })()`, { timeout: 5000 })
+    .catch(() => console.log('     (occlusion pass did not finish in 5 s)'));
+};
 let allErrors = [];
 
 function rewriteGlbJson(buf, edit) {
@@ -128,22 +136,19 @@ try {
     return null; })()`);
   if (occ) {
     const camBefore = await page.evaluate(`${card}._view.getCamera()`);
-    await page.evaluate(`${card}._view.setCamera({ position: [${occ.pos[0]}, ${occ.pos[1] + 2}, ${occ.pos[2] + 12}], target: ${JSON.stringify(occ.pos)} }, { instant: true })`);
-    await sleep(600);
+    await camAndOcclusion(page, { position: [occ.pos[0], occ.pos[1] + 2, occ.pos[2] + 12], target: occ.pos });
     const cls = (id) => page.evaluate(`${card}._view.markerObjects.get(${JSON.stringify(id)}).obj.element.classList.contains('fp-occluded')`);
     check('a marker behind the south wall is fp-occluded from a camera outside', await cls(occ.id), JSON.stringify(occ));
     const style = (id) => page.evaluate(`(() => { const s = getComputedStyle(${card}._view.markerObjects.get(${JSON.stringify(id)}).obj.element); return [s.opacity, s.pointerEvents]; })()`);
     check('occluded marker: faint, not clickable in view mode', JSON.stringify(await style(occ.id)) === '["0.25","none"]', JSON.stringify(await style(occ.id)));
     await page.evaluate(`${card}._toggleEdit()`);
-    await sleep(500);
-    await page.evaluate(`${card}._view.setCamera({ position: [${occ.pos[0]}, ${occ.pos[1] + 2}, ${occ.pos[2] + 12}], target: ${JSON.stringify(occ.pos)} }, { instant: true })`);
-    await sleep(600);
+    await settle(page, card);
+    await camAndOcclusion(page, { position: [occ.pos[0], occ.pos[1] + 2, occ.pos[2] + 12], target: occ.pos });
     const es = await style(occ.id);
     check('occluded marker in edit mode: half opacity, still draggable', (await cls(occ.id)) && JSON.stringify(es) === '["0.5","auto"]', JSON.stringify(es));
     await page.evaluate(`${card}._toggleEdit()`);
     await sleep(300);
-    await page.evaluate(`${card}._view.setCamera({ position: [${occ.pos[0]}, ${occ.pos[1] + 14}, ${occ.pos[2] + 3}], target: ${JSON.stringify(occ.pos)} }, { instant: true })`);
-    await sleep(600);
+    await camAndOcclusion(page, { position: [occ.pos[0], occ.pos[1] + 14, occ.pos[2] + 3], target: occ.pos });
     check('same marker seen from above (no wall in between) is not occluded', !(await cls(occ.id)));
     await page.evaluate(`${card}._view.setCamera(${JSON.stringify(camBefore)}, { instant: true })`);
     await sleep(300);
@@ -167,7 +172,7 @@ try {
   check('Exterior view: every level shown uncut', v.level0 && v.level1 && v.exterior && v.roof && v.cut > 1000, JSON.stringify(v));
   const faded = () => page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-marker.fp-faded').length`);
   check('Exterior view (overview): every device shown, none faded', (await faded()) === 0 && (await shownMarkers()) === allMarkers, `${await shownMarkers()}/${allMarkers}`);
-  check('Exterior view (overview): no room labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label').length`)) === 0);
+  check('Exterior view (overview): no room labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label:not(.fp-obj-label)').length`)) === 0);
   await page.screenshot({ path: path.join(root, 'screenshots', 'model-exterior.png') });
   await page.evaluate(`${card}._setFloor('first')`);
   await sleep(300);
@@ -226,17 +231,17 @@ try {
   const look = await page.evaluate(`(() => { const v = ${card}._view; return { tm: v.renderer.toneMapping, sm: v.renderer.shadowMap.enabled,
     sr: v.sun.shadow.camera.right, pr: v.renderer.getPixelRatio(),
     fills: (() => { let n = 0; v.staticGroup.traverse((o) => { if (o.isMesh && o.userData.roomId) n++; }); return n; })(),
-    labels: ${card}.shadowRoot.querySelectorAll('.fp-room-label').length, tagged: v.isTagged(),
+    labels: ${card}.shadowRoot.querySelectorAll('.fp-room-label:not(.fp-obj-label)').length, tagged: v.isTagged(),
     hasModel: ${card}._stage.classList.contains('has-model'), dayHidden: ${card}.shadowRoot.querySelector('button.daynight').hidden }; })()`);
   check('ACES tone mapping with a model', look.tm === 4, String(look.tm));
   check('shadows on, shadow camera fitted to the model', look.sm === true && look.sr < 200 && look.sr < 40, `${look.sm} ${look.sr}`);
   check('pixel ratio capped', look.pr <= 1.5, String(look.pr));
   check('no room fills; ground view labels its own rooms with sizes', look.fills === 0 && look.labels > 0
-    && (await page.evaluate(`${card}.shadowRoot.querySelector('.fp-room-label').textContent`)).includes(' m'), JSON.stringify(look));
+    && (await page.evaluate(`${card}.shadowRoot.querySelector('.fp-room-label:not(.fp-obj-label)').textContent`)).includes(' m'), JSON.stringify(look));
   check('stage has has-model, day/night button shown', look.hasModel && !look.dayHidden);
   await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
   await sleep(400);
-  check('edit mode shows room labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label').length`)) > 0);
+  check('edit mode shows room labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label:not(.fp-obj-label)').length`)) > 0);
   const traced = await page.evaluate(`(() => {
     const ed = ${card}._edit, v = ${card}._view;
     let found = null;
@@ -256,7 +261,7 @@ try {
   check('pick: a floor piece of the model gives an outline polygon', traced >= 3, String(traced));
   await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
   await sleep(400);
-  check('leaving edit mode restores the view\'s labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label').length`)) === look.labels);
+  check('leaving edit mode restores the view\'s labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label:not(.fp-obj-label)').length`)) === look.labels);
   // framing uses the room polygons even though no fills/outlines/walls are rendered with a model
   await page.evaluate(`${card}._setFloor('ground'); ${card}._view.setMode('3d'); ${card}._view.fit({ instant: true })`);
   await sleep(200);
@@ -343,29 +348,19 @@ try {
   await s.close();
 }
 
-// 1b. model objects: tap toggles, hold opens the popup, a drag never toggles (a lamp injected into the demo model)
+// 1b. model objects: tap toggles, hold opens the popup, a drag never toggles (the demo model's hall ceiling lamp)
 s = await openDemo({ model: '1', view: '3d' }, { width: 1400, height: 560 });
 try {
   const { page } = s;
   await page.waitForFunction(`!!${card}._view.model && !!${card}._hass`, { timeout: 10000 });
   await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=ground]').click()`);
   await settle(page, card);
-  const injected = await page.evaluate(`(() => { const c = ${card}, v = c._view, m = v.model;
-    const lv = v.modelManifest().levels.find((l) => l.id === 'level0');
-    let mesh = null;
-    lv.node.traverse((n) => { if (!mesh && n.isMesh && n.name) mesh = n; });
-    if (!mesh) return null;
-    m.manifest.objects = (m.manifest.objects || []).concat([{ id: 'test_lamp', type: 'light', label: 'Test lamp', node: mesh,
-      glow: mesh.name, level: 'level0', suggest: { entity: 'light.hall' } }]);
-    c._objects.setModel(null); c._objects.setModel(m);
-    c._bindKey = null; c._syncBindings(); c._buildMarkers(); c._refreshStates(); c._updateObjects();
-    v.dirty = true;
-    return mesh.name; })()`);
-  check('test lamp injected into the demo model', !!injected, String(injected));
+  const injected = await page.evaluate(`(() => { const o = ${card}._objects.objectAt('lamp_hall'); return o ? o.obj.node.name : null; })()`);
+  check('the demo model has the hall ceiling lamp object', !!injected, String(injected));
   await sleep(200);
-  const at = () => page.evaluate(`(() => { const c = ${card}; const a = c._objects.anchors().find((x) => x.id === 'test_lamp');
+  const at = () => page.evaluate(`(() => { const c = ${card}; const a = c._objects.anchors().find((x) => x.id === 'lamp_hall');
     return a && c._view.projectWorld(a.world); })()`);
-  const hall = () => page.evaluate(`${card}._hass.states['light.hall'].state`);
+  const hall = () => page.evaluate(`${card}._hass.states['light.demo_hall'].state`);
   const calls = () => page.evaluate('(window.__serviceCalls || []).length');
   let p = await at();
   check('lamp anchor projects onto the screen', !!p, JSON.stringify(p));
@@ -373,7 +368,7 @@ try {
   await page.mouse.click(p[0] + 12, p[1] + 8); // within 30 px
   await sleep(200);
   check('tap near the lamp toggles its light', (await hall()) !== before, `${before} -> ${await hall()}`);
-  check('the bound light has no marker of its own', !(await page.evaluate(`${card}._markers.some((m) => m.entityId === 'light.hall')`)));
+  check('the bound light has no marker of its own', !(await page.evaluate(`${card}._markers.some((m) => m.entityId === 'light.demo_hall')`)));
   const n0 = await calls();
   p = await at();
   await page.mouse.move(p[0], p[1]);
@@ -393,11 +388,11 @@ try {
     return el && { title: el.querySelector('.fp-pop-title').textContent, rows: [...el.querySelectorAll('.fp-pop-row')].map((r) => r.className.replace('fp-pop-row ', '')),
       vis: el.style.visibility, t: el.style.transform }; })()`);
   let pp = await pop();
-  check('hold opens the popup (toggle + brightness) without toggling', !!pp && pp.title === 'Test lamp' && pp.rows.join() === 'toggle,brightness' && pp.vis !== 'hidden' && (await calls()) === n0, JSON.stringify(pp));
+  check('hold opens the popup (toggle + brightness) without toggling', !!pp && pp.title === 'Hall ceiling lamp' && pp.rows.join() === 'toggle,brightness' && pp.vis !== 'hidden' && (await calls()) === n0, JSON.stringify(pp));
   await page.screenshot({ path: path.join(root, 'screenshots', 'object-popup.png') });
   await page.evaluate(`(() => { const r = ${card}.shadowRoot.querySelector('.fp-popup .brightness input'); r.value = '100'; r.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   const last = await page.evaluate('JSON.stringify(window.__serviceCalls[window.__serviceCalls.length - 1])');
-  check('brightness slider sends light.turn_on once on release', last === JSON.stringify(['light', 'turn_on', { entity_id: 'light.hall', brightness: 100 }]), last);
+  check('brightness slider sends light.turn_on once on release', last === JSON.stringify(['light', 'turn_on', { entity_id: 'light.demo_hall', brightness: 100 }]), last);
   const st1 = await hall();
   await page.evaluate(`${card}.shadowRoot.querySelector('.fp-popup .toggle .fp-switch').click()`);
   await sleep(200);
@@ -462,41 +457,45 @@ try {
   p = await at();
   await page.mouse.click(p[0], p[1]);
   await sleep(300);
-  const rowInfo = () => page.evaluate(`(() => { const li = ${sr}.querySelector('li.obj[data-obj=test_lamp]'); if (!li) return null;
+  const rowInfo = () => page.evaluate(`(() => { const li = ${sr}.querySelector('li.obj[data-obj=lamp_hall]'); if (!li) return null;
     const inp = li.querySelector('[data-field=obj-entity]'); return { sel: li.classList.contains('sel'), ph: inp.placeholder, val: inp.value, badge: (li.querySelector('.badge') || {}).textContent || '' }; })()`);
   let ri = await rowInfo();
   check('tapping the lamp in 3D selects its row', !!ri && ri.sel, JSON.stringify(ri));
   check('the tap did not toggle it', (await calls()) === nObj && (await hall()) === hall0);
-  check('row shows the auto entity', !!ri && ri.badge === 'auto' && ri.ph === 'light.hall' && ri.val === '', JSON.stringify(ri));
+  check('row shows the auto entity', !!ri && ri.badge === 'auto' && ri.ph === 'light.demo_hall' && ri.val === '', JSON.stringify(ri));
   // rebind to another entity
-  const other = await page.evaluate(`Object.keys(${card}._hass.states).find((e) => e.startsWith('light.') && e !== 'light.hall')`);
-  const setEntity = (v) => page.evaluate(`(() => { const i = ${sr}.querySelector('[data-field=obj-entity][data-id=test_lamp]'); i.value = ${JSON.stringify(v)}; i.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  const other = await page.evaluate(`Object.keys(${card}._hass.states).find((e) => e.startsWith('light.') && e !== 'light.demo_hall')`);
+  const setEntity = (v) => page.evaluate(`(() => { const i = ${sr}.querySelector('[data-field=obj-entity][data-id=lamp_hall]'); i.value = ${JSON.stringify(v)}; i.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   await setEntity(other);
   await sleep(300);
-  const bound = () => page.evaluate(`(() => { const b = ${card}._bindings.get('test_lamp'); const o = ${card}._objects.objectAt('test_lamp'); return { cfg: ${card}._layout.objects && ${card}._layout.objects.test_lamp, e: b.entity, layer: o.binding.entity }; })()`);
+  const bound = () => page.evaluate(`(() => { const b = ${card}._bindings.get('lamp_hall'); const o = ${card}._objects.objectAt('lamp_hall'); return { cfg: ${card}._layout.objects && ${card}._layout.objects.lamp_hall, e: b.entity, layer: o.binding.entity }; })()`);
   let bd = await bound();
   check('changing the entity rebinds the object', bd.e === other && bd.layer === other && bd.cfg && bd.cfg.entity === other, JSON.stringify(bd));
   await setEntity('light.does_not_exist');
   await sleep(300);
   ri = await rowInfo();
   check('an unknown entity shows "entity not found"', !!ri && ri.badge === 'entity not found', JSON.stringify(ri));
+  const hasTest = () => page.evaluate(`!!${sr}.querySelector('li.obj[data-obj=lamp_hall] button[data-act=obj-test]')`);
+  check('no Test button on an unbound row', !(await hasTest()));
   await setEntity('');
   await sleep(300);
   bd = await bound();
-  check('clearing the entity returns to auto', bd.e === 'light.hall' && !bd.cfg, JSON.stringify(bd));
+  check('clearing the entity returns to auto', bd.e === 'light.demo_hall' && !bd.cfg, JSON.stringify(bd));
   // Test toggles through callService
   const c0 = await calls();
   const h0 = await hall();
-  await page.evaluate(`${sr}.querySelector('li.obj[data-obj=test_lamp] button[data-act=obj-test]').click()`);
+  await page.evaluate(`${sr}.querySelector('li.obj[data-obj=lamp_hall] button[data-act=obj-test]').click()`);
   await sleep(200);
   check('Test toggles the bound light', (await calls()) === c0 + 1 && (await hall()) !== h0, `${c0} -> ${await calls()}`);
   // Hide
-  await page.evaluate(`(() => { const c = ${sr}.querySelector('[data-field=obj-hidden][data-id=test_lamp]'); c.checked = true; c.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await page.evaluate(`(() => { const c = ${sr}.querySelector('[data-field=obj-hidden][data-id=lamp_hall]'); c.checked = true; c.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   await sleep(300);
-  check('hide marks the object hidden', await page.evaluate(`!!${card}._bindings.get('test_lamp').hidden && ${card}._layout.objects.test_lamp.hidden === true`));
-  await page.evaluate(`(() => { const c = ${sr}.querySelector('[data-field=obj-hidden][data-id=test_lamp]'); c.checked = false; c.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  check('hide marks the object hidden', await page.evaluate(`!!${card}._bindings.get('lamp_hall').hidden && ${card}._layout.objects.lamp_hall.hidden === true`));
+  check('no Test button on a hidden row', !(await hasTest()));
+  await page.evaluate(`(() => { const c = ${sr}.querySelector('[data-field=obj-hidden][data-id=lamp_hall]'); c.checked = false; c.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   await sleep(300);
-  check('un-hide drops the entry', await page.evaluate(`!${card}._bindings.get('test_lamp').hidden && !(${card}._layout.objects || {}).test_lamp`));
+  check('un-hide drops the entry', await page.evaluate(`!${card}._bindings.get('lamp_hall').hidden && !(${card}._layout.objects || {}).lamp_hall`));
+  check('Test button back on the bound row', await hasTest());
   await page.screenshot({ path: path.join(root, 'screenshots', 'objects-tab.png') });
   // leaving the tab turns object taps off again
   await page.evaluate(`[...${sr}.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === 'Devices').click()`);
@@ -508,26 +507,15 @@ try {
   await s.close();
 }
 
-// 1c. mower object: the model node follows the live position, the mower marker is gone (a mower injected into the demo model)
+// 1c. mower object: the model node follows the live position, the mower marker is gone (the demo model's mower)
 s = await openDemo({ model: '1', view: '3d' }, { width: 1400, height: 560 });
 try {
   const { page } = s;
   await page.waitForFunction(`!!${card}._view.model && !!${card}._hass`, { timeout: 10000 });
   await settle(page, card);
-  const injected = await page.evaluate(`(() => { const c = ${card}, v = c._view, m = v.model;
-    const lv = v.modelManifest().levels.find((l) => l.id === 'level0');
-    let mesh = null;
-    lv.node.traverse((n) => { if (!mesh && n.isMesh && n.name) mesh = n; });
-    if (!mesh) return null;
-    const node = new mesh.parent.constructor(); node.name = 'test_mower';
-    const g = mesh.clone(); g.name = 'glow'; node.add(g);
-    mesh.parent.add(node);
-    m.manifest.objects = (m.manifest.objects || []).concat([{ id: 'test_mower', type: 'mower', label: 'Mower', node, level: 'level0', suggest: { entity: 'lawn_mower.sunseeker' } }]);
-    c._objects.setModel(null); c._objects.setModel(m);
-    c._bindKey = null; c._syncBindings(); c._buildMarkers(); c._refreshStates(); c._refreshMower(); c._updateObjects();
-    return true; })()`);
-  check('test mower injected into the demo model', !!injected);
-  const pos = () => page.evaluate(`(() => { const c = ${card}; const o = c._objects.objectAt('test_mower');
+  await page.waitForFunction(`!!${card}._objects.objectAt('mower') && !!${card}._objects.mowerBound() && !!${card}._mowerLive`, { timeout: 5000 }).catch(() => {});
+  check('the demo model\'s mower object is bound to lawn_mower.demo', await page.evaluate(`${card}._bindings.get('mower').entity === 'lawn_mower.demo'`));
+  const pos = () => page.evaluate(`(() => { const c = ${card}; const o = c._objects.objectAt('mower');
     const w = o.obj.node.getWorldPosition(new c._view.camera.position.constructor());
     const g = o.part.glow && o.part.glow.material; return { x: w.x, z: w.z, marker: !!c._mowerMarkerId, live: !!c._mowerLive && !!c._mowerLive.x, em: g ? g.emissive.g : -1 }; })()`);
   const a = await pos();
@@ -536,17 +524,156 @@ try {
   check('mower node moves with the live position', Math.hypot(a.x - b.x, a.z - b.z) > 0.01, JSON.stringify([a, b]));
   check('the mower marker is replaced by the object', !a.marker && !b.marker);
   check('mower glow takes the mowing colour', b.em > 0.1, JSON.stringify(b));
-  // a climate object shows its temperature as a label
-  await page.evaluate(`(() => { const c = ${card}, v = c._view, m = v.model;
-    const lv = v.modelManifest().levels.find((l) => l.id === 'level0');
-    const node = new (lv.node.constructor)(); node.name = 'test_climate'; lv.node.add(node);
-    m.manifest.objects = m.manifest.objects.concat([{ id: 'test_climate', type: 'climate', label: 'Climate', node, level: 'level0', suggest: { entity: 'climate.bedroom' } }]);
-    c._objects.setModel(null); c._objects.setModel(m);
-    c._bindKey = null; c._syncBindings(); c._buildMarkers(); c._refreshStates(); c._refreshMower(); c._updateObjects();
-    v.dirty = true; return true; })()`);
-  await sleep(500); // the CSS2D renderer attaches the element on the next frame
-  const lbl = await page.evaluate(`(() => { const e = [...${card}.shadowRoot.querySelectorAll('.fp-obj-label')].find((x) => x.textContent.includes('20.5')); return e ? e.textContent : null; })()`);
+  // the demo model's climate unit shows its temperature as a label
+  await page.waitForFunction(`[...${card}.shadowRoot.querySelectorAll('.fp-obj-label')].some((x) => x.textContent.includes('21.5'))`, { timeout: 3000 }).catch(() => {});
+  const lbl = await page.evaluate(`(() => { const e = [...${card}.shadowRoot.querySelectorAll('.fp-obj-label')].find((x) => x.textContent.includes('21.5')); return e ? e.textContent : null; })()`);
   check('climate object shows a temperature label', !!lbl, String(lbl));
+  allErrors.push(...s.errors);
+} finally {
+  await s.close();
+}
+
+// 1d. the demo model's objects: automatic binding, glow + pool lights, light / shadow budget, the facade group
+// and its controller, dock / charger looks, lights: off, idle updates (no budget or shadow work)
+s = await openDemo({ model: '1', view: '3d' }, { width: 1400, height: 560 });
+try {
+  const { page } = s;
+  await page.waitForFunction(`!!${card}._view.model && !!${card}._hass && ${card}._objects.parts.size > 0`, { timeout: 10000 });
+  await page.evaluate('window.__demoMowerPaused = true');
+  await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=ground]').click()`);
+  await settle(page, card);
+  const BOUND = {
+    lamp_living: 'light.demo_living', lamp_hall: 'light.demo_hall', lamp_kitchen: 'light.demo_kitchen', kitchen_strip: 'light.demo_strip',
+    facade_1: 'light.demo_facade', facade_2: 'light.demo_facade', facade_3: 'light.demo_facade', terrace_spot: 'light.demo_terrace',
+    climate_living: 'climate.demo_living', mower: 'lawn_mower.demo', dock: 'lawn_mower.demo', ev_charger: 'sensor.demo_charger',
+  };
+  const binds = await page.evaluate(`Object.fromEntries([...${card}._bindings].map(([id, b]) => [id, b.entity]))`);
+  check('demo objects: all 12 bind automatically from suggest.entity',
+    Object.keys(binds).length === 12 && Object.entries(BOUND).every(([id, e]) => binds[id] === e), JSON.stringify(binds));
+  const markerEnts = await page.evaluate(`${card}._markers.map((m) => m.entityId)`);
+  const leaked = Object.values(BOUND).filter((e) => markerEnts.includes(e));
+  check('demo objects: bound entities have no markers of their own', leaked.length === 0, leaked.join());
+  check('demo objects: the facade group controller (not bound to an object) keeps its marker', markerEnts.includes('switch.demo_facade'));
+  const ids = Object.keys(BOUND);
+  const look = () => page.evaluate(`(() => { const c = ${card}, l = c._objects, all = [...l.pool.points, ...l.pool.spots];
+    const lit = all.filter((x) => x.intensity > 0);
+    const near = (id) => { const a = l.anchorOf(id); return a ? lit.filter((x) => x.position.distanceTo(a) < 0.05).map((x) => +x.intensity.toFixed(3)) : null; };
+    const glow = (id) => { const o = l.objectAt(id), g = o && o.part.glow; if (!g) return -1; const m = [].concat(g.material)[0]; return +(m.emissiveIntensity * Math.max(m.emissive.r, m.emissive.g, m.emissive.b)).toFixed(3); };
+    const ids = ${JSON.stringify(ids)};
+    const spot = l.pool.spots.find((x) => x.intensity > 0);
+    return { lit: lit.length, shadows: lit.filter((x) => x.castShadow).length, slots: [...l._slots.keys()],
+      near: Object.fromEntries(ids.map((id) => [id, near(id)])), glow: Object.fromEntries(ids.map((id) => [id, glow(id)])),
+      spotTarget: spot ? spot.target.position.toArray() : null,
+      facadeLit: lit.filter((x) => ['facade_1', 'facade_2', 'facade_3'].some((id) => x.position.distanceTo(l.anchorOf(id)) < 0.05)).length }; })()`);
+  let L = await look();
+  check('lamp on: glow emissive and a pool light with intensity > 0 at the lamp', L.glow.lamp_living > 0 && L.near.lamp_living.length === 1 && L.near.lamp_living[0] > 0, JSON.stringify({ g: L.glow.lamp_living, n: L.near.lamp_living }));
+  check('lamp off: no glow, no pool light', L.glow.lamp_hall === 0 && L.near.lamp_hall.length === 0, JSON.stringify({ g: L.glow.lamp_hall, n: L.near.lamp_hall }));
+  check('at most 12 pool lights lit, at most 4 of them casting shadows', L.lit > 0 && L.lit <= 12 && L.shadows <= 4, JSON.stringify({ lit: L.lit, shadows: L.shadows }));
+  check('facade group on: exactly one pool light for the three fixtures, all three glow',
+    L.facadeLit === 1 && L.slots.filter((x) => x.startsWith('facade_')).length === 1 && ['facade_1', 'facade_2', 'facade_3'].every((id) => L.glow[id] > 0), JSON.stringify({ f: L.facadeLit, slots: L.slots }));
+  check('terrace spot: a lit spot light aimed at its hints.target', L.near.terrace_spot.length === 1 && !!L.spotTarget && Math.hypot(L.spotTarget[0] - 2.5, L.spotTarget[1], L.spotTarget[2] - 1.5) < 0.05, JSON.stringify({ n: L.near.terrace_spot, t: L.spotTarget }));
+  check('light strip: glows, no real light (no hints.max)', L.glow.kitchen_strip > 0 && L.near.kitchen_strip.length === 0, JSON.stringify({ g: L.glow.kitchen_strip, n: L.near.kitchen_strip }));
+  check('EV charger charging: LED lit, power label', L.glow.ev_charger > 0 && (await page.evaluate(`[...${card}.shadowRoot.querySelectorAll('.fp-obj-label')].some((x) => x.textContent.includes('7.4 kW'))`)), JSON.stringify(L.glow.ev_charger));
+  check('dock LED dark while the mower mows', L.glow.dock === 0, String(L.glow.dock));
+  const setState = (e, state, attrs) => page.evaluate(`(() => { const c = ${card}, st = c._hass.states, s = st[${JSON.stringify(e)}];
+    c.hass = { ...c._hass, states: { ...st, [${JSON.stringify(e)}]: { ...s, state: ${JSON.stringify(state)}, attributes: { ...s.attributes, ...${JSON.stringify(attrs || {})} } } } }; })()`);
+  await setState('lawn_mower.demo', 'docked');
+  await sleep(150);
+  check('dock LED lit once the mower is docked', (await look()).glow.dock > 0);
+  await setState('lawn_mower.demo', 'mowing');
+  // brightness: the pool light follows (bri / 255 x hints.max)
+  await page.evaluate(`${card}._hass.callService('light', 'turn_on', { entity_id: 'light.demo_living', brightness: 51 })`);
+  await sleep(200);
+  L = await look();
+  check('brightness 51 -> the lamp\'s pool light at 51/255 x max 20 = 4', L.near.lamp_living.length === 1 && Math.abs(L.near.lamp_living[0] - 4) < 0.05, JSON.stringify(L.near.lamp_living));
+  // a tap on the lamp toggles its entity (the mock records callService)
+  const lampAt = (id) => page.evaluate(`(() => { const c = ${card}, a = c._objects.anchorOf(${JSON.stringify(id)}); return a && c._view.projectWorld(a); })()`);
+  let p = await lampAt('lamp_living');
+  const calls0 = await page.evaluate('(window.__serviceCalls || []).length');
+  if (p) await page.mouse.click(p[0], p[1]);
+  await sleep(200);
+  const lastCall = await page.evaluate('JSON.stringify((window.__serviceCalls || []).slice(-1)[0] || null)');
+  check('a tap on the living lamp calls light.toggle for light.demo_living', !!p && (await page.evaluate('(window.__serviceCalls || []).length')) === calls0 + 1
+    && lastCall === JSON.stringify(['light', 'toggle', { entity_id: 'light.demo_living' }]), lastCall);
+  check('toggled off: its glow and pool light are gone', await look().then((x) => x.glow.lamp_living === 0 && x.near.lamp_living.length === 0));
+  await page.evaluate(`${card}._hass.callService('light', 'toggle', { entity_id: 'light.demo_living' })`);
+  await sleep(150);
+  // group controller off: the fixtures go dark, the popup says why
+  await page.evaluate(`${card}._hass.callService('switch', 'toggle', { entity_id: 'switch.demo_facade' })`);
+  await sleep(200);
+  L = await look();
+  check('group controller off: facade fixtures dark, no pool light (own light still on)',
+    ['facade_1', 'facade_2', 'facade_3'].every((id) => L.glow[id] === 0) && L.facadeLit === 0 && (await page.evaluate(`${card}._hass.states['light.demo_facade'].state`)) === 'on', JSON.stringify(L.glow));
+  await page.evaluate(`${card}._runObjectAction('facade_2', 'hold')`);
+  await sleep(150);
+  const popText = await page.evaluate(`(${card}.shadowRoot.querySelector('.fp-popup') || {}).textContent || ''`);
+  check('popup of a dark facade lamp says the group switch is off', popText.includes('Facade switch is off'), popText.replace(/\s+/g, ' ').slice(0, 160));
+  await page.screenshot({ path: path.join(root, 'screenshots', 'object-group-popup.png') });
+  await page.keyboard.press('Escape');
+  await page.evaluate(`${card}._hass.callService('switch', 'toggle', { entity_id: 'switch.demo_facade' })`);
+  await sleep(200);
+  check('group controller on again: the facade lights up', (await look()).facadeLit === 1);
+  // ten state updates that touch no object: no budget recompute, no object re-evaluation, no shadow redraw
+  await sleep(300);
+  const counters = () => page.evaluate(`({ ...${card}._objects.stats, shadow: ${card}._view.stats.shadow })`);
+  const c0 = await counters();
+  for (let i = 0; i < 10; i++) {
+    await page.evaluate(`(() => { const c = ${card}, st = c._hass.states, t = st['sensor.kitchen_temperature'];
+      c.hass = { ...c._hass, states: { ...st, 'sensor.kitchen_temperature': { ...t, state: String(18 + ${i}) } } }; })()`);
+    await sleep(40);
+  }
+  await sleep(300);
+  const c1 = await counters();
+  check('10 unrelated hass updates: layer updated, no budget recompute, no re-evaluation, no shadow update',
+    c1.updates >= c0.updates + 10 && c1.budget === c0.budget && c1.evaluated === c0.evaluated && c1.shadowRequests === c0.shadowRequests && c1.shadow === c0.shadow,
+    JSON.stringify({ c0, c1 }));
+  await page.screenshot({ path: path.join(root, 'screenshots', 'objects-lit.png') });
+  // night: the lamps carry the scene
+  await page.evaluate('window.__setDemoSun(-20, 200)');
+  await sleep(300);
+  await page.screenshot({ path: path.join(root, 'screenshots', 'objects-night.png') });
+  // lights: off -> emissive only
+  await page.evaluate(`${card}.setConfig({ ...${card}._config, lights: 'off' })`);
+  await page.waitForFunction(`!!${card}._view.model && ${card}._objects.parts.size > 0`, { timeout: 10000 });
+  await sleep(400);
+  L = await look();
+  check('lights: off -> every pool light at intensity 0, lamps still glow', L.lit === 0 && L.glow.lamp_living > 0, JSON.stringify({ lit: L.lit, g: L.glow.lamp_living }));
+  await page.evaluate(`${card}.setConfig({ ...${card}._config, lights: 'auto' })`);
+  await sleep(400);
+  check('lights: auto again -> pool lights back', (await look()).lit > 0);
+  // Objects tab: every row bound (no "entity not found"); the group controller field
+  await page.evaluate('window.__setDemoSun(30, 180)');
+  const sr = `${card}.shadowRoot`;
+  await page.evaluate(`${sr}.querySelector('button.edit').click()`);
+  await sleep(300);
+  await page.evaluate(`[...${sr}.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === 'Objects').click()`);
+  await sleep(200);
+  for (let i = 0; i < 20; i++) {
+    const opened = await page.evaluate(`(() => { const b = [...${sr}.querySelectorAll('[data-act=obj-expand]')].find((x) => x.textContent.trim() === '▸'); if (b) b.click(); return !!b; })()`);
+    if (!opened) break;
+    await sleep(80);
+  }
+  const rows = await page.evaluate(`[...${sr}.querySelectorAll('li.obj')].map((li) => ({ id: li.dataset.obj, badge: (li.querySelector('.badge') || {}).textContent || '', test: !!li.querySelector('[data-act=obj-test]') }))`);
+  check('Objects tab: 12 rows, all "auto", none "entity not found"', rows.length === 12 && rows.every((r) => r.badge === 'auto'), JSON.stringify(rows));
+  check('Objects tab: lamps have a Test button', ['lamp_living', 'facade_1', 'terrace_spot'].every((id) => (rows.find((r) => r.id === id) || {}).test));
+  const grp = () => page.evaluate(`(() => { const g = ${sr}.querySelector('label.grp[data-grp=facade]'); return g && { warn: !!g.querySelector('.badge.warn'), val: g.querySelector('input').value,
+    saved: JSON.stringify((${card}._layout.groups || {}).facade || null), eff: JSON.stringify(${card}._groups.facade || null) }; })()`);
+  const setGrp = async (v) => { await page.evaluate(`(() => { const i = ${sr}.querySelector('[data-field=grp-entity][data-id=facade]'); i.value = ${JSON.stringify(v)}; i.dispatchEvent(new Event('change', { bubbles: true })); })()`); await sleep(250); };
+  let g = await grp();
+  check('Groups: facade controller switch.demo_facade, found', !!g && !g.warn && g.val === 'switch.demo_facade', JSON.stringify(g));
+  await page.evaluate(`${card}._hass.callService('switch', 'turn_off', { entity_id: 'switch.demo_facade' })`);
+  await sleep(200);
+  await setGrp('switch.demo_typo');
+  g = await grp();
+  check('Groups: a controller HA does not know shows "entity not found" and is ignored by the chain',
+    !!g && g.warn && g.eff === 'null' && (await look()).facadeLit === 1, JSON.stringify(g));
+  await setGrp('none');
+  g = await grp();
+  check('Groups: "none" removes the controller (nothing stored)', !!g && g.saved === 'null' && g.val === '' && !g.warn, JSON.stringify(g));
+  await setGrp('switch.demo_facade');
+  g = await grp();
+  check('Groups: controller back, the switch is off -> facade dark', !!g && !g.warn && (await look()).facadeLit === 0, JSON.stringify(g));
+  await page.screenshot({ path: path.join(root, 'screenshots', 'objects-tab-demo.png') });
   allErrors.push(...s.errors);
 } finally {
   await s.close();
@@ -889,7 +1016,7 @@ try {
     && JSON.stringify(await page.evaluate(`[...${sr}.querySelectorAll('.chip')].map((b) => b.textContent)`)) === '["Exterior","Ground floor","First floor"]', JSON.stringify(await chipIds()));
   await chip('ground');
   await clickText('Views');
-  check('room labels in edit mode show sizes', await page.evaluate(`(() => { const l = [...${sr}.querySelectorAll('.fp-room-label')].map((x) => x.textContent); return l.length > 0 && l.every((t) => t.includes('×') || t.includes('m²')); })()`));
+  check('room labels in edit mode show sizes', await page.evaluate(`(() => { const l = [...${sr}.querySelectorAll('.fp-room-label:not(.fp-obj-label)')].map((x) => x.textContent); return l.length > 0 && l.every((t) => t.includes('×') || t.includes('m²')); })()`));
 
   // layer eye: furniture hidden in this view only
   const furniture = ['sofa', 'coffee_table', 'kitchen_table', 'bed'];
@@ -1234,7 +1361,7 @@ try {
 }
 
 // 2g. magnetic drag (demo/house.glb uploaded): a marker sticks to a wall, attaches to a model object
-// (an injected lamp), follows it when the model is realigned, Alt-drag never attaches, Detach keeps the spot
+// (the living-room ceiling lamp), follows it when the model is realigned, Alt-drag never attaches, Detach keeps the spot
 s = await openDemo({ view: '3d', height: '560px' }, { width: 1500, height: 680 });
 try {
   const { page } = s;
@@ -1258,34 +1385,37 @@ try {
   await page.evaluate(`${sr}.querySelector('.chip[data-view=ground]').click()`);
   await settle(page, card);
   await clickText('Devices');
-  // the sofa becomes a lamp object (manifest entry + owner lookup), unbound
-  const injected = await page.evaluate(`(() => { const c = ${card}, v = c._view, m = v.model;
-    const node = m.root.getObjectByName('sofa');
-    if (!node) return null;
-    let mesh = node.isMesh ? node : null;
-    node.traverse((n) => { if (!mesh && n.isMesh) mesh = n; });
-    const entry = { kind: 'object', id: 'test_lamp', type: 'light', label: 'Test lamp', node, glow: mesh.name, level: 'level0', room: null, group: null, suggest: {} };
-    m.manifest.objects = (m.manifest.objects || []).concat([entry]);
-    m.manifest.byNode.set(node, entry);
-    c._objects.setModel(null); c._objects.setModel(m);
-    c._bindKey = null; c._syncBindings(); c._buildMarkers(); c._refreshStates(); c._updateObjects();
-    v.dirty = true;
-    return node.name; })()`);
-  check('magnetic: lamp object injected into the uploaded model', !!injected, String(injected));
+  // closer to the living room: the ceiling lamp is a small disc, too small to hit from the default distance
+  await page.evaluate(`${card}._view.setCamera({ position: [8, 8.5, 8], target: [3, 1, -2.5] }, { instant: true })`);
+  await settle(page, card);
+  // the demo model's living-room ceiling lamp (a real object, bound to light.demo_living)
+  const injected = await page.evaluate(`(() => { const o = ${card}._objects.objectAt('lamp_living'); return o ? o.obj.node.name : null; })()`);
+  check('magnetic: the demo model has the living-room lamp object', !!injected, String(injected));
   await sleep(200);
+  // the lamp is small on screen: search around its projected anchor for a pixel whose model hit is the lamp
+  // (and that no marker covers)
+  const findLamp = () => page.evaluate(`(() => { const c = ${card}, v = c._view, a = c._objects.anchorOf('lamp_living');
+    const p = a && v.projectWorld(a);
+    if (!p) return null;
+    for (let rad = 0; rad <= 30; rad++) for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== rad) continue;
+      const x = p[0] + dx, y = p[1] + dy, h = v.surfaceAt(x, y);
+      if (h && h.owner && h.owner.id === 'lamp_living' && !c.shadowRoot.elementFromPoint(x, y)?.closest?.('.fp-marker')) return { x, y };
+    }
+    return null; })()`);
   // screen points: a wall face (vertical normal, 0.7–2.3 m up) and the lamp
   const targets = await page.evaluate(`(() => { const c = ${card}, v = c._view, r = v.renderer.domElement.getBoundingClientRect();
-    let wall = null, lamp = null;
+    let wall = null;
     const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
     for (let y = r.top + 20; y < r.bottom - 20; y += 12) for (let x = r.left + 20; x < r.right - 20; x += 12) {
       const h = v.surfaceAt(x, y);
-      if (!h) continue;
+      if (!h || h.owner && h.owner.kind === 'object') continue;
       const d = Math.hypot(x - cx, y - cy);
-      if (h.owner && h.owner.id === 'test_lamp') { if (!lamp || d < lamp.d) lamp = { x, y, d }; continue; }
       if (Math.abs(h.normal.y) < 0.1 && h.point.y > 0.7 && h.point.y < 2.3 && (!wall || d < wall.d))
         wall = { x, y, d, point: [h.point.x, -h.point.z], n: [h.normal.x, -h.normal.z] };
     }
-    return { wall, lamp }; })()`);
+    return { wall }; })()`);
+  targets.lamp = await findLamp();
   check('magnetic: found a wall face and the lamp on screen', !!targets.wall && !!targets.lamp, JSON.stringify(targets));
   // draggable markers: shown, not the mower, the pointer at their centre reaches them
   const markers = await page.evaluate(`(() => { const c = ${card}, out = [];
@@ -1345,9 +1475,9 @@ try {
     // 2) lamp
     await drag(b, targets.lamp);
     pin = await pinOf(b.id);
-    check('magnetic: drop on the lamp attaches (attach + offset, on_model)', !!pin && pin.attach === 'test_lamp' && Array.isArray(pin.offset) && pin.on_model === true, JSON.stringify(pin));
+    check('magnetic: drop on the lamp attaches (attach + offset, on_model)', !!pin && pin.attach === 'lamp_living' && Array.isArray(pin.offset) && pin.on_model === true, JSON.stringify(pin));
     const where = (id) => page.evaluate(`(() => { const c = ${card}; const p = c._positions.get(${JSON.stringify(id)}); const o = c._view.markerObjects.get(${JSON.stringify(id)});
-      const a = c._objects.anchorOf('test_lamp');
+      const a = c._objects.anchorOf('lamp_living');
       return { pos: p, world: o && o.obj.position.toArray(), anchor: a && a.toArray() }; })()`);
     const w0 = await where(b.id);
     const off0 = w0.world.map((v, i) => v - w0.anchor[i]);
@@ -1365,25 +1495,22 @@ try {
       !!pin1 && pin1.attach === pin.attach && JSON.stringify(pin1.offset) === JSON.stringify(pin.offset) && Math.abs(pin1.x - pin.x - 0.5) < 0.002 && pin1.y === pin.y,
       JSON.stringify(pin1));
     // the object vanishes: the marker falls back to its stored position, then comes back with it
-    const gone = await page.evaluate(`(() => { const c = ${card}, id = ${JSON.stringify(b.id)}, l = c._objects, part = l.parts.get('test_lamp');
-      l.parts.delete('test_lamp'); c._refreshAttached();
+    const gone = await page.evaluate(`(() => { const c = ${card}, id = ${JSON.stringify(b.id)}, l = c._objects, part = l.parts.get('lamp_living');
+      l.parts.delete('lamp_living'); c._refreshAttached();
       const p = c._positions.get(id), pin = c._layout.pins[id];
       const out = { fell: !p.attached && Math.abs(p.x - pin.x) < 1e-6 && Math.abs(p.y - pin.y) < 1e-6 && Math.abs(p.z - pin.z) < 1e-6 };
-      l.parts.set('test_lamp', part); c._refreshAttached();
-      out.back = c._positions.get(id).attached === 'test_lamp';
+      l.parts.set('lamp_living', part); c._refreshAttached();
+      out.back = c._positions.get(id).attached === 'lamp_living';
       return out; })()`);
     check('magnetic: object gone -> stored fallback position, back -> follows it again', gone.fell && gone.back, JSON.stringify(gone));
     // the lamp moved: find it on screen again
-    const lamp2 = await page.evaluate(`(() => { const c = ${card}, v = c._view, r = v.renderer.domElement.getBoundingClientRect();
-      for (let y = r.top + 20; y < r.bottom - 20; y += 10) for (let x = r.left + 20; x < r.right - 20; x += 10) {
-        const h = v.surfaceAt(x, y);
-        if (h && h.owner && h.owner.id === 'test_lamp' && !c.shadowRoot.elementFromPoint(x, y)?.closest?.('.fp-marker')) return { x, y };
-      }
-      return null; })()`);
+    const lamp2 = await findLamp();
     // 4) Alt-drag onto the lamp: free drag, no attach
     if (lamp2) {
       const z0 = (await page.evaluate(`${card}._positions.get(${JSON.stringify(c3.id)}).z`));
-      await drag(c3, lamp2, true);
+      // the realign moved the room markers too: the marker's screen point again
+      const c3Now = await page.evaluate(`(() => { const el = ${card}._markerEls.get(${JSON.stringify(c3.id)}).querySelector('.fp-dot').getBoundingClientRect(); return { id: ${JSON.stringify(c3.id)}, x: el.left + el.width / 2, y: el.top + el.height / 2 }; })()`);
+      await drag(c3Now, lamp2, true);
       const pc = await pinOf(c3.id);
       check('magnetic: Alt-drag onto the lamp does not attach and keeps the height', !!pc && !pc.attach && Math.abs(pc.z - z0) < 0.001, JSON.stringify({ pc, z0 }));
     } else check('magnetic: lamp found again after the realign', false);
@@ -1391,8 +1518,8 @@ try {
     const before = (await where(b.id)).pos;
     await page.evaluate(`${card}._edit.selectMarker(${JSON.stringify(b.id)})`);
     await sleep(150);
-    check('magnetic: selected attached marker shows "Attached to Test lamp" and Detach',
-      await page.evaluate(`${sr}.querySelector('.panel').textContent.includes('Attached to Test lamp') && !!${sr}.querySelector('.panel [data-act=detach]')`));
+    check('magnetic: selected attached marker shows "Attached to Living ceiling lamp" and Detach',
+      await page.evaluate(`${sr}.querySelector('.panel').textContent.includes('Attached to Living ceiling lamp') && !!${sr}.querySelector('.panel [data-act=detach]')`));
     await page.evaluate(`${sr}.querySelector('.panel [data-act=detach]').click()`);
     await sleep(250);
     const pd = await pinOf(b.id);
@@ -1411,7 +1538,7 @@ s = await openDemo({ view: '3d' });
 try {
   const { page } = s;
   const r = await page.evaluate(`(() => { const v = ${card}._view; return { tm: v.renderer.toneMapping, sm: v.renderer.shadowMap.enabled, pr: v.renderer.getPixelRatio(),
-    labels: ${card}.shadowRoot.querySelectorAll('.fp-room-label').length, dayHidden: ${card}.shadowRoot.querySelector('button.daynight').hidden }; })()`);
+    labels: ${card}.shadowRoot.querySelectorAll('.fp-room-label:not(.fp-obj-label)').length, dayHidden: ${card}.shadowRoot.querySelector('button.daynight').hidden }; })()`);
   check('no model: NoToneMapping, no shadows', r.tm === 0 && r.sm === false, JSON.stringify(r));
   check('no model: room labels present, day/night hidden, pixel ratio capped', r.labels > 0 && r.dayHidden && r.pr <= 1.5, JSON.stringify(r));
   await page.evaluate(`${card}._setFloor('all')`);
@@ -1502,10 +1629,13 @@ try {
     const { page } = s;
     await page.waitForFunction(`!!${card}._view.model`, { timeout: 10000 });
     await sleep(1500);
+    // these checks are about the live mower marker: hide the model's mower object, so the marker is back
+    await page.evaluate(`(() => { const c = ${card}; c._commit({ ...c._layout, objects: { ...(c._layout.objects || {}), mower: { hidden: true } } }); })()`);
+    await page.waitForFunction(`!!${card}._mowerMarkerId`, { timeout: 5000 }).catch(() => {});
     // I1: 10 hass updates (a sensor value, a light's brightness) with the camera still and the mower parked
     await page.evaluate('window.__demoMowerPaused = true');
     await sleep(800);
-    await page.evaluate(`(() => { const v = ${card}._view; v.stats = { occPasses: 0, occPartial: 0, shadow: 0 }; })()`);
+    await page.evaluate(`(() => { const v = ${card}._view; v.stats = { occPasses: 0, occPartial: 0, occDone: 0, shadow: 0 }; })()`);
     for (let i = 0; i < 10; i++) {
       await page.evaluate(`(() => { const c = ${card}, st = c.hass.states;
         const t = st['sensor.kitchen_temperature'], l = st['light.kitchen'];
@@ -1520,7 +1650,7 @@ try {
     // a moving mower: only its own marker is re-tested
     const mpos = () => page.evaluate(`(() => { const c = ${card}; const o = c._view.markerObjects.get(c._mowerMarkerId); return o ? o.obj.position.toArray().map((x) => x.toFixed(2)).join() : null; })()`);
     const p0 = await mpos();
-    await page.evaluate(`(() => { const v = ${card}._view; v.stats = { occPasses: 0, occPartial: 0, shadow: 0 }; })()`);
+    await page.evaluate(`(() => { const v = ${card}._view; v.stats = { occPasses: 0, occPartial: 0, occDone: 0, shadow: 0 }; })()`);
     await page.evaluate('window.__demoMowerPaused = false');
     await sleep(2600);
     await page.evaluate('window.__demoMowerPaused = true');

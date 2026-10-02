@@ -70,6 +70,13 @@ const dotOffset = () => ev(`(() => { const c = ${card}, v = c._view; const r = v
     worst = Math.max(worst, Math.hypot(d.x + d.width / 2 - sx, d.y + d.height / 2 - sy)); n++;
   }
   return { worst, n }; })()`);
+// camera at rest (no tween, no damping) and rendered: two frames in a row with the same camera
+const settle = async () => {
+  await page.waitForFunction(`!${card}._view._tween`, { timeout: 5000 }).catch(() => {});
+  await page.waitForFunction(`(async () => { const v = ${card}._view, frame = () => new Promise((r) => requestAnimationFrame(r));
+    const sig = () => v.camera.matrixWorld.elements.map((x) => x.toFixed(6)).join();
+    await frame(); const a = sig(); await frame(); await frame(); return a === sig(); })()`, { timeout: 5000, polling: 50 }).catch(() => {});
+};
 // stems: [stem count, visible stem discs, visible markers]
 const stems = () => ev(`(() => { const v = ${card}._view; return [v.stems.size, [...v.stems.values()].filter((s) => s.disc.visible).length,
   [...v.markerObjects.values()].filter((m) => m.obj.visible).length, v.stemGroup.children.length]; })()`);
@@ -77,16 +84,17 @@ const stems = () => ev(`(() => { const v = ${card}._view; return [v.stems.size, 
 try {
   await ev(`window.__demoMower = ${card}._layout.mower`);
   // markers are anchored at their dot (the value line hangs below it), also after orbit and zoom
+  await settle();
   let off = await dotOffset();
   check('value marker dot on its 3D point', off.n > 0 && off.worst <= 1, JSON.stringify(off));
   await ev(`(() => { const v = ${card}._view; const t = v.controls.target; v.setCamera({ position: [t.x + 9, 7, t.z + 4], target: t.toArray() }, { instant: true }); })()`);
-  await sleep(300);
+  await settle();
   off = await dotOffset();
   check('dot anchored after orbit', off.n > 0 && off.worst <= 1, JSON.stringify(off));
   await ev(`(() => { const v = ${card}._view; // zoom in on a value marker
     const m = [...v.markerObjects.values()].find((x) => x.obj.visible && x.obj.element.querySelector('.fp-val').textContent);
     const t = m.obj.position; v.setCamera({ position: [t.x + 2.5, t.y + 2.5, t.z + 2], target: t.toArray() }, { instant: true }); })()`);
-  await sleep(300);
+  await settle();
   off = await dotOffset();
   check('dot anchored after zoom', off.n > 0 && off.worst <= 1, JSON.stringify(off));
   check('no stems in view mode', (await stems())[0] === 0);

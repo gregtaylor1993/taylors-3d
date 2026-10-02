@@ -62,8 +62,8 @@ device('washer', 'Washer plug', 'utility', [['switch.washer', 'on'], sensor('sen
 device('terrace_light', 'Terrace light', 'terrace', [light('light.terrace', true, 180, [255, 160, 80])]);
 device('outdoor_temp', 'Outdoor sensor', 'terrace', [sensor('sensor.outdoor_temperature', 9.6, 'temperature', '°C')]);
 
-device('mower', 'Sunseeker', 'garden', [
-  ['lawn_mower.sunseeker', 'mowing'], sensor('sensor.sunseeker_battery', 76, 'battery', '%'),
+device('mower', 'Mower', 'garden', [
+  ['lawn_mower.demo', 'mowing', { battery_level: 76 }], sensor('sensor.demo_mower_battery', 76, 'battery', '%'),
   ['device_tracker.sunseeker_position', 'not_home', { latitude: 45.0, longitude: 10.0 }],
 ]);
 device('garden_cam', 'Garden camera', 'garden', [['camera.garden', 'idle']]);
@@ -80,6 +80,17 @@ device('office_co2', 'Office air', 'office', [sensor('sensor.office_co2', 812, '
 device('master_light', 'Master light', 'master_bedroom', [light('light.master', false)]);
 device('bath2_light', 'Bathroom 2 light', 'bathroom_2', [light('light.bathroom_2', false)]);
 device('bath2_heater', 'Floor heating', 'bathroom_2', [['climate.bathroom_2', 'heat', { current_temperature: 24 }]]);
+// bound to the demo model's objects (demo/house.glb): with ?model=1 these have no markers, the model is the control
+device('demo_living_lamp', 'Living ceiling lamp', 'living_room', [light('light.demo_living', true, 200, [255, 200, 140])]);
+device('demo_hall_lamp', 'Hall ceiling lamp', 'hall', [light('light.demo_hall', false)]);
+device('demo_kitchen_lamp', 'Kitchen ceiling lamp', 'kitchen', [light('light.demo_kitchen', true, 255)]);
+device('demo_strip', 'Kitchen strip', 'kitchen', [light('light.demo_strip', true, 150, [120, 200, 255])]);
+device('demo_facade', 'Facade lamps', 'terrace', [light('light.demo_facade', true, 230)]);
+device('demo_facade_switch', 'Facade switch', 'hall', [['switch.demo_facade', 'on']]); // group controller (layout.groups.facade)
+device('demo_terrace_spot', 'Terrace spot', 'terrace', [light('light.demo_terrace', true, 220, [255, 170, 90])]);
+device('demo_climate', 'Living climate unit', 'living_room', [['climate.demo_living', 'heat',
+  { current_temperature: 21.5, temperature: 22, hvac_action: 'heating', hvac_modes: ['off', 'heat', 'cool', 'auto'] }]]);
+device('demo_charger', 'EV charger', 'garden', [['sensor.demo_charger', 'charging', { power: 7.4, energy: 12.6 }]]);
 void temp;
 
 // In-memory stand-in for the integration's /api/floorplan3d/model/<key> endpoint.
@@ -112,12 +123,13 @@ export function createMockHass({ onChange }) {
     callService: async (domain, service, data) => {
       (window.__serviceCalls = window.__serviceCalls || []).push([domain, service, data]); // headless checks
       const s = current.states[data.entity_id];
-      if (!s || service !== 'toggle') return;
-      const on = s.state !== 'on';
+      if (!s || !['toggle', 'turn_on', 'turn_off'].includes(service)) return;
+      const on = service === 'toggle' ? s.state !== 'on' : service === 'turn_on';
       const attrs = { ...s.attributes };
-      if (domain === 'light') {
-        if (on) attrs.brightness = attrs.brightness || 255;
+      if (s.entity_id.startsWith('light.')) {
+        if (on) attrs.brightness = data.brightness ?? attrs.brightness ?? 255;
         else delete attrs.brightness;
+        if (on && data.rgb_color) attrs.rgb_color = data.rgb_color;
       }
       update({ [data.entity_id]: { ...s, state: on ? 'on' : 'off', attributes: attrs } });
     },

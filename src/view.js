@@ -126,7 +126,7 @@ export class FloorplanView {
     this._occIds = null; // marker ids waiting for a partial pass (live mower)
     this._occSig = null; // inputs of the last occlusion pass (shown markers, model visibility, cut, section)
     this._shadowSig = null; // inputs of the last shadow map render (model visibility, cut, section)
-    this.stats = { occPasses: 0, occPartial: 0, shadow: 0 }; // counters for the headless checks
+    this.stats = { occPasses: 0, occPartial: 0, occDone: 0, shadow: 0 }; // counters for the headless checks (occDone: full passes finished)
     this._depth = null;
 
     this.floors = [];
@@ -1486,7 +1486,7 @@ export class FloorplanView {
         }
         c.obj.element.classList.toggle('fp-occluded', isOccluded(hitD, dist));
       }
-      if (full) this._occFull = false;
+      if (full) { this._occFull = false; this.stats.occDone++; }
     };
     slice();
   }

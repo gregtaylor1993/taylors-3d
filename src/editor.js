@@ -291,10 +291,12 @@ export function setObject(layout, id, patch) {
   return { ...layout, objects };
 }
 
-// layout.groups[name] = { entity }: the optional controller of a fixture group. No entity: no entry.
+// layout.groups[name] = { entity }: the optional controller of a fixture group. No entity (empty or
+// "none"): no entry.
 export function setGroup(layout, name, patch) {
   const cur = { ...((layout.groups || {})[name] || {}), ...patch };
-  if (!cur.entity) delete cur.entity;
+  if (typeof cur.entity === 'string') cur.entity = cur.entity.trim();
+  if (!cur.entity || typeof cur.entity !== 'string' || cur.entity.toLowerCase() === 'none') delete cur.entity;
   const groups = { ...(layout.groups || {}) };
   if (Object.keys(cur).length) groups[name] = cur;
   else delete groups[name];

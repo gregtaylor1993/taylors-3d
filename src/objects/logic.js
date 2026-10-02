@@ -18,6 +18,17 @@ export function bindObjects(objects, layoutObjects = {}, states = {}) {
   return out;
 }
 
+// Group controllers that exist in HA. A controller entity HA doesn't know (a typo, a removed
+// entity, a literal "none") is ignored: the group behaves as if it had no controller.
+export function effectiveGroups(groups = {}, states = {}) {
+  const out = {};
+  for (const [name, g] of Object.entries(groups || {})) {
+    const e = g && typeof g.entity === 'string' ? g.entity : null;
+    if (e && states[e]) out[name] = { ...g, entity: e };
+  }
+  return out;
+}
+
 /**
  * Chain object state through group controller. Callers gate on `lit`; `source` may be an off light.
  */

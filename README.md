@@ -23,6 +23,10 @@ position over its map.
 - Day / Night button cycles Auto, Day, Night (remembered per device). Auto follows `sun.sun`: the
   sun's light and shadows point where the real sun is (using the model's `north`), and the house
   darkens smoothly through dusk; without `sun.sun` it stays Day
+- Model objects are the controls: lamps glow and really light rooms and the facade (night is dark,
+  the lamps carry it), tap a lamp to toggle it, hold it for brightness and colour; the mower model
+  drives on the plan, the dock, EV charger and climate units show their state. Objects bind to
+  their entities from the model's suggestions without setup
 - Follows the HA theme, light and dark
 
 ## Install
@@ -76,11 +80,13 @@ The options below can be set in the visual editor or in YAML.
 | `model_rotation` | `0` | Model rotation in degrees, counter-clockwise. |
 | `model_scale` | `1` | Model scale (e.g. `0.01` for a centimetre model). |
 | `model_opacity` | `1` | Model opacity, `0`–`1`. |
+| `lights` | `auto` | With a model: `auto` gives lit lamps real lights (at most 12, 4 with shadows); `off` keeps them glowing only (for weak tablets). |
 | `model_floors` | auto | Which HA floor each model level belongs to, e.g. `{ground: floor1, attic: floor2}` (for a `model:` URL; uploads set it in the Model tab). |
 
 ## Set up the plan
 
-Click **Edit** on the card (admins only). The panel has six tabs.
+Click **Edit** on the card (admins only). The panel has tabs Rooms, Devices, Objects (with a
+model that has objects), Mower, Views, Model and Data.
 
 ![Edit mode](docs/images/edit-rooms.png)
 
@@ -106,6 +112,15 @@ from the plan. With a model the dragged marker sticks to the surface under the p
 it, on the floor of that level); dropped on a model object (lamp, mower, …) it attaches and
 follows that object's position (not its rotation, e.g. the mower's heading). **Detach** keeps it
 where it is as a normal pin. Hold **Alt** while dragging for a free drag at the current height. Devices whose area has no room yet, and hidden devices, are listed here.
+
+**Objects.** (Only with a model that has objects.) The model's objects grouped by level and room,
+each with its entity: *auto* means bound from the model's `suggest.entity`; type another entity
+to rebind, empty returns to auto, `none` leaves it unbound. *entity not found* means the entity
+doesn't exist in HA (the object stays unbound). **Test** toggles it like a tap, **Hide** ignores the
+object as a control (dark, and its device gets its marker back). Click an object in the view to
+find its row. *Groups*: a fixture group (e.g. all facade lamps) can get a controller entity, a
+relay that must be on too; empty or `none` removes it, an unknown entity is ignored and flagged.
+See [Lamps and objects](#lamps-and-objects).
 
 **Mower.** See below.
 
@@ -188,6 +203,29 @@ Rendering notes for model authors:
   drawn in front of the surface under them (polygon offset), so they don't flicker.
 - With `model_opacity` below 1 the model is blended but keeps writing depth, so overlapping
   parts don't vanish; originally transparent materials (glass) keep their own opacity.
+
+### Lamps and objects
+
+Objects tagged in the model (see the [model builder guide](docs/model-builder-guide.md#objects))
+bind to Home Assistant entities by themselves (`suggest.entity`), and a device bound to an object
+has no marker: the object is the control.
+- **Lamps** (`light`, `light_strip`): the bulb glows in the light's colour and brightness and a real
+  light lights the rooms and facade around it. The card uses a fixed pool of 12 real lights
+  (8 point, 4 spot) for the lit lamps in view, largest first, and at most 4 of them cast shadows;
+  a fixture group gets one light. Other lit lamps only glow. `lights: off` keeps glow only.
+- **Day / Night:** the toolbar button cycles Auto, Day, Night. Auto follows `sun.sun`: by night
+  the house is nearly dark and the lamps carry the scene; the sun's direction and shadows follow
+  the real sun.
+- **Tap** a lamp to toggle it, **hold** (500 ms) for a small popup: on / off, brightness, colour,
+  and for grouped fixtures the group controller and why a lamp is dark ("Facade switch is off").
+  Esc or a tap outside closes it. Taps near an object (30 px, 52 px on touch) hit the object
+  before markers. Other objects: mower popup (state, battery, start / dock), climate (temperature,
+  mode), EV charger (state, power, energy); `fp.ui` in the model can change tap / hold / rows.
+- **Mower, dock, charger, climate:** the mower model drives where the mower is; the dock LED is
+  lit while docked; the charger LED shows charging / ready / error with the power as a label; a
+  climate unit shows its temperature and glows warm or cool while heating or cooling.
+- **Edit mode:** bind objects in the Objects tab; in the Devices tab a dragged marker sticks to the
+  model's surfaces and attaches to an object it is dropped on (Alt: free drag, Detach to undo).
 
 ### Views
 

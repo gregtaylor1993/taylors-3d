@@ -18,10 +18,11 @@ import {
 } from './views.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 import { ObjectLayer } from './objects/layer.js';
-import { bindObjects, nightFactor, sunVector, sunStrength, clampSunDir, screenNearest, attachedPosition } from './objects/logic.js';
+import { bindObjects, effectiveGroups, nightFactor, sunVector, sunStrength, clampSunDir, screenNearest, attachedPosition } from './objects/logic.js';
 import { ObjectPopup, objectAction, actionTarget, toggleCall } from './objects/popup.js';
 
-const VERSION = '0.3.1';
+const VERSION = '0.4.0';
+const NONE = Object.freeze({}); // stable stand-in for a missing layout.objects / groups (binding cache key)
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LONG_PRESS_MS = 500;
 const CLICK_SLOP_PX = 5;
@@ -316,6 +317,8 @@ class Floorplan3dCard extends HTMLElement {
     this._objects = null; // ObjectLayer: model lamps and the real light pool
     this._bindings = new Map(); // object id -> binding (objects/logic.js bindObjects)
     this._boundEntities = new Set(); // entities bound to a model object: no marker of their own
+    this._mowerObjectBound = false;
+    this._groups = {}; // layout.groups whose controller exists in HA (objects/logic.js effectiveGroups)
     this._bindKey = null;
   }
 
@@ -542,7 +545,7 @@ class Floorplan3dCard extends HTMLElement {
       resolve: (id) => {
         const o = this._objects.objectAt(id);
         if (!o || !this._hass || (o.binding && o.binding.hidden)) return null;
-        return { obj: o.obj, chain: o.chain, states: this._hass.states, groups: (this._layout && this._layout.groups) || {} };
+        return { obj: o.obj, chain: o.chain, states: this._hass.states, groups: this._groups };
       },
     });
     this._view.onRender = () => this._popup.position();
@@ -1178,20 +1181,24 @@ class Floorplan3dCard extends HTMLElement {
   _syncBindings() {
     const model = this._objects && this._objects.model;
     const objs = model ? model.manifest.objects : [];
-    const l = this._layout || {}, lo = l.objects || {}, groups = l.groups || {}, states = this._hass.states;
+    const l = this._layout || {}, lo = l.objects || NONE, groups = l.groups || NONE, states = this._hass.states;
     const exists = objs.map((o) => {
       const e = lo[o.id] && lo[o.id].entity !== undefined ? lo[o.id].entity : (o.suggest || {}).entity;
       return e && states[e] ? 1 : 0;
-    }).join('');
+    }).join('') + '|' + Object.values(groups).map((g) => (g && g.entity && states[g.entity] ? 1 : 0)).join('');
     const key = [model, lo, groups, exists];
     if (this._bindKey && key.every((x, i) => x === this._bindKey[i])) return false;
     this._bindKey = key;
     this._bindings = bindObjects(objs, lo, states);
-    this._objects.setBindings(this._bindings, groups);
+    this._groups = effectiveGroups(groups, states); // controllers HA doesn't know are ignored
+    this._objects.setBindings(this._bindings, this._groups);
     const bound = new Set();
     for (const b of this._bindings.values()) if (b.entity && !b.hidden) bound.add(b.entity);
-    const changed = bound.size !== this._boundEntities.size || [...bound].some((e) => !this._boundEntities.has(e));
+    // the mower marker depends on whether the mower object is bound (its entity may stay bound by the dock)
+    const mower = this._objects.mowerBound();
+    const changed = bound.size !== this._boundEntities.size || [...bound].some((e) => !this._boundEntities.has(e)) || mower !== this._mowerObjectBound;
     this._boundEntities = bound;
+    this._mowerObjectBound = mower;
     return changed;
   }
 
@@ -1216,7 +1223,7 @@ class Floorplan3dCard extends HTMLElement {
   _objectHit(x, y, radius, all = false) {
     const layer = this._objects;
     if (!layer || !layer.model || !this._hass) return null;
-    const groups = (this._layout && this._layout.groups) || {};
+    const groups = this._groups || {};
     const levelShown = this._levelShown();
     const pts = [];
     for (const a of layer.anchors()) {
@@ -1289,7 +1296,7 @@ class Floorplan3dCard extends HTMLElement {
   testObject(id) {
     const o = this._objects && this._objects.objectAt(id);
     if (!o || !this._hass) return false;
-    const target = actionTarget(o.obj, o.binding, (this._layout && this._layout.groups) || {}, this._hass.states);
+    const target = actionTarget(o.obj, o.binding, this._groups || {}, this._hass.states);
     const st = target && this._hass.states[target];
     if (!st || st.state === 'unavailable' || st.state === 'unknown') return false;
     this._hass.callService(...toggleCall(target));
@@ -1302,7 +1309,7 @@ class Floorplan3dCard extends HTMLElement {
     if (!o || !this._hass) return;
     const action = objectAction(o.obj, which);
     if (action === 'none') return;
-    const target = actionTarget(o.obj, o.binding, (this._layout && this._layout.groups) || {}, this._hass.states);
+    const target = actionTarget(o.obj, o.binding, this._groups || {}, this._hass.states);
     const st = target && this._hass.states[target];
     const usable = st && st.state !== 'unavailable' && st.state !== 'unknown';
     if (action === 'popup' || !usable) {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bindObjects, chainState, lightColor, lightLevel, lightBudget, nightFactor, sunVector, screenNearest, sunStrength, clampSunDir, snapPin, attachedPosition, attachOffset, floorAtHeight } from '../src/objects/logic.js';
+import { bindObjects, chainState, lightColor, lightLevel, lightBudget, nightFactor, sunVector, screenNearest, sunStrength, clampSunDir, snapPin, attachedPosition, attachOffset, floorAtHeight, effectiveGroups } from '../src/objects/logic.js';
 
 const st = (entity_id, state, attributes = {}) => ({ entity_id, state, attributes });
 
@@ -23,6 +23,22 @@ describe('bindObjects', () => {
   });
   it('explicit entity that no longer exists is missing', () => {
     expect(bindObjects(objects, { a: { entity: 'light.gone' } }, states).get('a').missing).toBe(true);
+  });
+});
+
+describe('effectiveGroups', () => {
+  const states = { 'switch.f': { state: 'on' }, 'light.g': { state: 'off' } };
+  it('keeps controllers that exist in HA', () => {
+    expect(effectiveGroups({ a: { entity: 'switch.f' }, b: { entity: 'light.g' } }, states)).toEqual({ a: { entity: 'switch.f' }, b: { entity: 'light.g' } });
+  });
+  it('drops missing, "none", empty and malformed controllers', () => {
+    expect(effectiveGroups({ a: { entity: 'switch.typo' }, b: { entity: 'none' }, c: {}, d: null, e: { entity: 5 } }, states)).toEqual({});
+    expect(effectiveGroups(undefined, states)).toEqual({});
+  });
+  it('a missing controller leaves the chain to the own entity', () => {
+    const obj = { group: 'a' };
+    const st = { 'light.x': { state: 'on', attributes: {} } };
+    expect(chainState(obj, { entity: 'light.x' }, effectiveGroups({ a: { entity: 'switch.typo' } }, st), st).lit).toBe(true);
   });
 });
 

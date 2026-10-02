@@ -12,6 +12,7 @@ import { ruleState, setRuleState, nextEyeState, viewTree, pickSelector, nextView
 import { levelsFromFloorMap } from './bindings.js';
 import { outlineLoops, pickLoop, rasterGrid, outlineFromGrid } from './outline.js';
 import { snapPin, attachOffset, floorAtHeight } from './objects/logic.js';
+import { actionTarget } from './objects/popup.js';
 
 const DENSE_TRIS = 150000;
 
@@ -999,9 +1000,11 @@ export class EditMode {
         ph = `auto: ${sug}`;
       }
       const sel = this.objSel === o.id;
+      // Test only where a tap could toggle something (not hidden, own entity or a known group controller)
+      const testable = !b.hidden && !!actionTarget(o, b, this.card._groups || {});
       return `<li class="obj${sel ? ' sel' : ''}${b.hidden ? ' hid' : ''}" data-obj="${esc(o.id)}">
         <div class="orow"><ha-icon icon="${ICONS[t] || 'mdi:cube-outline'}"></ha-icon><span class="name">${esc(o.label || o.id)}</span>${badge}
-          <button data-act="obj-test" data-id="${esc(o.id)}" title="Toggle it like a tap in the view">Test</button>
+          ${testable ? `<button data-act="obj-test" data-id="${esc(o.id)}" title="Toggle it like a tap in the view">Test</button>` : ''}
           <label class="check"><input type="checkbox" data-field="obj-hidden" data-id="${esc(o.id)}" ${b.hidden ? 'checked' : ''}> Hide</label></div>
         <input list="fp-obj-${t}" data-field="obj-entity" data-id="${esc(o.id)}" value="${esc(value)}" placeholder="${esc(ph)}" title="Empty: automatic; type none to leave it unbound">
         ${o.group ? `<div class="dim">Group ${esc(o.group)}</div>` : ''}</li>`;
@@ -1034,8 +1037,12 @@ export class EditMode {
       const gl = ids.filter((id) => /^(light|switch)\./.test(id));
       out += `<div class="sub">Groups</div><p class="hint">A group controller must be on too: a fixture is lit only while its own entity and the controller are both on.</p>
         <datalist id="fp-grp-ents">${gl.map((x) => `<option value="${esc(x)}">`).join('')}</datalist>`;
-      out += groups.map((g) => `<label>${esc(g)} <input list="fp-grp-ents" data-field="grp-entity" data-id="${esc(g)}"
-        value="${esc((lg[g] && lg[g].entity) || '')}" placeholder="no controller"></label>`).join('');
+      out += groups.map((g) => {
+        const e = (lg[g] && lg[g].entity) || '';
+        const missing = e && !states[e] ? ' <span class="badge warn">entity not found</span>' : '';
+        return `<label class="grp" data-grp="${esc(g)}">${esc(g)}${missing} <input list="fp-grp-ents" data-field="grp-entity" data-id="${esc(g)}"
+        value="${esc(e)}" placeholder="no controller" title="Empty or none: no controller"></label>`;
+      }).join('');
     }
     return out;
   }

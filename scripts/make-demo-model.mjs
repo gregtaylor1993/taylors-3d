@@ -2,7 +2,8 @@
 // one wrapper group "house" carrying the model's views (fp.views), storey levels (level0 / level1)
 // with a tagged room group per room, furniture on the "furniture" layer, a thin ceiling slab per
 // storey on the "ceiling" layer (inside the storey above), an exterior level with the outdoor zones,
-// a roof level, one tagged lamp object and a window pane on the glass layer. Run: node scripts/make-demo-model.mjs
+// a roof level, model objects (ceiling lamps, a facade lamp group, a spot, a light strip, climate, mower,
+// dock, EV charger) and a window pane on the glass layer. Run: node scripts/make-demo-model.mjs
 import fs from 'node:fs';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
@@ -113,13 +114,84 @@ for (const z of DEMO_LAYOUT.rooms.filter((x) => x.outdoor)) {
   zg.add(slab);
   ext.add(zg);
 }
-const lampGroup = new THREE.Group();
-lampGroup.name = 'terrace_lamp_1';
-lampGroup.userData.fp = { kind: 'object', id: 'terrace_lamp_1', type: 'light', suggest: { domain: 'light', area: 'terrace' } };
-const lamp = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.2, 8), mat(0x333333));
-lamp.position.set(4.5, 0.6, 2.5);
-lampGroup.add(lamp);
-ext.add(lampGroup);
+// ---- model objects (fp kind: object), see docs/model-builder-guide.md "Objects" ----
+// glow meshes start dark (the card makes them emissive); one glow mesh per fixture
+const glowMat = () => new THREE.MeshStandardMaterial({ color: 0xfff6e0, roughness: 0.4, emissive: 0x000000 });
+const darkMat = mat(0x333333), metalMat = mat(0x8a8f96);
+// an object node at plan (x, y), height z: a body mesh plus named child meshes (glow / led)
+const object = (parent, fp, [x, y, z], parts) => {
+  const g = new THREE.Group();
+  g.name = fp.id;
+  g.userData.fp = { kind: 'object', ...fp };
+  g.position.set(x, z, -y);
+  for (const [name, geo, m, [px, py, pz] = [0, 0, 0]] of parts) {
+    const mesh = new THREE.Mesh(geo, m);
+    mesh.name = name;
+    mesh.position.set(px, py, pz);
+    g.add(mesh);
+  }
+  parent.add(g);
+  return g;
+};
+const level0 = house.getObjectByName('level0');
+const room = (area) => level0.getObjectByName(area);
+// three ceiling lamps, one per room: a disc with a small glowing bulb under it
+const CEILING = { beam: 'point', max: 20, distance: 8, decay: 2 };
+for (const [id, label, area, at, entity] of [
+  ['lamp_living', 'Living ceiling lamp', 'living_room', [2.5, 2.5], 'light.demo_living'],
+  ['lamp_hall', 'Hall ceiling lamp', 'hall', [6.25, 2.5], 'light.demo_hall'],
+  ['lamp_kitchen', 'Kitchen ceiling lamp', 'kitchen', [10, 2.5], 'light.demo_kitchen'],
+]) {
+  object(room(area), { id, type: 'light', label, glow: 'glow', hints: CEILING, suggest: { entity } }, [...at, 2.62], [
+    [id + '_body', new THREE.CylinderGeometry(0.18, 0.18, 0.04, 16), metalMat],
+    ['glow', new THREE.SphereGeometry(0.05, 12, 8), glowMat(), [0, -0.06, 0]],
+  ]);
+}
+// a light strip under the kitchen cabinets: the whole strip is the glow mesh, no real light (no hints.max)
+object(room('kitchen'), { id: 'kitchen_strip', type: 'light_strip', label: 'Kitchen strip', glow: 'strip', suggest: { entity: 'light.demo_strip' } },
+  [9.75, 4.8, 0.9], [['strip', new THREE.BoxGeometry(3, 0.02, 0.03), glowMat()]]);
+// a wall climate unit in the living room (label with the current temperature)
+object(room('living_room'), { id: 'climate_living', type: 'climate', label: 'Living climate', glow: 'glow', suggest: { entity: 'climate.demo_living' } },
+  [2.5, 4.82, 2.2], [
+    ['climate_living_body', new THREE.BoxGeometry(0.8, 0.25, 0.2), mat(0xf4f4f4)],
+    ['glow', new THREE.BoxGeometry(0.6, 0.02, 0.01), glowMat(), [0, -0.08, 0.1]],
+  ]);
+// facade: three wall lamps on the south wall, one circuit (group), downlights without shadows
+for (const [i, x] of [4, 6.25, 8.5].entries()) {
+  object(ext, {
+    id: `facade_${i + 1}`, type: 'light', label: `Facade lamp ${i + 1}`, group: 'facade', glow: 'glow',
+    hints: { beam: 'down', max: 5, distance: 6, decay: 2, castShadow: false, offset: [0, 0, 0.1] },
+    suggest: { entity: 'light.demo_facade' },
+  }, [x, -0.12, 2.3], [
+    [`facade_${i + 1}_body`, new THREE.BoxGeometry(0.12, 0.22, 0.09), darkMat],
+    ['glow', new THREE.SphereGeometry(0.04, 12, 8), glowMat(), [0, -0.08, 0.05]],
+  ]);
+}
+// a terrace pole with a spot aimed at the terrace
+object(ext, {
+  id: 'terrace_spot', type: 'light', label: 'Terrace spot', glow: 'glow',
+  hints: { beam: 'spot', max: 15, distance: 7, angle: 35, penumbra: 0.5, decay: 1.5, target: [2.5, 0, 1.5] },
+  suggest: { entity: 'light.demo_terrace' },
+}, [4.5, -2.5, 0], [
+  ['terrace_spot_pole', new THREE.CylinderGeometry(0.04, 0.05, 2.3, 8), darkMat, [0, 1.15, 0]],
+  ['glow', new THREE.SphereGeometry(0.06, 12, 8), glowMat(), [0, 2.32, 0]],
+]);
+// garden: the mower (follows its live position), its dock (LED lit while docked), an EV charger on the house wall
+object(ext, { id: 'mower', type: 'mower', label: 'Mower', glow: 'glow', hints: { front: '+x' }, suggest: { entity: 'lawn_mower.demo' } },
+  [13.8, 1.5, 0], [
+    ['mower_body', new THREE.BoxGeometry(0.6, 0.25, 0.45), mat(0x3d4a3a), [0, 0.125, 0]],
+    ['glow', new THREE.BoxGeometry(0.2, 0.02, 0.3), glowMat(), [0.1, 0.26, 0]],
+  ]);
+object(ext, { id: 'dock', type: 'dock', label: 'Mower dock', hints: { led: 'led' }, suggest: { entity: 'lawn_mower.demo' } },
+  [13.0, 1.5, 0], [
+    ['dock_body', new THREE.BoxGeometry(0.5, 0.3, 0.6), darkMat, [0, 0.15, 0]],
+    ['led', new THREE.SphereGeometry(0.03, 8, 6), glowMat(), [0.26, 0.25, 0]],
+  ]);
+object(ext, { id: 'ev_charger', type: 'ev_charger', label: 'EV charger', hints: { led: 'led' }, suggest: { entity: 'sensor.demo_charger' } },
+  [12.12, 7.5, 1.2], [
+    ['ev_charger_body', new THREE.BoxGeometry(0.08, 0.35, 0.25), mat(0xe8e8e8)],
+    ['led', new THREE.SphereGeometry(0.025, 8, 6), glowMat(), [0.045, 0.1, 0]],
+  ]);
 house.add(ext);
 const roof = new THREE.Group();
 roof.name = 'roof';
