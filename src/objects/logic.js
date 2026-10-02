@@ -115,6 +115,7 @@ export function sunVector(azimuth, elevation, north = 0, alignRotation = 0) {
 }
 
 // Sun strength factor 0..1: smoothstep(-2, +4 degrees) so the sun is off at / under the horizon.
+// A missing elevation is day (1), like nightFactor (0).
 export function sunStrength(elevation) {
   if (!Number.isFinite(elevation)) return 1;
   const t = Math.max(0, Math.min(1, (elevation + 2) / 6));
@@ -139,6 +140,14 @@ export function screenNearest(points, x, y, radius) {
     if (best === null ? d <= radius : d < bd) { bd = d; best = p.id; }
   }
   return best;
+}
+
+// Ids of the points within radius px of (x, y), nearest first (ties keep their order).
+export function screenByDistance(points, x, y, radius) {
+  return points.map((p, i) => ({ id: p.id, i, d: Math.hypot(p.x - x, p.y - y) }))
+    .filter((p) => p.d <= radius)
+    .sort((a, b) => a.d - b.d || a.i - b.i)
+    .map((p) => p.id);
 }
 
 // ---------- magnetic drag ----------

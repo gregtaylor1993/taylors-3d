@@ -1,6 +1,9 @@
 // Model objects on the plan: per-object looks (types.js) and a fixed pool of real lights.
 // The pool is created once (8 point + 4 spot) so shaders never recompile; the first 4 point
-// slots always cast shadows and get the budget's shadow picks.
+// slots always cast shadows and get the budget's shadow picks. The pool lives in its own sub-group:
+// shown only with a model and `lights` not off (hiding it drops the lights from the shaders).
+// Shadow maps are rendered per light (shadow.autoUpdate = false): only lit shadow slots whose
+// fixture or position changed, or all lit ones when the casters changed (shadowsStale).
 import * as THREE from 'three';
 import { chainState, lightBudget } from './logic.js';
 import { typeOf } from './types.js';
@@ -14,7 +17,9 @@ const colorKey = (c) => (c ? c.join(',') : '');
 export class ObjectLayer {
   constructor(view) {
     this.view = view;
-    const group = view.objectsGroup;
+    const group = new THREE.Group(); // the real light pool (labels stay in objectsGroup)
+    this.lights = group;
+    view.objectsGroup.add(group);
     this.pool = { points: [], spots: [] };
     for (let i = 0; i < POINTS; i++) {
       const l = new THREE.PointLight(0xffffff, 0, 0, 2);
@@ -23,6 +28,7 @@ export class ObjectLayer {
         l.shadow.mapSize.set(512, 512);
         l.shadow.bias = -0.004;
         l.shadow.camera.near = 0.15;
+        l.shadow.autoUpdate = false; // re-rendered only when flagged (needsUpdate)
       }
       this.pool.points.push(l);
       group.add(l);
@@ -32,7 +38,10 @@ export class ObjectLayer {
       this.pool.spots.push(l);
       group.add(l, l.target);
     }
-    group.visible = false; // lights join the shaders only while a model is loaded
+    view.objectsGroup.visible = false; // objects (and their lights) only while a model is loaded
+    group.visible = false;
+    this._lightsOn = true;
+    this._shadowKeys = new Array(SHADOWS).fill(null); // per shadow slot: fixture@position its map was rendered for
     this.model = null;
     this.parts = new Map(); // id -> { obj, type, part, chain, result, inputs }
     this.bindings = new Map();
@@ -53,6 +62,7 @@ export class ObjectLayer {
     this._budgetSig = null;
     this._placeSig = null;
     this._poseSig = null;
+    this._shadowKeys.fill(null);
     if (model) {
       const ctx = { root: model.root, view: this.view, levels: model.manifest.levels || [] };
       for (const obj of model.manifest.objects || []) {
@@ -65,8 +75,17 @@ export class ObjectLayer {
       }
     }
     this.view.objectsGroup.visible = !!model;
+    this._showLights();
     this._applyPose();
     this.view.markDirty();
+  }
+
+  // The pool joins the scene only with a model and lights on (a change recompiles the shaders once).
+  _showLights() {
+    const on = !!this.model && this._lightsOn;
+    if (this.lights.visible === on) return false;
+    this.lights.visible = on;
+    return true;
   }
 
   // The mower object (bound and not hidden) or null.
@@ -83,8 +102,12 @@ export class ObjectLayer {
   }
 
   // { x, y, floorId, heading } (plan metres, radians ccw from east) or null: moves the mower node.
+  // Unchanged poses do nothing (no matrix work, no frame).
   setMowerPose(pose) {
-    this._pose = pose || null;
+    const next = pose ? { x: pose.x, y: pose.y, floorId: pose.floorId, heading: pose.heading } : null;
+    const a = this._pose, b = next;
+    if (a === b || (a && b && a.x === b.x && a.y === b.y && a.floorId === b.floorId && Object.is(a.heading, b.heading))) return;
+    this._pose = next;
     this._applyPose();
     this.view.markDirty();
   }
@@ -114,7 +137,8 @@ export class ObjectLayer {
     this.stats.updates++;
     const visibleLevel = ctx.visibleLevel || (() => true);
     const lightsOn = ctx.lightsOn !== false;
-    let changed = false;
+    this._lightsOn = lightsOn;
+    let changed = this._showLights();
     const fixtures = [];
     const recolour = [];
     const mw = this._mower();
@@ -123,7 +147,10 @@ export class ObjectLayer {
       const binding = this.bindings.get(id);
       const hidden = !!(binding && binding.hidden); // hidden = ignored as a control: dark, no pool light
       const ctrl = !hidden && p.obj.group && this.groups[p.obj.group] && this.groups[p.obj.group].entity;
-      const ents = hidden ? [] : [binding && binding.entity, ctrl, p.obj.type === 'dock' ? mowerEntity : null];
+      const own = binding && binding.entity;
+      // extra inputs a type reads (e.g. the charger's power sensor), so its look follows them too
+      const extra = !hidden && own && p.type.inputs ? p.type.inputs(own) : [];
+      const ents = hidden ? [] : [own, ctrl, p.obj.type === 'dock' ? mowerEntity : null, ...extra];
       // HA replaces a state object when it changes: same objects, nothing to do
       const inputs = ents.map((e) => (e ? states[e] : null));
       if (!p.inputs || inputs.length !== p.inputs.length || inputs.some((x, i) => x !== p.inputs[i]) || ents.some((e, i) => e !== p.ents[i])) {
@@ -158,11 +185,16 @@ export class ObjectLayer {
     if (sig !== this._budgetSig) {
       this._budgetSig = sig;
       const before = this._slotSig();
-      const hadShadow = [...this._slots.values()].some((x) => x.shadow);
       this._assign(fixtures);
       this.stats.budget++;
-      // shadow maps only depend on the shadow slots; nothing lit before or after: nothing to redraw
-      if (hadShadow || [...this._slots.values()].some((x) => x.shadow)) { this.stats.shadowRequests++; this.view.requestShadowUpdate(); }
+      // shadow maps: only lit shadow slots whose fixture or position changed (dark slots are never redrawn)
+      const redraw = [];
+      this.pool.points.slice(0, SHADOWS).forEach((l, i) => {
+        const key = this._shadowKey(l);
+        if (key && key !== this._shadowKeys[i]) redraw.push(l);
+        this._shadowKeys[i] = key;
+      });
+      if (redraw.length) { this.stats.shadowRequests++; this.view.requestShadowUpdate(redraw); }
       if (before !== this._slotSig()) changed = true;
     } else {
       // colour / brightness only: shadow maps depend on light positions, so no redraw
@@ -174,20 +206,45 @@ export class ObjectLayer {
     if (changed) this.view.markDirty();
   }
 
+  // fixture@position of a lit shadow slot, null when the slot is dark
+  _shadowKey(light) {
+    for (const [id, s] of this._slots) if (s.light === light) return `${id}@${light.position.toArray().join()}`;
+    return null;
+  }
+
+  // The shadow casters changed (model, visibility, cut, section): the lit shadow slots to redraw.
+  // Dark slots forget their key, so they are redrawn once they light up.
+  shadowsStale() {
+    const out = [];
+    this.pool.points.slice(0, SHADOWS).forEach((l, i) => {
+      if (this._shadowKeys[i] && this.lights.visible) out.push(l);
+      else this._shadowKeys[i] = null;
+    });
+    return out;
+  }
+
   _assign(fixtures) {
+    const prev = new Map([...this._slots].map(([id, s]) => [id, s.light]));
     this._darken();
     const { real, shadows } = lightBudget(fixtures, { points: POINTS, spots: SPOTS, shadows: SHADOWS });
     const pts = this.pool.points;
     const shadowSlots = pts.slice(0, SHADOWS), freeSlots = pts.slice(SHADOWS);
     const order = [...real.keys()];
-    // shadow picks first (slots 0..3), then the rest into 4..7, then any shadow slot left
-    for (const id of order.filter((x) => shadows.has(x))) this._slots.set(id, { light: shadowSlots.shift(), shadow: true, factor: real.get(id).factor });
+    // a fixture keeps the shadow slot it had (no needless shadow map redraws)
+    const take = (id) => {
+      const i = shadowSlots.indexOf(prev.get(id));
+      return i >= 0 ? shadowSlots.splice(i, 1)[0] : null;
+    };
+    // shadow picks first (slots 0..3; own slot, then any), then the rest into 4..7, then any shadow slot left
+    const picks = order.filter((x) => shadows.has(x));
+    const kept = new Map(picks.map((id) => [id, take(id)]));
+    for (const id of picks) this._slots.set(id, { light: kept.get(id) || shadowSlots.shift(), shadow: true, factor: real.get(id).factor });
     let spot = 0;
     for (const id of order) {
       if (shadows.has(id)) continue;
       const { kind, factor } = real.get(id);
       if (kind === 'spot') { this._slots.set(id, { light: this.pool.spots[spot++], shadow: false, factor }); continue; }
-      const light = freeSlots.shift() || shadowSlots.shift();
+      const light = freeSlots.shift() || take(id) || shadowSlots.shift();
       this._slots.set(id, { light, shadow: pts.indexOf(light) < SHADOWS, factor });
     }
     const root = this.model.root;
@@ -248,9 +305,10 @@ export class ObjectLayer {
 
   dispose() {
     this.setModel(null);
-    const group = this.view.objectsGroup;
+    const group = this.lights;
     for (const l of this.pool.spots) group.remove(l.target);
     for (const l of [...this.pool.points, ...this.pool.spots]) { group.remove(l); l.dispose(); }
+    this.view.objectsGroup.remove(group);
     if (this.view.objectLayer === this) this.view.objectLayer = null;
   }
 }

@@ -615,7 +615,7 @@ try {
   check('group controller on again: the facade lights up', (await look()).facadeLit === 1);
   // ten state updates that touch no object: no budget recompute, no object re-evaluation, no shadow redraw
   await sleep(300);
-  const counters = () => page.evaluate(`({ ...${card}._objects.stats, shadow: ${card}._view.stats.shadow })`);
+  const counters = () => page.evaluate(`({ ...${card}._objects.stats, shadow: ${card}._view.stats.shadow, frames: ${card}._view.stats.frames, shadowLights: ${card}._view.stats.shadowLights })`);
   const c0 = await counters();
   for (let i = 0; i < 10; i++) {
     await page.evaluate(`(() => { const c = ${card}, st = c._hass.states, t = st['sensor.kitchen_temperature'];
@@ -627,20 +627,81 @@ try {
   check('10 unrelated hass updates: layer updated, no budget recompute, no re-evaluation, no shadow update',
     c1.updates >= c0.updates + 10 && c1.budget === c0.budget && c1.evaluated === c0.evaluated && c1.shadowRequests === c0.shadowRequests && c1.shadow === c0.shadow,
     JSON.stringify({ c0, c1 }));
+  check('10 unrelated hass updates: no frame rendered, no shadow map flagged', c1.frames === c0.frames && c1.shadowLights === c0.shadowLights, JSON.stringify({ f0: c0.frames, f1: c1.frames, s0: c0.shadowLights, s1: c1.shadowLights }));
+  // shadow maps per light: a lamp without a shadow slot toggling redraws no map; one with a slot redraws only its own
+  const shadowFlags = () => page.evaluate(`(() => { const c = ${card}, l = c._objects, v = c._view;
+    return { n: v.stats.shadowLights, auto: [v.sun, ...l.pool.points.slice(0, 4)].map((x) => x.shadow.autoUpdate) }; })()`);
+  let sf0 = await shadowFlags();
+  check('pool shadow lights and the sun redraw on demand only (shadow.autoUpdate false)', sf0.auto.every((x) => x === false), JSON.stringify(sf0.auto));
+  await page.evaluate(`${card}._hass.callService('switch', 'toggle', { entity_id: 'switch.demo_facade' })`);
+  await sleep(200);
+  await page.evaluate(`${card}._hass.callService('switch', 'toggle', { entity_id: 'switch.demo_facade' })`);
+  await sleep(200);
+  let sf1 = await shadowFlags();
+  check('facade group (no shadow slot) off and on: no shadow map redrawn', sf1.n === sf0.n, JSON.stringify({ sf0: sf0.n, sf1: sf1.n }));
+  await page.evaluate(`${card}._hass.callService('light', 'toggle', { entity_id: 'light.demo_hall' })`);
+  await sleep(200);
+  sf1 = await shadowFlags();
+  check('hall lamp on: at most its own shadow map (lit ones keep their slots)', sf1.n - sf0.n <= 1, JSON.stringify({ sf0: sf0.n, sf1: sf1.n }));
+  await page.evaluate(`${card}._hass.callService('light', 'toggle', { entity_id: 'light.demo_hall' })`);
+  await sleep(200);
+  check('hall lamp off: nothing redrawn', (await shadowFlags()).n === sf1.n);
+  // a lamp behind walls / the roof (Exterior view: every level shown) is not toggled by a tap on its
+  // screen position (occlusion-aware hit test)
+  await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=exterior]').click()`);
+  await settle(page, card);
+  const cam0 = await page.evaluate(`${card}._view.getCamera()`);
+  const hiddenAt = await page.evaluate(`(() => { const c = ${card}, v = c._view, l = c._objects, a = l.anchorOf('lamp_living'), node = l.objectAt('lamp_living').obj.node;
+    for (let k = 0; k < 24; k++) {
+      const t = (k / 24) * Math.PI * 2, pos = [a.x + Math.cos(t) * 14, a.y + 4, a.z + Math.sin(t) * 14];
+      v.setCamera({ position: pos, target: a.toArray() }, { instant: true });
+      v.controls.update();
+      v.camera.updateMatrixWorld();
+      const p = v.projectWorld(a);
+      if (p && v.pointHidden(a, node)) return p;
+    }
+    return null; })()`);
+  await settle(page, card);
+  const callsBefore = await page.evaluate('(window.__serviceCalls || []).length');
+  if (hiddenAt) await page.mouse.click(hiddenAt[0], hiddenAt[1]);
+  await sleep(200);
+  const tapCalls = await page.evaluate(`(window.__serviceCalls || []).slice(${callsBefore})`);
+  check('exterior view: a tap on the living lamp hidden by the floor above / roof does not toggle it', !!hiddenAt && !tapCalls.some((c) => c[2] && c[2].entity_id === 'light.demo_living'), JSON.stringify({ hiddenAt, tapCalls }));
+  for (const c of tapCalls) if (c[1] === 'toggle') await page.evaluate(`${card}._hass.callService(${JSON.stringify(c[0])}, 'toggle', ${JSON.stringify(c[2])})`); // undo another object's toggle
+  await page.keyboard.press('Escape');
+  await page.evaluate(`${card}._view.setCamera(${JSON.stringify(cam0)}, { instant: true })`);
+  await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=ground]').click()`);
+  await settle(page, card);
   await page.screenshot({ path: path.join(root, 'screenshots', 'objects-lit.png') });
   // night: the lamps carry the scene
   await page.evaluate('window.__setDemoSun(-20, 200)');
   await sleep(300);
   await page.screenshot({ path: path.join(root, 'screenshots', 'objects-night.png') });
+  sf0 = await shadowFlags();
+  await page.evaluate('window.__setDemoSun(-25, 230)');
+  await sleep(300);
+  sf1 = await shadowFlags();
+  check('sun below the horizon moving 30 deg: its shadow map is not redrawn', sf1.n === sf0.n, JSON.stringify({ sf0: sf0.n, sf1: sf1.n }));
+  await page.evaluate('window.__setDemoSun(20, 230)');
+  await sleep(300);
+  check('sunrise: the sun shadow map is redrawn', (await shadowFlags()).n > sf1.n);
+  await page.evaluate('window.__setDemoSun(-20, 200)');
+  await sleep(300);
   // lights: off -> emissive only
   await page.evaluate(`${card}.setConfig({ ...${card}._config, lights: 'off' })`);
   await page.waitForFunction(`!!${card}._view.model && ${card}._objects.parts.size > 0`, { timeout: 10000 });
   await sleep(400);
   L = await look();
   check('lights: off -> every pool light at intensity 0, lamps still glow', L.lit === 0 && L.glow.lamp_living > 0, JSON.stringify({ lit: L.lit, g: L.glow.lamp_living }));
+  const sceneLights = () => page.evaluate(`(() => { const c = ${card}, pool = new Set([...c._objects.pool.points, ...c._objects.pool.spots]); let n = 0, labels = 0;
+    c._view.scene.traverseVisible((o) => { if (pool.has(o)) n++; });
+    c._view.objectsGroup.traverseVisible((o) => { if (o.isCSS2DObject) labels++; });
+    return { pool: n, labels }; })()`);
+  const SL = await sceneLights();
+  check('lights: off -> no pool light in the scene (sub-group hidden), object labels still shown', SL.pool === 0 && SL.labels > 0, JSON.stringify(SL));
   await page.evaluate(`${card}.setConfig({ ...${card}._config, lights: 'auto' })`);
   await sleep(400);
-  check('lights: auto again -> pool lights back', (await look()).lit > 0);
+  check('lights: auto again -> pool lights back', (await look()).lit > 0 && (await sceneLights()).pool === 12);
   // Objects tab: every row bound (no "entity not found"); the group controller field
   await page.evaluate('window.__setDemoSun(30, 180)');
   const sr = `${card}.shadowRoot`;

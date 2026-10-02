@@ -105,7 +105,7 @@ export class FloorplanView {
     this.trail = null;
     this.modelGroup = new THREE.Group();
     this.scene.add(this.modelGroup);
-    this.objectsGroup = new THREE.Group(); // model objects: the real light pool and spot targets
+    this.objectsGroup = new THREE.Group(); // model objects: the light pool sub-group (ObjectLayer.lights) and object labels
     this.scene.add(this.objectsGroup);
     this.onRender = null; // called after every rendered frame
     this.objectLayer = null; // ObjectLayer (registers itself); reset when the model goes
@@ -126,7 +126,7 @@ export class FloorplanView {
     this._occIds = null; // marker ids waiting for a partial pass (live mower)
     this._occSig = null; // inputs of the last occlusion pass (shown markers, model visibility, cut, section)
     this._shadowSig = null; // inputs of the last shadow map render (model visibility, cut, section)
-    this.stats = { occPasses: 0, occPartial: 0, occDone: 0, shadow: 0 }; // counters for the headless checks (occDone: full passes finished)
+    this.stats = { occPasses: 0, occPartial: 0, occDone: 0, shadow: 0, frames: 0, shadowLights: 0 }; // counters for the headless checks (occDone: full passes finished; shadowLights: per-light map redraws requested)
     this._depth = null;
 
     this.floors = [];
@@ -537,7 +537,8 @@ export class FloorplanView {
     const a = old.sunDir, b = sunDir;
     let moved = (!!a !== !!b);
     if (a && b) moved = Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]))) > Math.PI / 180;
-    if (moved || (old.night >= 1) !== (night >= 1)) this._fitShadow();
+    if (moved) this._fitShadow();
+    else if (this._sunStale) this._sunShadow(); // the sun came up: its map was skipped while it was down
     this.dirty = true;
   }
 
@@ -564,6 +565,7 @@ export class FloorplanView {
       r.shadowMap.type = THREE.PCFSoftShadowMap;
       this._applyLights();
       sun.castShadow = true; // stays on (toggling recompiles shaders); night = intensity 0
+      sun.shadow.autoUpdate = false; // redrawn only when flagged, and only while the sun is up
       sun.shadow.mapSize.set(2048, 2048);
       sun.shadow.bias = -0.0005;
       sun.shadow.normalBias = 0.02; // against acne on roofs
@@ -622,7 +624,8 @@ export class FloorplanView {
     cam.far = radius * 5;
     cam.updateProjectionMatrix();
     sun.target.updateMatrixWorld();
-    this._shadowDirty();
+    this._sunShadow();
+    this.stats.shadow++;
     this.dirty = true;
   }
 
@@ -653,6 +656,10 @@ export class FloorplanView {
       this.mowerGroup.add(this.mapPlane);
     }
     const plane = this.mapPlane;
+    // per-push calls with the same overlay draw nothing
+    const sig = [o.url, o.x, o.y, o.rotation, o.width, o.opacity, o.floorId, this.floorElevation(o.floorId), this._shows(o.floorId)].join('|');
+    if (sig === plane.userData.sig) return;
+    plane.userData.sig = sig;
     plane.userData.floorId = o.floorId;
     plane.position.copy(planToWorld(o.x || 0, o.y || 0, 0.015, this.floorElevation(o.floorId)));
     plane.rotation.y = ((o.rotation || 0) * Math.PI) / 180;
@@ -885,6 +892,7 @@ export class FloorplanView {
   // glows: [{id, x, y, floorId, rgb, strength}] (lights that are on)
   setGlows(glows) {
     const seen = new Set();
+    let changed = false;
     for (const g of glows) {
       seen.add(g.id);
       let entry = this.glows.get(g.id);
@@ -899,8 +907,13 @@ export class FloorplanView {
         entry = { mesh, floorId: g.floorId };
         this.glows.set(g.id, entry);
       }
-      entry.floorId = g.floorId;
+      const sig = [g.x, g.y, g.floorId, this.floorElevation(g.floorId), g.rgb.join(), g.strength, this.theme.dark].join('|');
       const { mesh } = entry;
+      const vis = this._glowVisible(g.id, entry);
+      if (sig === entry.sig && vis === mesh.visible) continue; // nothing new for this glow
+      entry.sig = sig;
+      changed = true;
+      entry.floorId = g.floorId;
       mesh.position.copy(planToWorld(g.x, g.y, 0.03, this.floorElevation(g.floorId)));
       mesh.visible = this._glowVisible(g.id, entry); // glows cast no shadow and hide no marker
       const r = GLOW_RADIUS * (0.6 + 0.4 * g.strength) * 2;
@@ -914,8 +927,9 @@ export class FloorplanView {
       entry.mesh.geometry.dispose();
       entry.mesh.material.dispose();
       this.glows.delete(id);
+      changed = true;
     }
-    this.dirty = true;
+    if (changed) this.dirty = true; // per-push calls with the same glows draw nothing
   }
 
   setVisibleFloor(id) {
@@ -1225,17 +1239,39 @@ export class FloorplanView {
     return out.join(';');
   }
 
+  // The shadow casters changed (model, visibility, cut, section): the sun's map (while it is up) and
+  // every lit pool shadow map. Dark lights are redrawn when they light up.
   _shadowDirty() {
-    this.renderer.shadowMap.needsUpdate = true;
+    this._sunShadow();
+    if (this.objectLayer) this._flagShadows(this.objectLayer.shadowsStale());
     this.stats.shadow++;
+  }
+
+  // Sun map: redraw now when the sun is up, else once it rises (setSky).
+  _sunShadow() {
+    if (this.sun.intensity > 0) {
+      this._sunStale = false;
+      this._flagShadows([this.sun]);
+    } else {
+      this._sunStale = true;
+    }
+  }
+
+  _flagShadows(lights) {
+    if (!lights || !lights.length) return;
+    for (const l of lights) l.shadow.needsUpdate = true;
+    this.renderer.shadowMap.needsUpdate = true;
+    this.stats.shadowLights += lights.length;
   }
 
   markDirty() {
     this.dirty = true;
   }
 
-  requestShadowUpdate() {
-    this._shadowDirty();
+  // lights: the pool lights whose shadow maps must be redrawn (lit, moved or reassigned).
+  requestShadowUpdate(lights) {
+    this._flagShadows(lights);
+    this.stats.shadow++;
     this.dirty = true;
   }
 
@@ -1429,6 +1465,33 @@ export class FloorplanView {
     return out;
   }
 
+  // True when visible model geometry (not glass, not `own`'s meshes, below the cut, section respected)
+  // hides a world point from the camera: object taps skip lamps behind walls. One raycast.
+  pointHidden(world, own = null) {
+    if (!this.model || (this.model.opacity ?? 1) < 0.6) return false; // a see-through model hides nothing
+    const cam = this.camera;
+    cam.updateMatrixWorld();
+    const ndc = world.clone().project(cam);
+    const rc = this._tapRay || (this._tapRay = new THREE.Raycaster());
+    rc.setFromCamera(new THREE.Vector2(ndc.x, ndc.y), cam);
+    const origin = rc.ray.origin, dist = origin.distanceTo(world);
+    rc.near = 0;
+    rc.far = dist; // isOccluded keeps a margin in front of the point
+    const shown = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
+    const ownMesh = (o) => { for (let p = o; p && own; p = p.parent) if (p === own) return true; return false; };
+    const cut = this.modelClip.constant, tmp = new THREE.Vector3();
+    for (const { mesh, box } of this._occluders()) {
+      if (ownMesh(mesh) || !shown(mesh)) continue;
+      if (!box.containsPoint(origin)) {
+        const at = rc.ray.intersectBox(box, tmp);
+        if (!at || origin.distanceTo(at) > rc.far) continue;
+      }
+      const h = rc.intersectObject(mesh, false).find((x) => x.point.y <= cut + 1e-6 && !this._cutAway(x.point));
+      if (h && isOccluded(h.distance, dist)) return true;
+    }
+    return false;
+  }
+
   _runOcclusion() {
     this._occTimer = null;
     if (this._disposed) return;
@@ -1553,6 +1616,7 @@ export class FloorplanView {
       }
       if (!this.dirty) return;
       this.dirty = false;
+      this.stats.frames++;
       this._updateDepth();
       this.labelRenderer.domElement.classList.toggle('compact', this.pixelsPerMetre() < COMPACT_PPM);
       this.renderer.render(this.scene, this.camera);

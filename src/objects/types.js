@@ -44,8 +44,10 @@ export function findGlow(node, name) {
 const matsOf = (mesh) => (Array.isArray(mesh.material) ? mesh.material : [mesh.material]);
 
 // The anchor in the model root's frame: glow centre, else fp anchor (node frame), else node box centre; + hints.offset.
+// Only the node's ancestors and subtree are brought up to date (not the whole model).
 function anchorOf(obj, glow, root, offset) {
-  root.updateWorldMatrix(true, true);
+  if (obj.node) obj.node.updateWorldMatrix(true, true);
+  else root.updateWorldMatrix(true, false);
   const p = new THREE.Vector3();
   const box = new THREE.Box3();
   if (glow && !box.setFromObject(glow).isEmpty()) box.getCenter(p);
@@ -138,6 +140,12 @@ export function statusColor(type, state) {
 const num = (v) => (typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
 const fmt = (v) => String(Math.round(v * 10) / 10);
 
+// The separate power sensors a charger label may read (sensor.<name>_power / _charging_power).
+export function chargerInputs(entity) {
+  const base = typeof entity === 'string' ? entity.replace(/^[^.]*\./, '') : '';
+  return base ? [`sensor.${base}_power`, `sensor.${base}_charging_power`] : [];
+}
+
 // Text shown beside an object (CSS2D label) or null: charger power while charging, climate current temperature.
 export function objectLabel(type, states, entity) {
   const s = entity && states ? states[entity] : null;
@@ -155,8 +163,7 @@ export function objectLabel(type, states, entity) {
       const v = num(a[k]);
       if (Number.isFinite(v)) return `${fmt(v)} ${unit}`;
     }
-    const base = entity.replace(/^[^.]*\./, '');
-    for (const e of [entity, `sensor.${base}_power`, `sensor.${base}_charging_power`]) {
+    for (const e of [entity, ...chargerInputs(entity)]) {
       const p = states[e];
       const v = p ? num(p.state) : NaN;
       if (Number.isFinite(v) && p.attributes && p.attributes.unit_of_measurement) return `${fmt(v)} ${p.attributes.unit_of_measurement}`;
@@ -306,6 +313,7 @@ export const TYPES = {
       setLabel(part, objectLabel('ev_charger', ctx.states, ctx.entity));
       return updateStatus(part, statusColor('ev_charger', st));
     },
+    inputs: chargerInputs, // the layer re-evaluates when the power sensor changes
     relayout, dispose: disposeStatus,
     defaults: { tap: 'more-info', hold: 'popup', popup: ['state', 'power', 'energy'] },
   },

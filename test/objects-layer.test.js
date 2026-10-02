@@ -10,7 +10,8 @@ function fakeView() {
     dirty: 0, shadow: 0,
     markDirty() { this.dirty++; },
     floorElevation: (f) => (f === 'up' ? 3 : 0),
-    requestShadowUpdate() { this.shadow++; this.dirty++; },
+    flagged: [],
+    requestShadowUpdate(lights) { this.shadow++; this.dirty++; this.flagged.push(...lights); },
   };
 }
 
@@ -52,8 +53,10 @@ describe('ObjectLayer', () => {
     expect(points(layer)[0].shadow.bias).toBeCloseTo(-0.004);
     expect(points(layer)[0].shadow.camera.near).toBeCloseTo(0.15);
     expect([...points(layer), ...layer.pool.spots].every((l) => l.intensity === 0)).toBe(true);
-    expect(view.objectsGroup.children.filter((o) => o.isLight)).toHaveLength(12);
+    expect(layer.lights.children.filter((o) => o.isLight)).toHaveLength(12);
+    expect(layer.lights.parent).toBe(view.objectsGroup);
     expect(view.objectsGroup.visible).toBe(false);
+    expect(points(layer).slice(0, 4).every((l) => l.shadow.autoUpdate === false)).toBe(true);
   });
 
   it('a lit lamp gets a shadow-casting pool light at its glow centre', () => {
@@ -231,12 +234,13 @@ describe('ObjectLayer', () => {
     expect(lit(points(layer))).toHaveLength(0);
   });
 
-  it('a shadow light turning off redraws the shadow map once', () => {
+  it('a shadow light: its map is redrawn when it lights up, not when it goes dark', () => {
     layer.setModel(model([{ id: 'a', x: 1 }]));
     layer.setBindings(bind([['a', 'light.a']]), {});
     layer.update({ 'light.a': st('on') }, ctx);
+    expect(view.flagged).toEqual([points(layer)[0]]);
     layer.update({ 'light.a': st('off') }, ctx);
-    expect(view.shadow).toBe(2);
+    expect(view.shadow).toBe(1);
   });
 
   it('dispose removes the pool from the view', () => {

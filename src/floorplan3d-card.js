@@ -18,7 +18,7 @@ import {
 } from './views.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 import { ObjectLayer } from './objects/layer.js';
-import { bindObjects, effectiveGroups, nightFactor, sunVector, sunStrength, clampSunDir, screenNearest, attachedPosition } from './objects/logic.js';
+import { bindObjects, effectiveGroups, nightFactor, sunVector, sunStrength, clampSunDir, screenByDistance, attachedPosition } from './objects/logic.js';
 import { ObjectPopup, objectAction, actionTarget, toggleCall } from './objects/popup.js';
 
 const VERSION = '0.4.0';
@@ -1232,9 +1232,15 @@ class Floorplan3dCard extends HTMLElement {
       if (!all && (!b || b.hidden || (!b.missing && !actionTarget(o.obj, b, groups)))) continue;
       if (!levelShown(o.obj.level) || !nodeShown(o.obj.node)) continue;
       const p = this._view.projectWorld(a.world);
-      if (p) pts.push({ id: a.id, x: p[0], y: p[1] });
+      if (p) pts.push({ id: a.id, x: p[0], y: p[1], world: a.world, node: o.obj.node });
     }
-    return screenNearest(pts, x, y, radius);
+    // nearest first; one hidden behind visible model geometry (a lamp behind a facade wall) is skipped
+    const byId = new Map(pts.map((p) => [p.id, p]));
+    for (const id of screenByDistance(pts, x, y, radius)) {
+      const p = byId.get(id);
+      if (!this._view.pointHidden(p.world, p.node)) return id;
+    }
+    return null;
   }
 
   // Tap = moved < 5 px; hold 500 ms (not moved) = hold action. Orbit still starts from the canvas.
