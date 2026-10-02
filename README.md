@@ -8,7 +8,8 @@ position over its map.
 
 ![3D view](docs/images/view-3d.png)
 
-- Floors from Home Assistant, a chip per floor plus "All", 3D and north-up top view
+- Floors from Home Assistant, a chip per floor plus "All", 3D and north-up top view; with a
+  3D model the chips are the model's views (Exterior, Ground floor, …), linked to HA floors
 - Tap toggles lights, switches, fans and input booleans; other devices (and long-press) open
   the more-info dialog
 - Lights that are on cast a glow on the floor in their colour and brightness
@@ -16,7 +17,9 @@ position over its map.
 - Edit mode for admins: draw rooms, doors, floors, pin and hide devices, import/export
 - One layout shared by every user and device (stored by the companion integration)
 - Robot mower: live position, trail, map image or camera overlay, point calibration
-- Optional 3D model of the house (.glb) under the plan: floors stack (upper floors hidden, lower ones shown), with a Day / Night button for lighting
+- Optional 3D model of the house (.glb) under the plan: views per storey (upper storeys and the
+  roof hidden), click a part to hide it in a view, saved cameras, pick a room's outline from the
+  model, and a Day / Night button for lighting
 - Follows the HA theme, light and dark
 
 ## Install
@@ -59,17 +62,20 @@ The options below can be set in the visual editor or in YAML.
 | `group_by` | `device` | `device`: one marker per device. `entity`: one per entity. |
 | `wall_height` | `1.0` | Height of the cut-away walls in metres. |
 | `view` | `3d` | Start in `3d` or `top` view. |
-| `floor` | first floor with rooms | Floor id to show first, or `all`. |
+| `floor` | first floor with rooms | Floor id (or view id) to show first, or `all`. |
+| `view_id` | | View to show first (with a model: a view id such as `ground`). Wins over `floor`. |
+| `room_labels` | `size` | Room labels: `size` (name and size, e.g. `Office · 4.5 × 5.0 m`, or `m²` for other shapes), `name`, or `none`. |
+| `views` | | Per-view overrides by view id (see Views). |
 | `model` | | URL of a `.glb` model, e.g. `/local/house.glb`. |
 | `model_position` | `[0, 0, 0]` | Model offset in plan metres `[east, north, up]`. |
 | `model_rotation` | `0` | Model rotation in degrees, counter-clockwise. |
 | `model_scale` | `1` | Model scale (e.g. `0.01` for a centimetre model). |
 | `model_opacity` | `1` | Model opacity, `0`–`1`. |
-| `model_floors` | auto | Which HA floor shows each model storey group, e.g. `{ground: floor1, attic: always}` (`always` / `hidden` allowed). |
+| `model_floors` | auto | Which HA floor each model level belongs to, e.g. `{ground: floor1, attic: floor2}` (for a `model:` URL; uploads set it in the Model tab). |
 
 ## Set up the plan
 
-Click **Edit** on the card (admins only). The panel has five tabs.
+Click **Edit** on the card (admins only). The panel has six tabs.
 
 ![Edit mode](docs/images/edit-rooms.png)
 
@@ -77,13 +83,17 @@ Click **Edit** on the card (admins only). The panel has five tabs.
 corners of the room on the plan. Points snap to 5 cm, to existing corners within 25 cm (so
 neighbouring rooms share walls exactly), and line up with nearby corners. Click the first point
 or press Enter to finish, Backspace removes the last point, Esc cancels.
+With a model loaded, **Pick** takes the outline from the model instead: click the room's
+floor. A tagged room is linked to the area directly; an untagged floor is traced and previewed,
+then **Use this outline** or **Draw instead** (Esc cancels).
 Select a room (click it, or **Select** in the list) to:
 - drag its corners, drag an edge's middle handle to add a corner, right-click a corner to delete it
 - **Add door**, then click on a wall
 - change its area or floor, mark it **Outdoor** (terrace, garden: no walls), delete it
 
-Floors come from HA (Settings → Areas → Floors) with elevation = level × 3 m. Adjust elevation
-and ceiling height per floor at the bottom of the Rooms tab.
+Floors come from HA (Settings → Areas → Floors) with elevation = level × 3 m. Without a model,
+adjust elevation and ceiling height per floor under *Advanced* at the bottom of the Rooms tab;
+with a model the heights come from the model.
 
 **Devices.** Every device with an area appears in that area's room. Drag a marker to pin it; set
 its height above the floor; **Return to auto placement** removes the pin; **Hide** removes it
@@ -91,10 +101,12 @@ from the plan. Devices whose area has no room yet, and hidden devices, are liste
 
 **Mower.** See below.
 
+**Views.** See [Views](#views).
+
 **Model.** Upload or replace a 3D model of the house (.glb, up to 100 MB; needs the
 integration, see below) and line it up with the plan using the sliders (east, north, up,
 rotation, opacity) and scale. For a tagged model the tab lists its levels and rooms/zones:
-assign each level to an HA floor (or *always shown*, *only in All*, *hidden*) and each room
+choose which HA floor each level belongs to (*auto*, a floor, or *no floor*) and assign each room
 or zone to an HA area. Defaults follow level order and the tag's suggested area. Click a part
 of the model in the view to find it in the lists. A report shows errors and warnings found
 in the model's tags, and a "no longer in the model" list shows assignments whose level or
@@ -144,12 +156,55 @@ levels become floors, tagged rooms and zones become the card's rooms, so the mod
 replace hand-drawn ones. Format and examples: [docs/model-builder-guide.md](docs/model-builder-guide.md).
 Untagged models still load and show whole.
 
-In **Edit → Model** you assign each level to an HA floor (or *always shown*, *only in All*,
-*hidden*) and each room to an HA area. Defaults follow level order and the tag's suggested
-area, so most of it is automatic; your choices are stored by id and survive re-exports.
-Click a part of the model in the view to find it in the lists. Everything is cut at the
-selected floor's `wall_height`. Check a model before uploading with
-`npm run check-model -- house.glb`.
+In **Edit → Model** you choose which HA floor each level belongs to and assign each room to an
+HA area. Defaults follow level order and the tag's suggested area, so most of it is automatic;
+your choices are stored by id and survive re-exports. Click a part of the model in the view to
+find it in the lists. A tagged model shows whole levels; only an untagged model is cut at
+`wall_height` (per view, *Cut at wall height* in the Views tab). Check a model before
+uploading with `npm run check-model -- house.glb`.
+
+### Views
+
+With a model, the chips on the card are **views**. They come from the model (`fp.views`, see the
+[model builder guide](docs/model-builder-guide.md#views)); a model without views gets one view per
+storey (lower storeys stacked under it) plus *All*. Each view is linked to HA floors (by default
+the floor of its top storey):
+- In a storey view, devices in the visible rooms of that storey and outdoor devices are shown;
+  devices of lower storeys are hidden. An overview (every storey and the roof visible, e.g.
+  Exterior) shows every device.
+- Devices without a model room (pins, areas without a room) follow their HA floor: they show in
+  views linked to that floor. A pin's floor maps to that floor's level, so an outdoor pin on
+  the ground floor is hidden in upper storey views; link its area to an outdoor room or zone
+  to keep it visible everywhere.
+- Room labels (name and size) appear in storey views for the rooms of that storey.
+- Switching views keeps the camera, unless the view has a saved camera. **Reset view** (the
+  crosshair button) returns to the view's camera or frames the house.
+
+**Edit → Views** edits the current view: label, add / hide / reorder views, linked HA floors,
+**Save current view as start** (the camera), and a tree of the model (levels, rooms, objects,
+layers, groups) with an eye per row: *default* → *shown* → *hidden* in this view. Click any part
+of the model in 3D for a menu: **Hide in this view**, **Show in this view**, **Hide in all
+views**, **Reveal in tree**. Your changes are stored per view id in the layout and survive model
+re-exports; parts no longer in the model are listed for removal.
+
+Per-card overrides in YAML (same keys, they win over the stored ones):
+
+```yaml
+views:
+  ground:
+    label: Downstairs
+    floors: [ground_floor]
+    rules:
+      - hide: layer:furniture
+      - hide: node:house/level0/sofa
+    camera: { position: [18, 22, 16], target: [6, 0, -4] }
+  exterior:
+    hidden: true
+```
+
+Model builders: [docs/model-builder-guide.md](docs/model-builder-guide.md) (format, selectors,
+layers) and [docs/prototype-view-rules.md](docs/prototype-view-rules.md) (reference view set,
+camera presets for `fp.views[*].camera`, controls).
 
 To export an existing Three.js design: add `window.scene = scene;` to its code, open it in the
 browser, paste [tools/export-glb.js](tools/export-glb.js) into the developer console. It drops
@@ -159,7 +214,8 @@ lights and helpers, prints size and origin, and downloads `house.glb`.
 
 ```sh
 npm ci
-npm run demo          # http://localhost:8765/demo/  (mock HA, add ?model=1 for the 3D model)
+npm run demo          # http://localhost:8765/demo/  (mock HA, add ?model=1 for the 3D model with views)
+npm run make-demo-model   # regenerate demo/house.glb (views, layers, tagged rooms)
 npm test              # unit tests (vitest)
 npm run lint
 npm run check         # build + headless Chrome checks of view, edit mode and model

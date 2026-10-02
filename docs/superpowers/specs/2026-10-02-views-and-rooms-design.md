@@ -44,8 +44,9 @@ and never see an elevation field; after a re-export with `fp` tags the same view
   same keys per card. The UI can also add views (`layout.views[id].added = true`).
 - **Which devices show in a view:** (a) a device whose area is linked to a room/zone that is visible in
   the view; else (b) a device whose area's HA floor is linked to the view (covers pins and areas
-  without a room); else hidden. Markers on HA floors linked to the view but outside the top visible
-  storey fade in views that show several storeys (existing fading rule, now per view).
+  without a room); else hidden. In a storey view (some storey or the roof hidden) devices on storeys
+  below the view's top visible storey are hidden, not faded; outdoor devices show in every view. An
+  overview (every storey and the roof visible) shows every device. (Ruling during implementation.)
 - The level dropdown in the Model tab becomes "belongs to HA floor" (auto | floor | none).
 
 ## 2. Visibility model
@@ -71,9 +72,11 @@ Unknown or non-matching selectors are ignored (listed as "not in this model" in 
    always, roof only in All, plus the level → floor mapping), and today's cut for untagged models when
    the floor's "cut at wall height" is on (default: on for untagged models, off for tagged).
 2. **Rules**: the floor's rules in order — layout rules first, then card-YAML rules — each
-   `{ show: selector }` or `{ hide: selector }`. For every node, the **last rule that matches the node
-   itself** decides; a node with no matching rule inherits its parent's resolved value; level nodes
-   with no matching rule use step 1.
+   `{ show: selector }` or `{ hide: selector }`. A rule applies to the node it matches and cascades to
+   its descendants; for every node the **latest rule (in order) among those matching the node or any
+   ancestor** decides, so a later broad rule (`hide layer:furniture`) overrides an earlier, more
+   specific show; nodes with no matching rule use step 1. (Ruling during implementation: the
+   "hide all + show list" model views need the cascade.)
 3. **Applying to three.js** (rules only re-run when the view, rules or model change): a node's `visible` = its resolved value OR any descendant resolved
    visible (so `hide level:ground` + `show room:kitchen` shows only the kitchen inside the ground
    level; siblings without their own rule stay hidden because they inherit the hidden value).

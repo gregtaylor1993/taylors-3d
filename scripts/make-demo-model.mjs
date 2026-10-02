@@ -1,6 +1,8 @@
 // Builds demo/house.glb from the demo layout, tagged with fp userData (see docs/model-builder-guide.md):
-// storey levels (level0 / level1) with a tagged room group per room, an exterior level with the
-// outdoor zones, a roof level and one tagged lamp object. Run: node scripts/make-demo-model.mjs
+// one wrapper group "house" carrying the model's views (fp.views), storey levels (level0 / level1)
+// with a tagged room group per room, furniture on the "furniture" layer, a thin ceiling slab per
+// storey on the "ceiling" layer (inside the storey above), an exterior level with the outdoor zones,
+// a roof level and one tagged lamp object. Run: node scripts/make-demo-model.mjs
 import fs from 'node:fs';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
@@ -24,6 +26,17 @@ const mat = (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.9 })
 const slabMat = mat(0xd9cfc1), wallMat = mat(0xf2efe9), woodMat = mat(0x9b7653), fabricMat = mat(0x6f86a6), roofMat = mat(0x7a4b3a);
 
 const scene = new THREE.Scene();
+// the exporter writes the scene's children as top nodes: one wrapper keeps the views on a single root
+const house = new THREE.Group();
+house.name = 'house';
+house.userData.fp = {
+  views: [
+    { id: 'exterior', label: 'Exterior', show: ['all'] },
+    { id: 'ground', label: 'Ground floor', show: ['level:level0', 'role:exterior'], hide: ['role:roof'] },
+    { id: 'first', label: 'First floor', show: ['level:level0', 'level:level1', 'role:exterior'], hide: ['role:roof'] },
+  ],
+};
+scene.add(house);
 for (const [id, f] of Object.entries(floors)) {
   const g = new THREE.Group();
   g.name = id === 'ground' ? 'level0' : 'level1'; // ids deliberately differ from HA floor ids
@@ -48,21 +61,35 @@ for (const [id, f] of Object.entries(floors)) {
     wall.rotation.y = Math.atan2(dy, dx);
     g.add(wall);
   }
-  scene.add(g);
+  house.add(g);
 }
 const furniture = [
-  ['ground', fabricMat, [1.2, 3.0], [2.2, 0.9, 0.45]], // sofa
-  ['ground', woodMat, [2.6, 1.6], [1.2, 0.7, 0.45]], // coffee table
-  ['ground', woodMat, [10.5, 2.5], [1.6, 0.9, 0.75]], // kitchen table
-  ['ground', fabricMat, [2.5, 7.5], [1.8, 2.0, 0.5]], // bed
-  ['first', fabricMat, [2.5, 7.0], [1.6, 2.0, 0.5]],
-  ['first', woodMat, [10.5, 1.0], [1.6, 0.8, 0.75]],
+  ['sofa', 'ground', fabricMat, [1.2, 3.0], [2.2, 0.9, 0.45]],
+  ['coffee_table', 'ground', woodMat, [2.6, 1.6], [1.2, 0.7, 0.45]],
+  ['kitchen_table', 'ground', woodMat, [10.5, 2.5], [1.6, 0.9, 0.75]],
+  ['bed', 'ground', fabricMat, [2.5, 7.5], [1.8, 2.0, 0.5]],
+  ['master_bed', 'first', fabricMat, [2.5, 7.0], [1.6, 2.0, 0.5]],
+  ['desk', 'first', woodMat, [10.5, 1.0], [1.6, 0.8, 0.75]],
 ];
-for (const [fid, m, [x, y], [w, d, h]] of furniture) {
+// each piece is a named group on the furniture layer, so a click in 3D picks the piece
+for (const [name, fid, m, [x, y], [w, d, h]] of furniture) {
+  const piece = new THREE.Group();
+  piece.name = name;
+  piece.userData.fp = { layer: 'furniture' };
   const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+  box.name = name + '_body';
   box.position.set(x, floors[fid].elevation + h / 2, -y);
-  scene.getObjectByName(fid === 'ground' ? 'level0' : 'level1').add(box);
+  piece.add(box);
+  house.getObjectByName(fid === 'ground' ? 'level0' : 'level1').add(piece);
 }
+// ceilings: a thin slab under the next storey up, kept in that storey so it hides with it
+const ceiling = (name, top, parent) => {
+  const c = new THREE.Mesh(new THREE.BoxGeometry(12, 0.04, 9), mat(0xf7f5f0));
+  c.name = name;
+  c.position.set(6, top - 0.02, -4.5);
+  c.userData.fp = { layer: 'ceiling' };
+  parent.add(c);
+};
 // exterior level: the outdoor rooms as zones (one slab each)
 const ext = new THREE.Group();
 ext.name = 'exterior';
@@ -86,7 +113,7 @@ const lamp = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.2, 8), mat(
 lamp.position.set(4.5, 0.6, 2.5);
 lampGroup.add(lamp);
 ext.add(lampGroup);
-scene.add(ext);
+house.add(ext);
 const roof = new THREE.Group();
 roof.name = 'roof';
 roof.userData.fp = { kind: 'level', id: 'roof', role: 'roof' };
@@ -95,7 +122,9 @@ r.rotation.y = Math.PI / 4;
 r.scale.set(1, 1, 0.75);
 r.position.set(6, 5.6 + 1.3, -4.5);
 roof.add(r);
-scene.add(roof);
+house.add(roof);
+ceiling('ceiling_ground', floors.ground.elevation + floors.ground.height, house.getObjectByName('level1'));
+ceiling('ceiling_first', floors.first.elevation + floors.first.height, roof);
 
 const glb = await new Promise((res, rej) => new GLTFExporter().parse(scene, res, rej, { binary: true }));
 fs.writeFileSync(new URL('../demo/house.glb', import.meta.url), Buffer.from(glb));

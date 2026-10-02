@@ -172,7 +172,10 @@ try {
   await panelClick('Mower');
   await sleep(1200);
   const live = await ev(`${card}.shadowRoot.querySelector(".mower-live").textContent`);
-  check('mower tab shows live reading on plan', /Reading 45\.\d+, 10\.\d+/.test(live) && live.includes('on plan'), live.trim());
+  // the fake mower circles (45, 10) with a small radius, so a reading can be 9.999998: compare numbers
+  const reading = /Reading (-?[\d.]+), (-?[\d.]+)/.exec(live);
+  check('mower tab shows live reading on plan', !!reading && Math.abs(Number(reading[1]) - 45) < 0.01 && Math.abs(Number(reading[2]) - 10) < 0.01
+    && live.includes('on plan'), live.trim());
   check('mower marker follows live position', await ev(`(() => { const c = ${card}; const p = c._positions.get(c._mowerMarkerId); return !!p && p.live && Math.hypot(p.x - 16.5, p.y - 1.5) < 4.5; })()`));
   check('trail drawn', await ev(`!!${card}._view.trail && ${card}._trail.length > 1`));
   check('map overlay loaded', await ev(`!!${card}._view.mapPlane && !!${card}._view.mapPlane.material.map`));

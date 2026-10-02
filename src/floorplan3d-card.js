@@ -18,7 +18,7 @@ import {
 } from './views.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 
-const VERSION = '0.2.1';
+const VERSION = '0.3.0';
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LONG_PRESS_MS = 500;
 const CLICK_SLOP_PX = 5;
@@ -1008,8 +1008,10 @@ class Floorplan3dCard extends HTMLElement {
   // with the model's level rules. Frames the floor.
   _setFloor(id) {
     const vis = this._views.filter((v) => !v.hidden);
+    // a storey view linked to just that floor wins over an overview (Exterior) linked to it
+    const only = (v) => { const f = this._stateFor(v).floors; return f.length === 1 && f[0] === id; };
     const match = id === 'all' ? vis.find((v) => v.id === 'all')
-      : vis.find((v) => { const f = this._stateFor(v).floors; return f.length === 1 && f[0] === id; });
+      : vis.find((v) => only(v) && !this._stateFor(v).overview) || vis.find(only);
     if (match) {
       this._setView(match.id);
       if (this._view.model && !match.camera) this._view.fit();

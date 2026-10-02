@@ -40,32 +40,54 @@ try {
   fs.mkdirSync(path.join(root, 'screenshots'), { recursive: true });
   let v = await st();
   check('model loaded with level groups', JSON.stringify(v.floors) === '["level0","level1","exterior","roof"]', JSON.stringify(v.floors));
-  const chips = await page.evaluate(`[...${card}.shadowRoot.querySelectorAll('.chip')].map((b) => b.dataset.view + (b.classList.contains('on') ? '*' : ''))`);
-  check('chips are the model\'s generated views', JSON.stringify(chips) === '["level0*","level1","all"]', JSON.stringify(chips));
-  check('ground: level0 + exterior shown, level1 + roof hidden, tagged model not cut',
+  const chipList = () => page.evaluate(`[...${card}.shadowRoot.querySelectorAll('.chip')].map((b) => b.textContent)`);
+  check('chips are the model\'s views in order', JSON.stringify(await chipList()) === '["Exterior","Ground floor","First floor"]', JSON.stringify(await chipList()));
+  const chip = async (id) => { await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=${id}]').click()`); await sleep(300); };
+  // devices by the level of their model room (roomless ones by HA floor): shown / hidden / faded
+  const devs = () => page.evaluate(`(() => { const c = ${card}, v = c._view; const lvl = new Map(v.modelManifest().rooms.map((r) => [r.id, r.level]));
+    const out = {};
+    for (const m of c._markers) {
+      const p = c._positions.get(m.id), o = v.markerObjects.get(m.id);
+      if (!p || !o) continue;
+      const room = p.auto === false || p.live ? null : (c._modelRooms.find((r) => r.area_id === m.areaId) || {}).modelId;
+      const k = room ? lvl.get(room) : 'roomless:' + p.floorId;
+      const e = out[k] = out[k] || { shown: 0, hidden: 0, faded: 0 };
+      if (o.obj.visible) e.shown++; else e.hidden++;
+      if (o.obj.element.classList.contains('fp-faded')) e.faded++;
+    }
+    return out; })()`);
+  const noneFaded = (d) => Object.values(d).every((e) => e.faded === 0);
+  await chip('ground');
+  v = await st();
+  check('Ground floor view: level0 + exterior shown, level1 + roof hidden, tagged model not cut',
     v.level0 === true && v.level1 === false && v.exterior === true && v.roof === false && v.cut > 1000, JSON.stringify(v));
+  let d = await devs();
+  check('Ground floor view: ground-floor devices shown, first-floor devices hidden, outdoor shown',
+    d.level0.shown > 0 && d.level0.hidden === 0 && d.level1.shown === 0 && d.level1.hidden > 0 && d.exterior.hidden === 0 && noneFaded(d), JSON.stringify(d));
   await sleep(500);
   await sh('look-day.png');
   await sh('model-ground.png');
-  await page.evaluate(`${card}._setFloor('first')`);
-  await sleep(300);
+  await chip('first');
   v = await st();
-  check('first: both storeys stack, exterior shown, roof hidden', v.level0 && v.level1 && v.exterior && !v.roof, JSON.stringify(v));
+  check('First floor view: both storeys stack, exterior shown, roof hidden', v.level0 && v.level1 && v.exterior && !v.roof, JSON.stringify(v));
+  d = await devs();
+  check('First floor view: ground-floor devices hidden (not faded), first-floor and outdoor devices shown',
+    d.level0.shown === 0 && d.level0.hidden > 0 && d.level1.shown > 0 && d.level1.hidden === 0 && d.exterior.hidden === 0 && noneFaded(d), JSON.stringify(d));
+  check('First floor view: a roomless ground-floor pin is hidden', d['roomless:ground'] && d['roomless:ground'].shown === 0, JSON.stringify(d['roomless:ground']));
+  await sh('model-first.png');
   const shownMarkers = () => page.evaluate(`[...${card}._view.markerObjects.values()].filter((m) => m.obj.visible).length`);
   const allMarkers = await page.evaluate(`${card}._view.markerObjects.size`);
-  const firstShown = await shownMarkers();
-  check('first: devices of the storey below are hidden, not faded', firstShown > 0 && firstShown < allMarkers
-    && (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-marker.fp-faded').length`)) === 0, `${firstShown}/${allMarkers}`);
-  await sh('model-first.png');
-  await page.evaluate(`${card}._setFloor('all')`);
-  await sleep(300);
+  await chip('exterior');
   v = await st();
-  check('"All" shows everything uncut', v.level0 && v.level1 && v.exterior && v.roof && v.cut > 1000, JSON.stringify(v));
+  check('Exterior view: every level shown uncut', v.level0 && v.level1 && v.exterior && v.roof && v.cut > 1000, JSON.stringify(v));
   const faded = () => page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-marker.fp-faded').length`);
-  check('"All" (overview): every device shown, none faded', (await faded()) === 0 && (await shownMarkers()) === allMarkers);
-  check('"All" (overview): no room labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label').length`)) === 0);
-  await page.evaluate(`${card}._setFloor('ground')`);
+  check('Exterior view (overview): every device shown, none faded', (await faded()) === 0 && (await shownMarkers()) === allMarkers, `${await shownMarkers()}/${allMarkers}`);
+  check('Exterior view (overview): no room labels', (await page.evaluate(`${card}.shadowRoot.querySelectorAll('.fp-room-label').length`)) === 0);
+  await page.screenshot({ path: path.join(root, 'screenshots', 'model-exterior.png') });
+  await page.evaluate(`${card}._setFloor('first')`);
   await sleep(300);
+  check('_setFloor prefers the storey view over the overview linked to the same floor', (await page.evaluate(`${card}._viewId`)) === 'first', await page.evaluate(`${card}._viewId`));
+  await chip('ground');
   check('single floor: no faded markers', (await faded()) === 0);
   check('no notice', await page.evaluate(`${card}.shadowRoot.querySelector('.notice').hidden`));
 
@@ -120,19 +142,19 @@ try {
   const camAt = () => page.evaluate(`${card}._view.persp.position.toArray().map((x) => x.toFixed(2)).join()`);
   await page.evaluate(`${card}._view.setCamera({ position: [30, 30, 30], target: [0, 0, 0] }, { instant: true })`);
   const c0 = await camAt();
-  await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=level1]').click()`);
+  await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=first]').click()`);
   await sleep(600);
   check('chip switch keeps the camera', (await camAt()) === c0, `${c0} -> ${await camAt()}`);
   await page.evaluate(`${card}.shadowRoot.querySelector('button.reset').click()`);
   await sleep(700);
   check('Reset view moves the camera', (await camAt()) !== c0);
-  await page.evaluate(`${card}.saveViewPatch('level1', { camera: { position: [20, 25, 20], target: [5, 0, -4] } })`);
+  await page.evaluate(`${card}.saveViewPatch('first', { camera: { position: [20, 25, 20], target: [5, 0, -4] } })`);
   await sleep(200);
-  await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=level0]').click()`);
-  await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=level1]').click()`);
+  await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=ground]').click()`);
+  await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=first]').click()`);
   await sleep(700);
   check('saved view camera restored on chip switch', (await camAt()) === '20.00,25.00,20.00', await camAt());
-  await page.evaluate(`${card}.saveViewPatch('level1', { camera: null })`);
+  await page.evaluate(`${card}.saveViewPatch('first', { camera: null })`);
   await sleep(200);
   await page.evaluate(`${card}._setFloor('ground')`);
   await sleep(600);
@@ -233,10 +255,17 @@ try {
     && await page.evaluate(`!!${card}.shadowRoot.querySelector('tr.sel[data-pick="room:kitchen"]')`), JSON.stringify(await page.evaluate(`${card}._edit.modelPick`)));
   await page.evaluate(`${card}._setMode('3d')`);
   await sleep(200);
-  // a model whose level ids differ again: the ids keep their order mapping
+  // a model whose level ids differ again (and without views of its own): the ids keep their order mapping
   const renamed = path.join(root, 'screenshots', 'renamed.glb');
-  const buf = fs.readFileSync(path.join(root, 'demo', 'house.glb'));
-  fs.writeFileSync(renamed, Buffer.from(buf.toString('latin1').replace('"id":"level0"', '"id":"lvl_a0"').replace('"id":"level1"', '"id":"lvl_a1"'), 'latin1'));
+  const ren = { level0: 'lvl_a0', level1: 'lvl_a1' };
+  fs.writeFileSync(renamed, rewriteGlbJson(fs.readFileSync(path.join(root, 'demo', 'house.glb')), (json) => {
+    for (const n of json.nodes || []) {
+      const fp = n.extras && n.extras.fp;
+      if (fp && fp.views) delete fp.views;
+      if (fp && fp.kind === 'level' && ren[fp.id]) fp.id = ren[fp.id];
+    }
+    return json;
+  }));
   await upload(renamed);
   await page.waitForFunction(`${card}._view.modelManifest()?.levels.some((l) => l.id === 'lvl_a0')`, { timeout: 10000 });
   await sleep(300);
@@ -365,6 +394,251 @@ try {
     && c.shadowRoot.querySelector('button.daynight').hidden && c._view.renderer.toneMapping === 0 && c._view.renderer.shadowMap.enabled === false; })()`));
   const dayLook = await page.evaluate(`(() => { const v = ${card}._view; return { hemi: v.hemi.intensity, sun: v.sun.intensity, tm: v.renderer.toneMapping, glyph: ${card}.shadowRoot.querySelector('button.daynight').textContent }; })()`);
   check('removing the model at night restores the day look', dayLook.hemi === 2.2 && dayLook.sun === 1.4 && dayLook.tm === 0 && dayLook.glyph === '\u2600', JSON.stringify(dayLook));
+  allErrors.push(...s.errors);
+} finally {
+  await s.close();
+}
+
+// 2d. model views and layers in edit mode (demo/house.glb uploaded): views from the model, per-view
+// layer rules, click-in-3D menu, saved camera, linked floors, pick a room outline, untagged copies
+s = await openDemo({ view: '3d', height: '560px' }, { width: 1500, height: 680 });
+try {
+  const { page } = s;
+  const sr = `${card}.shadowRoot`;
+  const clickText = async (t) => {
+    const ok = await page.evaluate((t) => {
+      const b = [...document.querySelector('floorplan3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === t);
+      if (b) b.click();
+      return !!b;
+    }, t);
+    await sleep(200);
+    return ok;
+  };
+  const upload = async (file) => {
+    await clickText('Model');
+    const input = await page.evaluateHandle(`${sr}.querySelector('.panel [data-field=model-file]')`);
+    await input.uploadFile(file);
+  };
+  const chip = async (id) => { await page.evaluate(`${sr}.querySelector('.chip[data-view=${id}]').click()`); await sleep(400); };
+  const chipIds = () => page.evaluate(`[...${sr}.querySelectorAll('.chip')].map((b) => b.dataset.view)`);
+  const nodeVis = (name) => page.evaluate(`(() => { const n = ${card}._view.model.root.getObjectByName(${JSON.stringify(name)}); for (let p = n; p; p = p.parent) if (!p.visible) return false; return !!n; })()`);
+  // a screen point over a plan spot that is not covered by a marker or other DOM (so the click reaches the canvas)
+  const freePoint = (spots, z, floor) => page.evaluate((spots, z, floor) => {
+    const c = document.querySelector('floorplan3d-card');
+    for (const [x, y] of spots) {
+      const [cx, cy] = c._view.screenPoint(x, y, z, floor);
+      const el = c.shadowRoot.elementFromPoint(cx, cy);
+      if (el && el.tagName === 'CANVAS') return [cx, cy];
+    }
+    return null;
+  }, spots, z, floor);
+  const grid = (x0, x1, y0, y1) => { const out = []; for (let i = 0; i <= 4; i++) for (let j = 0; j <= 4; j++) out.push([x0 + ((x1 - x0) * i) / 4, y0 + ((y1 - y0) * j) / 4]); return out; };
+  const devs = () => page.evaluate(`(() => { const c = ${card}, v = c._view; const lvl = new Map(v.modelManifest().rooms.map((r) => [r.id, r.level]));
+    const out = {};
+    for (const m of c._markers) {
+      const p = c._positions.get(m.id), o = v.markerObjects.get(m.id);
+      if (!p || !o) continue;
+      const room = p.auto === false || p.live ? null : (c._modelRooms.find((r) => r.area_id === m.areaId) || {}).modelId;
+      const k = room ? lvl.get(room) : 'roomless:' + p.floorId;
+      const e = out[k] = out[k] || { shown: 0, hidden: 0 };
+      if (o.obj.visible) e.shown++; else e.hidden++;
+    }
+    return out; })()`);
+
+  await page.evaluate(`${sr}.querySelector('button.edit').click()`);
+  await sleep(300);
+  await upload(path.join(root, 'demo', 'house.glb'));
+  await page.waitForFunction(`${card}._view.model && ${card}._view.modelManifest().levels.length === 4`, { timeout: 10000 });
+  await sleep(400);
+  check('uploaded model: chips are its views in order', JSON.stringify(await chipIds()) === '["exterior","ground","first"]'
+    && JSON.stringify(await page.evaluate(`[...${sr}.querySelectorAll('.chip')].map((b) => b.textContent)`)) === '["Exterior","Ground floor","First floor"]', JSON.stringify(await chipIds()));
+  await chip('ground');
+  await clickText('Views');
+  check('room labels in edit mode show sizes', await page.evaluate(`(() => { const l = [...${sr}.querySelectorAll('.fp-room-label')].map((x) => x.textContent); return l.length > 0 && l.every((t) => t.includes('×') || t.includes('m²')); })()`));
+
+  // layer eye: furniture hidden in this view only
+  const furniture = ['sofa', 'coffee_table', 'kitchen_table', 'bed'];
+  const eye = () => page.evaluate(`${sr}.querySelector('.panel li[data-sel="layer:furniture"] .eye').click()`);
+  check('Views tab lists the furniture and ceiling layers', await page.evaluate(`!!${sr}.querySelector('.panel li[data-sel="layer:furniture"]') && !!${sr}.querySelector('.panel li[data-sel="layer:ceiling"]')`));
+  await eye(); await sleep(200);
+  await eye(); await sleep(300);
+  const rulesOf = (id) => page.evaluate(`JSON.stringify(((${card}._layout.views || {})[${JSON.stringify(id)}] || {}).rules || [])`);
+  check('eye on layer:furniture stores a hide rule for this view', (await rulesOf('ground')) === '[{"hide":"layer:furniture"}]', await rulesOf('ground'));
+  const furnVis = async () => { const out = []; for (const n of furniture) out.push(await nodeVis(n)); return out; };
+  check('furniture hidden in the Ground floor view', (await furnVis()).every((x) => x === false), JSON.stringify(await furnVis()));
+  check('room floors stay visible', await nodeVis('kitchen'));
+  await chip('first');
+  check('furniture visible again in the First floor view', (await furnVis()).every((x) => x === true) && (await nodeVis('desk')), JSON.stringify(await furnVis()));
+  check('other view has no rule', (await rulesOf('first')) === '[]');
+  await chip('ground');
+  await eye(); await sleep(300);
+  check('third eye click: back to default', (await rulesOf('ground')) === '[]' && (await furnVis()).every((x) => x === true), await rulesOf('ground'));
+
+  // click in 3D -> menu -> Hide in this view; Reveal in tree
+  await page.evaluate(`${card}._setMode('top')`);
+  await page.evaluate(`${card}._view.fit({ instant: true })`);
+  await sleep(400);
+  let pt = await freePoint(grid(0.3, 2.1, 2.65, 3.35), 0.45, 'ground');
+  check('a free spot over the sofa', !!pt);
+  if (pt) {
+    await page.mouse.click(pt[0], pt[1]);
+    await sleep(300);
+    const menu = await page.evaluate(`(() => { const m = ${sr}.querySelector('.fp-pickmenu'); return m ? [...m.querySelectorAll('button')].map((b) => b.textContent) : null; })()`);
+    check('click on furniture opens the menu', JSON.stringify(menu) === '["Hide in this view","Show in this view","Hide in all views","Reveal in tree"]', JSON.stringify(menu));
+    check('the pick is the sofa group', (await page.evaluate(`${card}._edit.vwPick && ${card}._edit.vwPick.sel`)) === 'node:house/level0/sofa', await page.evaluate(`${card}._edit.vwPick && ${card}._edit.vwPick.sel`));
+    await page.evaluate(`${sr}.querySelector('.fp-pickmenu [data-act=vw-hide-here]').click()`);
+    await sleep(300);
+    check('"Hide in this view" hides the sofa only', !(await nodeVis('sofa')) && (await nodeVis('coffee_table')) && (await rulesOf('ground')) === '[{"hide":"node:house/level0/sofa"}]', await rulesOf('ground'));
+    check('menu closed', await page.evaluate(`!${sr}.querySelector('.fp-pickmenu')`));
+  }
+  pt = await freePoint(grid(2.1, 3.1, 1.35, 1.85), 0.45, 'ground');
+  if (pt) {
+    await page.mouse.click(pt[0], pt[1]);
+    await sleep(300);
+    await page.evaluate(`(() => { const b = ${sr}.querySelector('.panel .tab-body'); b.scrollTop = 0; })()`);
+    await page.evaluate(`${sr}.querySelector('.fp-pickmenu [data-act=vw-reveal]').click()`);
+    await sleep(300);
+    const rev = await page.evaluate(`(() => { const li = ${sr}.querySelector('.panel li[data-sel="node:house/level0/coffee_table"]'); if (!li) return null;
+      const b = ${sr}.querySelector('.panel .tab-body').getBoundingClientRect(), r = li.getBoundingClientRect();
+      return { flash: li.classList.contains('flash'), inView: r.top >= b.top - 1 && r.bottom <= b.bottom + 1 }; })()`);
+    check('"Reveal in tree" scrolls to the coffee table row and flashes it', !!rev && rev.flash && rev.inView, JSON.stringify(rev));
+  } else check('a free spot over the coffee table', false);
+  await page.evaluate(`${card}.saveViewPatch('ground', { rules: [] })`);
+  await sleep(200);
+  await page.evaluate(`${card}._setMode('3d')`);
+  await sleep(200);
+
+  // saved camera: save, move, switch away and back
+  await page.evaluate(`${card}._view.setCamera({ position: [18, 22, 16], target: [6, 0, -4] }, { instant: true })`);
+  await sleep(100);
+  await page.evaluate(`${sr}.querySelector('.panel [data-act=vw-save-cam]').click()`);
+  await sleep(200);
+  const saved = await page.evaluate(`${card}._layout.views.ground.camera`);
+  check('"Save current view as start" stores the camera', !!saved && Math.hypot(saved.position[0] - 18, saved.position[1] - 22, saved.position[2] - 16) < 0.01, JSON.stringify(saved));
+  await page.evaluate(`${card}._view.setCamera({ position: [40, 35, 40], target: [0, 0, 0] }, { instant: true })`);
+  await chip('first');
+  await chip('ground');
+  await sleep(500);
+  const back = await page.evaluate(`(() => { const c = ${card}._view.getCamera(); return c; })()`);
+  const dp = Math.hypot(...back.position.map((x, i) => x - saved.position[i])), dt = Math.hypot(...back.target.map((x, i) => x - saved.target[i]));
+  check('saved camera restored after switching away and back (within 0.1 m)', dp < 0.1 && dt < 0.1, `${dp.toFixed(3)} / ${dt.toFixed(3)}`);
+  await page.evaluate(`${sr}.querySelector('.panel [data-act=vw-reset-cam]').click()`);
+  await sleep(200);
+  check('Reset camera clears it', !(await page.evaluate(`(${card}._layout.views.ground || {}).camera`)));
+
+  // linked floors: unchecking the Ground floor link hides its roomless devices (pins, mower), not the room devices
+  let d = await devs();
+  const roomless0 = d['roomless:ground'] ? d['roomless:ground'].shown : 0;
+  const setLink = (id, on) => page.evaluate(`(() => { const el = ${sr}.querySelector('.panel [data-field=vw-floor][data-id=${id}]'); el.checked = ${on}; el.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await setLink('ground', false);
+  await sleep(300);
+  d = await devs();
+  check('unlinking the floor hides its devices without model rooms', roomless0 > 0 && d['roomless:ground'].shown === 0 && d.level0.shown > 0
+    && JSON.stringify((await page.evaluate(`${card}._layout.views.ground.floors`))) === '[]', JSON.stringify(d));
+  await setLink('ground', true);
+  await sleep(300);
+  d = await devs();
+  check('linking it again shows them', d['roomless:ground'].shown === roomless0, JSON.stringify(d));
+
+  // pick on a tagged room floor links the model room
+  await page.evaluate(`(() => { const c = ${card}; c._edit.commit({ ...c._layout, rooms: c._layout.rooms.filter((r) => r.area_id !== 'kitchen') }); })()`);
+  await page.evaluate(`${card}._edit.setModelProps({ rooms: { kitchen: { area: null } } })`);
+  await sleep(300);
+  await clickText('Rooms');
+  const pickBtn = () => page.evaluate(() => {
+    const li = [...document.querySelector('floorplan3d-card').shadowRoot.querySelectorAll('.panel li')].find((x) => x.querySelector('.name') && x.querySelector('.name').textContent.trim() === 'Kitchen');
+    const b = li && [...li.querySelectorAll('button')].find((x) => x.textContent.trim() === 'Pick');
+    if (b) b.click();
+    return !!b;
+  });
+  check('Rooms tab offers Pick for the unlinked kitchen', await pickBtn());
+  await sleep(200);
+  await page.evaluate(`${card}._setMode('top')`);
+  await page.evaluate(`${card}._view.fit({ instant: true })`);
+  await sleep(400);
+  const kitchenSpots = [[8, 1], [8.2, 4.2], [11.5, 0.5], [11.5, 4.5], [8.5, 6], [9, 0.5], [10, 4.5]];
+  pt = await freePoint(kitchenSpots, 0, 'ground');
+  if (pt) await page.mouse.click(pt[0], pt[1]);
+  await sleep(400);
+  check('pick on a tagged room floor links the model room', (await page.evaluate(`${card}._layout.model.rooms.kitchen.area`)) === 'kitchen' && !(await page.evaluate(`${card}._edit.picking`)),
+    JSON.stringify(await page.evaluate(`${card}._layout.model.rooms`)));
+  await page.evaluate(`${card}._setMode('3d')`);
+  await sleep(200);
+
+  // legacy copy (no extras, legacy level names): generated views, cut on, no elevation inputs, picking traces the floor
+  const legacy = path.join(root, 'screenshots', 'legacy-views.glb');
+  const legacyNames = { level0: 'floor:ground', level1: 'floor:first', exterior: 'site' };
+  fs.writeFileSync(legacy, rewriteGlbJson(fs.readFileSync(path.join(root, 'demo', 'house.glb')), (json) => {
+    for (const n of json.nodes || []) { delete n.extras; if (legacyNames[n.name]) n.name = legacyNames[n.name]; }
+    return json;
+  }));
+  await upload(legacy);
+  await page.waitForFunction(`${card}._view.modelManifest()?.levels.some((l) => l.id === 'site')`, { timeout: 10000 });
+  await sleep(400);
+  fs.unlinkSync(legacy);
+  check('legacy copy: generated views ground / first / All', JSON.stringify(await chipIds()) === '["ground","first","all"]', JSON.stringify(await chipIds()));
+  check('legacy copy is not tagged', !(await page.evaluate(`${card}._view.isTagged()`)));
+  await chip('ground');
+  await clickText('Views');
+  check('legacy copy: "Cut at wall height" present and on', await page.evaluate(`${sr}.querySelector('.panel [data-field=vw-cut]')?.checked === true`));
+  check('legacy copy: model cut at the wall height', Math.abs((await page.evaluate(`${card}._view.modelClip.constant`)) - 1) < 1e-6);
+  await clickText('Rooms');
+  check('legacy copy: no elevation inputs in the Rooms tab', await page.evaluate(`!${sr}.querySelector('.panel [data-field=floor-elevation]')`));
+  // drop the drawn kitchen again (the model has no rooms), then pick its floor: traced outline
+  await page.evaluate(`(() => { const c = ${card}; c._edit.commit({ ...c._layout, rooms: c._layout.rooms.filter((r) => r.area_id !== 'kitchen') }); })()`);
+  await sleep(300);
+  const kitchenArea = await page.evaluate(`(() => { const p = ${JSON.stringify([[7.5, 0], [12, 0], [12, 5], [9.5, 5], [9.5, 6.5], [7.5, 6.5]])}; let a = 0; for (let i = 0; i < p.length; i++) { const [x1, y1] = p[i], [x2, y2] = p[(i + 1) % p.length]; a += x1 * y2 - x2 * y1; } return Math.abs(a / 2); })()`);
+  const pickAndTrace = async () => {
+    await pickBtn();
+    await sleep(200);
+    await page.evaluate(`${card}._setMode('top')`);
+    await page.evaluate(`${card}._view.fit({ instant: true })`);
+    await sleep(400);
+    const p = await freePoint(kitchenSpots, 0, 'ground');
+    if (p) await page.mouse.click(p[0], p[1]);
+    await page.waitForFunction(`${card}._edit.picking && ${card}._edit.picking.poly`, { timeout: 5000 }).catch(() => {});
+    await sleep(200);
+    return page.evaluate(`(() => { const p = ${card}._edit.picking && ${card}._edit.picking.poly; if (!p) return null; let a = 0; for (let i = 0; i < p.length; i++) { const [x1, y1] = p[i], [x2, y2] = p[(i + 1) % p.length]; a += x1 * y2 - x2 * y1; } return Math.abs(a / 2); })()`);
+  };
+  let area = await pickAndTrace();
+  check('pick traces the kitchen floor (area within 0.5 m²)', area !== null && Math.abs(area - kitchenArea) < 0.5, `${area} vs ${kitchenArea}`);
+  check('preview offers "Use this outline" and "Draw instead"', await page.evaluate(`(() => { const t = [...${sr}.querySelectorAll('.panel button')].map((b) => b.textContent.trim()); return t.includes('Use this outline') && t.includes('Draw instead'); })()`));
+  await clickText('Use this outline');
+  const made = await page.evaluate(`${card}._layout.rooms.find((r) => r.area_id === 'kitchen')`);
+  check('"Use this outline" creates the room', !!made && made.floor_id === 'ground' && made.polygon.length >= 6, JSON.stringify(made && { floor: made.floor_id, n: made.polygon.length }));
+  await page.evaluate(`(() => { const c = ${card}; c._edit.selectRoom(null); c._edit.commit({ ...c._layout, rooms: c._layout.rooms.filter((r) => r.area_id !== 'kitchen') }); })()`);
+  await sleep(300);
+  area = await pickAndTrace();
+  await clickText('Draw instead');
+  check('"Draw instead" starts drawing the area', (await page.evaluate(`${card}._edit.drawing && ${card}._edit.drawing.areaId`)) === 'kitchen' && !(await page.evaluate(`${card}._edit.picking`)));
+  await page.keyboard.press('Escape');
+  await sleep(200);
+  check('Esc cancels drawing', !(await page.evaluate(`${card}._edit.drawing`)));
+  await pickBtn();
+  await sleep(150);
+  await page.keyboard.press('Escape');
+  await sleep(200);
+  check('Esc cancels picking', !(await page.evaluate(`${card}._edit.picking`)));
+  await page.evaluate(`${card}._setMode('3d')`);
+
+  // fully untagged copy (no extras, no legacy names): one generated "All" view, an overview
+  const untagged = path.join(root, 'screenshots', 'untagged-views.glb');
+  fs.writeFileSync(untagged, rewriteGlbJson(fs.readFileSync(path.join(root, 'demo', 'house.glb')), (json) => {
+    for (const n of json.nodes || []) { delete n.extras; if (n.name === 'roof') n.name = 'top'; }
+    return json;
+  }));
+  await upload(untagged);
+  await page.waitForFunction(`${card}._view.model && ${card}._view.modelManifest().levels.length === 0`, { timeout: 10000 });
+  await sleep(400);
+  fs.unlinkSync(untagged);
+  check('untagged copy: a single generated "All" view (no chips)', JSON.stringify(await page.evaluate(`${card}._views.map((v) => v.id + ':' + v.source)`)) === '["all:generated"]'
+    && (await chipIds()).length === 0, JSON.stringify(await page.evaluate(`${card}._views.map((v) => v.id)`)));
+  await clickText('Views');
+  check('untagged copy: "Cut at wall height" present, off by default in "All"', await page.evaluate(`${sr}.querySelector('.panel [data-field=vw-cut]')?.checked === false`));
+  await clickText('Rooms');
+  check('untagged copy: no elevation inputs in the Rooms tab', await page.evaluate(`!${sr}.querySelector('.panel [data-field=floor-elevation]')`));
+  const ov = await page.evaluate(`(() => { const c = ${card}; return { overview: c._viewState.overview, shown: [...c._view.markerObjects.values()].filter((m) => m.obj.visible).length, all: c._view.markerObjects.size }; })()`);
+  check('untagged copy is an overview: every device shown', ov.overview === true && ov.shown === ov.all, JSON.stringify(ov));
   allErrors.push(...s.errors);
 } finally {
   await s.close();

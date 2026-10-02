@@ -39,7 +39,7 @@ If your tool cannot write extras, name the node `fp:<kind>:<id>` (levels, rooms,
 ## Structure
 
 ```
-scene
+scene              (or one wrapper node, e.g. "house" with fp {views: [...]}, see Views)
 ├─ basement        fp {kind: level, id: basement, role: basement, order: -1, elevation: -2.6, height: 2.4}
 │   ├─ storage     fp {kind: room, id: storage, outline: [...]}
 │   └─ …
@@ -67,14 +67,14 @@ scene
 ```
 
 Rules:
-1. **Levels are top-level** (or children of one wrapper node). Every other node is inside
-   exactly one level.
+1. **Levels are top-level** (or children of one wrapper node, like `house` above). Every other
+   node is inside exactly one level.
 2. **One level per storey**, including basements. Fill `order` bottom-up (basement -1, ground 0,
    first 1 …), `elevation` (top of that storey's floor slab) and `height` (clear ceiling height).
 3. **Exterior is its own level** (`role: exterior`): garden, terrace, drive, fence, lawn, road,
-   outdoor lamps, gate, charging station, mower. The user chooses in the card whether it shows
-   with the ground floor, always, on its own HA floor, or not at all.
-4. **Roof is its own level** (`role: roof`). The card hides it while a single floor is shown.
+   outdoor lamps, gate, charging station, mower. Your views decide where it shows (usually in
+   every view); the user can change that per view in the card.
+4. **Roof is its own level** (`role: roof`). Storey views hide it; an overview (Exterior) shows it.
 5. **Rooms (indoor) and zones (outdoor) are groups** inside their level, holding their own floor
    slab and furniture. Give each an `outline`: the inner floor polygon in plan metres
    `[[x, y], …]`, corners in order, no repeated closing point; neighbouring rooms share exact
@@ -84,9 +84,68 @@ Rules:
    terrain go in `exterior` (or leave a world ground plane out entirely; the card has its own
    background).
 7. Walls, windows, stairs, slabs can be untagged scenery of their level.
-8. Walls stay at full storey height; each storey's ceiling/slab belongs to the storey above, so hiding the upper level opens the view into the rooms.
+8. Walls stay at full storey height. **Each storey's ceiling belongs to the storey above** (the
+   top storey's ceiling goes in the roof level), so hiding the upper level opens the view into
+   the rooms. Tag ceiling meshes with `layer: ceiling`. Because the ceiling is the lowest
+   geometry of the storey above, always fill that storey's `elevation`: without it the card
+   measures the level from its lowest point and reads the ceiling's underside.
 9. No lights, cameras, helpers, grids or text in the export. Lamps are objects (below), not
    three.js lights.
+10. **One floor mesh per room.** Each room's floor slab is its own mesh inside its room group.
+    Merge geometry per room or per layer, never across rooms or storeys: the card picks rooms
+    by their floor and hides parts per room, level and layer.
+
+## Views
+
+Views are the buttons on the card (Exterior, Ground floor, Attic …). Put them in the model so
+every install starts with the right set: `fp.views` on the root node, or on the single wrapper
+node when the scene has one (the wrapper's `fp` has no `kind`, it only carries `views`).
+
+```js
+house.userData.fp = { views: [
+  { id: 'exterior', label: 'Exterior', show: ['all'] },
+  { id: 'ground', label: 'Ground floor', show: ['level:ground', 'role:exterior'], hide: ['level:attic', 'role:roof'] },
+  { id: 'attic', label: 'Attic', show: ['level:ground', 'level:attic', 'role:exterior'], hide: ['role:roof'],
+    camera: { position: [7.8, 22, 26], target: [7.8, 3, -5] } },
+] };
+```
+
+- Listed in display order. `id`: same rules as tag ids, **stable forever** (the user's per-view
+  edits, saved cameras and linked HA floors are stored by view id).
+- `show`: when present, the view starts from nothing and shows these; `hide` is applied after.
+  Rules cascade to children, and a later rule wins over an earlier one.
+- `camera` (optional): `{ position, target }` in model world metres (Y up). The card tweens to
+  it when the view is opened and on **Reset view**; without one the camera stays where it is.
+  Use the prototype's presets as a starting point (see below).
+- A view that shows every storey and the roof is an **overview**: all devices are shown. In a
+  storey view the top visible storey is the view's storey: devices of lower storeys are hidden,
+  outdoor devices stay.
+- Without `views` the card generates one view per storey (lower storeys stacked under it) plus
+  "All".
+
+Selectors:
+
+| selector | matches |
+|---|---|
+| `all` | the whole model |
+| `level:<id>` | a level |
+| `role:<storey\|basement\|exterior\|roof>` | every level with that role |
+| `room:<id>` / `zone:<id>` | a room or zone |
+| `object:<id>` / `type:<type>` / `group:<name>` | objects by id, type or group |
+| `layer:<name>` | every node with that layer (below) |
+| `node:<path>` | a node by its name path from the root, `/`-separated; `*` matches within a name, `**` across levels |
+
+Reference for view sets, camera presets (`fp.views[*].camera`), controls and lighting:
+[prototype-view-rules.md](prototype-view-rules.md) (the rules the prototype house uses: which
+view shows which buckets, camera per view, what follows the view).
+
+## Layers
+
+`fp.layer` on any node (a string, or an array of strings) groups parts across rooms and levels,
+so a view or the user can hide them in one go. Use these names where they fit (others are allowed):
+`furniture`, `ceiling`, `roof`, `facade`, `fence`, `terrain`, `decoration`, `glass`, `stairs`.
+A layer-only `fp` (`{ layer: 'furniture' }`) is not a tag: the node stays scenery of its room
+or level. Tag the group of a piece (the sofa group, not each cushion) so a click picks the piece.
 
 ## Objects
 
@@ -163,12 +222,16 @@ Popup rows: `toggle`, `brightness`, `color`, `color_temp`, `speed`, `cover_contr
 - New object: new id. It appears in the card as unassigned.
 - Removed object: its assignment is kept in the card in case the id comes back.
 - Do not rename levels or rooms casually; if you must, tell the user (they reassign once).
+- Keep view ids too; changing a view's `show` / `hide` / `camera` is fine. Keep the names of
+  groups the user may have hidden by clicking (they are stored as `node:` paths).
 
 ## Checklist before handing over
 
 - [ ] One `.glb`, metres, Y up, origin at the south-west house corner, north = -Z.
 - [ ] Top-level levels only: storeys (with `order`, `elevation`, `height`), `exterior`, `roof`.
-- [ ] Every room and outdoor zone tagged, with `outline` (and `doors`).
+- [ ] Every room and outdoor zone tagged, with `outline` (and `doors`); one floor mesh per room.
+- [ ] Ceilings in the storey above (`layer: ceiling`), furniture on `layer: furniture`.
+- [ ] `fp.views` on the root / wrapper, ids stable, cameras from the presets if you have them.
 - [ ] Every lamp, the charging station, mower, gate, garage door, blinds … tagged as objects with
       stable ids, glow mesh named where it matters, moving parts as separate nodes with `hinge`.
 - [ ] No mesh larger than the plot inside a storey; no world ground plane in storeys.
