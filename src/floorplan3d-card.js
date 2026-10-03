@@ -378,6 +378,10 @@ class Floorplan3dCard extends HTMLElement {
         };
       }
     }
+    if (opts) {
+      opts.merge = c.merge !== false;
+      opts.keep = () => this._mergeKeepSelectors();
+    }
     const prevModel = this._view.model;
     this._view.setModel(opts).then((err) => {
       if (this._view.model !== prevModel && this._section) this._dropSection();
@@ -400,6 +404,23 @@ class Floorplan3dCard extends HTMLElement {
       this._schedule(); // the manifest arrived: rebuild
       if (this._editing) this._edit.onModelLoaded(this._view.model !== prevModel);
     });
+  }
+
+  // View rule selectors from the layout and the card YAML: their node: matches are not merged away.
+  _mergeKeepSelectors() {
+    const out = [];
+    const add = (views) => {
+      if (!views || typeof views !== 'object') return;
+      for (const v of Object.values(views)) {
+        for (const r of (v && Array.isArray(v.rules) ? v.rules : [])) {
+          const sel = r && (r.show ?? r.hide);
+          if (typeof sel === 'string') out.push(sel);
+        }
+      }
+    };
+    add(this._layout && this._layout.views);
+    add(this._config.views);
+    return out;
   }
 
   _modelAlign() {

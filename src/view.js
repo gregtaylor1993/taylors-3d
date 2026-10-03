@@ -5,11 +5,13 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeGeometries, deinterleaveAttribute } from 'three/addons/utils/BufferGeometryUtils.js';
 import { centroid } from './placement.js';
 import { wallSegments } from './layout.js';
 import { levelVisible, measuredElevations } from './bindings.js';
 import { buildManifest, threeAdapter } from './manifest.js';
-import { sectionLevels, unionBox, pivotCamera, rayPlaneY, orthoZoom, topZoom } from './views.js';
+import { sectionLevels, unionBox, pivotCamera, rayPlaneY, orthoZoom, topZoom, nodeIndex, parseSelector, matches, viewTree } from './views.js';
+import { mergeGroups } from './merge.js';
 import {
   castsShadow, shadowInfo, isCoplanarOverlay, depthRange, depthChanged, isOccluded, sunDirection, ghostMaterial, pickable,
 } from './render-rules.js';
@@ -43,6 +45,84 @@ function northOf(root) {
     if (d < 2) for (const c of o.children) q.push([c, d + 1]);
   }
   return null;
+}
+
+// A mesh geometry baked into its owner's space (own copy: geometries can be shared), float, not interleaved.
+function bakedGeometry(mesh, toOwner) {
+  const src = mesh.geometry, g = new THREE.BufferGeometry();
+  for (const [k, a] of Object.entries(src.attributes)) g.setAttribute(k, a.isInterleavedBufferAttribute ? deinterleaveAttribute(a) : a.clone());
+  if (src.index) g.setIndex(src.index.clone());
+  const m = new THREE.Matrix4().multiplyMatrices(toOwner, mesh.matrixWorld);
+  g.applyMatrix4(m);
+  if (m.determinant() < 0) flipWinding(g); // mirrored part: three flips the face order at render time, a baked one has to be flipped here
+  return g;
+}
+
+function flipWinding(g) {
+  if (g.index) {
+    const a = g.index.array;
+    for (let i = 0; i + 2 < a.length; i += 3) { const t = a[i + 1]; a[i + 1] = a[i + 2]; a[i + 2] = t; }
+    return;
+  }
+  for (const a of Object.values(g.attributes)) {
+    const n = a.itemSize, arr = a.array;
+    for (let v = 0; v + 2 < a.count; v += 3) {
+      for (let c = 0; c < n; c++) { const i = (v + 1) * n + c, j = (v + 2) * n + c, t = arr[i]; arr[i] = arr[j]; arr[j] = t; }
+    }
+  }
+}
+
+// Merges static model meshes (see merge.js: per owner, material, attribute set, shadow flags), in place.
+// selectors: view rule selectors (layout / YAML / model views) whose node: matches must stay their own nodes.
+// Returns { groups, merged (source meshes), failed }.
+export function mergeStaticMeshes(root, manifest, selectors = []) {
+  root.updateMatrixWorld(true);
+  const index = nodeIndex(threeAdapter(root), manifest);
+  const keep = new Set();
+  for (const s of selectors) {
+    const sel = parseSelector(s);
+    if (sel && sel.kind === 'node') for (const n of index.nodes) if (matches(sel, n)) keep.add(n.node);
+  }
+  // groups the Views tab lists (named groups with children near the top) keep their own parts
+  const listed = new Set(viewTree(index).groups.flatMap((r) => r.nodes.map((i) => index.nodes[i].node)));
+  const meshes = [];
+  root.traverse((o) => { if (o.isMesh) meshes.push(o); });
+  const groups = mergeGroups(meshes, {
+    root, keep,
+    kindOf: (n) => { const e = manifest.byNode.get(n); return e ? (e.kind === 'object' ? 'object' : 'tag') : null; },
+    isOwner: (n) => listed.has(n) || !!(n.userData && n.userData.fp && n.userData.fp.layer),
+  });
+  const counter = new Map(), sources = new Set();
+  let merged = 0, failed = 0;
+  const inv = new THREE.Matrix4();
+  for (const grp of groups) {
+    inv.copy(grp.owner.matrixWorld).invert();
+    const geos = grp.meshes.map((m) => bakedGeometry(m, inv));
+    const geometry = mergeGeometries(geos, false);
+    for (const g of geos) g.dispose();
+    if (!geometry) { failed++; continue; }
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+    const first = grp.meshes[0];
+    const out = new THREE.Mesh(geometry, first.material);
+    const k = counter.get(grp.owner) || 0;
+    counter.set(grp.owner, k + 1);
+    out.name = `fp_merged_${k}`;
+    out.castShadow = first.castShadow;
+    out.receiveShadow = first.receiveShadow;
+    out.renderOrder = first.renderOrder;
+    out.layers.mask = first.layers.mask;
+    out.userData = { merged: grp.meshes.length, seeThrough: false, ...(grp.layers.length ? { fp: { layer: [...grp.layers] } } : {}) };
+    grp.owner.add(out);
+    out.updateMatrixWorld(true);
+    for (const m of grp.meshes) { sources.add(m.geometry); m.removeFromParent(); }
+    merged += grp.meshes.length;
+  }
+  // source geometries still used by a mesh that stays (shared geometry) are kept
+  const used = new Set();
+  root.traverse((o) => { if (o.geometry) used.add(o.geometry); });
+  for (const g of sources) if (!used.has(g)) g.dispose();
+  return { groups: groups.length - failed, merged, failed };
 }
 
 export function planToWorld(x, y, z, elevation = 0) {
@@ -111,6 +191,7 @@ export class FloorplanView {
     this.objectLayer = null; // ObjectLayer (registers itself); reset when the model goes
     this.onObjectsInvalidate = null; // called when model placement or visibility changed
     this.model = null; // { id, root, manifest }
+    this.mergeStats = null; // { enabled, before, after: { meshes, triangles, calls }, groups, merged } of the loaded model
     this.modelClip = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
     this.sectionClip = null; // side section: global clipping plane (card world) or null
     this.raycaster = new THREE.Raycaster();
@@ -303,7 +384,8 @@ export class FloorplanView {
   // selected floor's cut-away height. Same url/id again only re-places the loaded model.
   // Resolves to null or an error message.
   setModel(opts) {
-    const id = opts && (opts.id || opts.url);
+    const base = opts && (opts.id || opts.url);
+    const id = base && opts.merge === false ? base + '#nomerge' : base; // merge on / off is a reload
     if (!id) {
       this._disposeModel();
       return Promise.resolve(null);
@@ -414,6 +496,19 @@ export class FloorplanView {
         this.model = { id, root, manifest, tagged, north: northOf(root), opacity: 1 };
         this.modelGroup.add(root);
         this._applyLook();
+        const before = this._modelStats();
+        let res = null;
+        if (opts.merge !== false) {
+          const keep = typeof opts.keep === 'function' ? opts.keep() : opts.keep || [];
+          const sels = [...keep, ...manifest.views.flatMap((v) => [...v.show, ...v.hide])];
+          try {
+            res = mergeStaticMeshes(root, manifest, sels);
+          } catch (err) {
+            console.warn('floorplan3d: could not merge model meshes', err);
+          }
+        }
+        const after = res && res.merged ? this._modelStats() : before;
+        this.mergeStats = { enabled: opts.merge !== false, before, after, groups: res ? res.groups : 0, merged: res ? res.merged : 0 };
         place();
         resolve(null);
       };
@@ -426,6 +521,34 @@ export class FloorplanView {
       }
     });
     return this._modelLoading;
+  }
+
+  // Model meshes, triangles and draw calls (one render of the model alone, nothing culled, shadow pass
+  // included) for mergeStats. Other scene content is hidden meanwhile (lights stay: same shaders).
+  _modelStats() {
+    const root = this.model.root, r = this.renderer;
+    let meshes = 0, triangles = 0;
+    const culled = [];
+    root.traverse((o) => {
+      if (!o.isMesh) return;
+      meshes++;
+      const g = o.geometry;
+      if (g) triangles += Math.floor((g.index ? g.index.count : g.attributes.position ? g.attributes.position.count : 0) / 3);
+      if (o.frustumCulled) { o.frustumCulled = false; culled.push(o); }
+    });
+    const hidden = this.scene.children.filter((c) => c !== this.modelGroup && !c.isLight && c.visible);
+    for (const c of hidden) c.visible = false;
+    let calls;
+    try {
+      if (r.shadowMap.enabled) r.shadowMap.needsUpdate = true;
+      r.render(this.scene, this.camera);
+      calls = r.info.render.calls;
+    } finally {
+      for (const c of hidden) c.visible = true;
+      for (const o of culled) o.frustumCulled = true;
+      this.dirty = true;
+    }
+    return { meshes, triangles, calls };
   }
 
   modelManifest() {
@@ -512,6 +635,7 @@ export class FloorplanView {
     if (this.objectLayer) this.objectLayer.setModel(null); // restores cloned materials before they are disposed
     this._clearGroup(this.modelGroup);
     this.model = null;
+    this.mergeStats = null;
     this._occBoxes = null;
     this._cancelOcclusion();
     this._clearOcclusion();

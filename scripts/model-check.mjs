@@ -353,6 +353,67 @@ try {
   await s.close();
 }
 
+// 1a. static meshes merged at load (per owner + material), merge: false keeps every part, node: rules keep theirs
+s = await openDemo({ model: '1', view: '3d' }, { width: 1400, height: 560 });
+try {
+  const { page } = s;
+  await page.waitForFunction(`!!${card}._view.model`, { timeout: 10000 });
+  const stats = () => page.evaluate(`JSON.stringify(${card}._view.mergeStats)`).then(JSON.parse);
+  const on = await stats();
+  check('merge: fewer meshes and draw calls, same triangles', on.enabled && on.after.meshes < on.before.meshes && on.after.calls < on.before.calls
+    && on.after.triangles === on.before.triangles && on.merged > 0, JSON.stringify(on));
+  const placed = await page.evaluate(`(() => { const v = ${card}._view, m = v.model.manifest, bad = [], inObj = [];
+    v.model.root.traverse((o) => {
+      if (!/^fp_merged_/.test(o.name)) return;
+      const p = o.parent, ok = p === v.model.root || m.byNode.has(p) || !!(p.userData.fp && p.userData.fp.layer) || !!p.name;
+      if (!ok || !o.matrix.equals(new o.matrix.constructor())) bad.push(o.parent.name);
+    });
+    for (const e of m.objects) e.node.traverse((o) => { if (/^fp_merged_/.test(o.name)) inObj.push(e.id); });
+    const owners = []; v.model.root.traverse((o) => { if (/^fp_merged_/.test(o.name)) owners.push(m.ownerOf(o) ? m.ownerOf(o).id : null); });
+    return { bad, inObj, owners: owners.length, tagged: owners.filter(Boolean).length }; })()`);
+  check('merged meshes sit under their owner at identity, none inside objects, owners resolve', placed.bad.length === 0 && placed.inObj.length === 0 && placed.owners > 0 && placed.tagged === placed.owners, JSON.stringify(placed));
+  check('node index rebuilt over the merged tree', await page.evaluate(`(() => { const c = ${card}; return !!c._index && c._index.nodes.some((n) => /fp_merged_/.test(n.path)); })()`));
+  await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
+  await sleep(200);
+  await page.evaluate(() => {
+    const b = [...document.querySelector('floorplan3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === 'Model');
+    if (b) b.click();
+  });
+  await sleep(200);
+  const tabText = await page.evaluate(`(${card}.shadowRoot.querySelector('.panel [data-info=merge-stats]') || {}).textContent || ''`);
+  check('Model tab shows the draw calls before → after', tabText === `Draw calls: ${on.before.calls} → ${on.after.calls} (meshes ${on.before.meshes} → ${on.after.meshes})`, tabText);
+  await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
+  await sleep(200);
+  // the owner and material of a merged mesh: find one of its source meshes with merge off
+  const probe = await page.evaluate(`(() => { let o = null; ${card}._view.model.root.traverse((x) => { if (!o && /^fp_merged_/.test(x.name)) o = x; });
+    return { owner: o.parent.name, mat: o.material.name }; })()`);
+  await page.evaluate(`${card}.setConfig({ ...${card}._config, merge: false })`);
+  await page.waitForFunction(`!!${card}._view.mergeStats && !${card}._view.mergeStats.enabled`, { timeout: 10000 });
+  await sleep(300);
+  const off = await stats();
+  check('merge: false reloads with every mesh and the old draw-call count', off.after.meshes === on.before.meshes && off.after.calls === on.before.calls && off.merged === 0, JSON.stringify(off));
+  const target = await page.evaluate(`(() => { const c = ${card}; let t = null;
+    c._view.model.root.traverse((x) => { if (!t && x.isMesh && x.parent && x.parent.name === ${JSON.stringify(probe.owner)} && x.material.name === ${JSON.stringify(probe.mat)} && !x.children.length) t = x; });
+    const n = t && c._index && c._index.nodes.find((i) => i.node === t); return n ? { path: n.path, uuid: t.uuid } : null; })()`);
+  check('found a merge candidate mesh with merge off', !!target, JSON.stringify(probe));
+  if (target) {
+    const views = { ground: { rules: [{ hide: 'node:' + target.path }] } };
+    await page.evaluate(`${card}.setConfig({ ...${card}._config, merge: true, views: ${JSON.stringify(views)} })`);
+    await page.waitForFunction(`!!${card}._view.mergeStats && ${card}._view.mergeStats.enabled`, { timeout: 10000 });
+    await sleep(300);
+    await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=ground]').click()`);
+    await sleep(300);
+    const kept = await page.evaluate(`(() => { const c = ${card}; const n = c._index.nodes.find((i) => i.path === ${JSON.stringify(target.path)});
+      return n ? { mesh: !!n.node.isMesh, visible: n.node.visible, merged: !!n.node.userData.merged } : null; })()`);
+    check('a mesh named by a node: rule is not merged and the rule still hides it', !!kept && kept.mesh && !kept.merged && kept.visible === false, JSON.stringify(kept));
+    const again = await stats();
+    check('merging again with the rule: still fewer draw calls than merge off', again.after.calls < off.after.calls, JSON.stringify(again));
+  }
+  allErrors.push(...s.errors);
+} finally {
+  await s.close();
+}
+
 // 1b. model objects: tap toggles, hold opens the popup, a drag never toggles (the demo model's hall ceiling lamp)
 s = await openDemo({ model: '1', view: '3d' }, { width: 1400, height: 560 });
 try {
@@ -1837,6 +1898,42 @@ if (process.env.REAL_MODEL) {
     allErrors.push(...s.errors);
   } finally {
     await s.close();
+  }
+}
+
+// 5. optional: the user's own model (USER_MODEL=/path/to/house.glb): merge stats printed, never fails
+if (process.env.USER_MODEL) {
+  for (const merge of [true, false]) {
+    let u;
+    try {
+      u = await openDemo({ view: '3d', height: '700px', ...(merge ? {} : { merge: '0' }) }, { width: 1500, height: 820 });
+      const { page } = u;
+      await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
+      await sleep(200);
+      await page.evaluate(() => {
+        const b = [...document.querySelector('floorplan3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === 'Model');
+        if (b) b.click();
+      });
+      await sleep(150);
+      const input = await page.evaluateHandle(`${card}.shadowRoot.querySelector('.panel [data-field=model-file]')`);
+      const t0 = Date.now();
+      await input.uploadFile(process.env.USER_MODEL);
+      await page.waitForFunction(`!!${card}._view.model && !!${card}._view.mergeStats`, { timeout: 120000 });
+      const ms = Date.now() - t0;
+      await sleep(1500);
+      const st = await page.evaluate(`JSON.stringify(${card}._view.mergeStats)`).then(JSON.parse);
+      const info = await page.evaluate(`(() => { const sr = ${card}.shadowRoot, v = ${card}._view;
+        v.dirty = true; return { text: (sr.querySelector('[data-info=merge-stats]') || {}).textContent || null, nodes: ${card}._index ? ${card}._index.nodes.length : null,
+          frameCalls: v.renderer.info.render.calls }; })()`);
+      console.log(`user model (merge ${merge ? 'on' : 'off'}): meshes ${st.before.meshes} -> ${st.after.meshes}, draw calls ${st.before.calls} -> ${st.after.calls},`
+        + ` triangles ${st.before.triangles} -> ${st.after.triangles}, groups ${st.groups}, merged ${st.merged}; load ${ms} ms; index nodes ${info.nodes}; tab "${info.text}"`);
+      if (u.errors.length) console.log('user model page errors:\n' + u.errors.join('\n'));
+      await page.screenshot({ path: path.join(root, 'screenshots', `user-model-merge-${merge ? 'on' : 'off'}.png`) });
+    } catch (e) {
+      console.log('user model check could not run:', e.message);
+    } finally {
+      if (u) await u.close();
+    }
   }
 }
 

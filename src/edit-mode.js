@@ -1687,6 +1687,13 @@ export class EditMode {
     let out = `<div class="sub">In the model</div><p class="hint">${s(manifest.levels.length, 'level')},
       ${s(manifest.rooms.filter((r) => r.kind === 'room').length, 'room')}, ${s(manifest.rooms.filter((r) => r.kind === 'zone').length, 'zone')},
       ${s(objCount, 'object')}${objCount ? ' (object controls come in a later version)' : ''}. Click a part of the model to find it here.</p>`;
+    const ms = this.view.mergeStats;
+    if (ms && ms.before) {
+      const a = ms.after, b = ms.before;
+      out += ms.enabled && a.meshes !== b.meshes
+        ? `<p class="dim" data-info="merge-stats">Draw calls: ${b.calls} → ${a.calls} (meshes ${b.meshes} → ${a.meshes})</p>`
+        : `<p class="dim" data-info="merge-stats">Draw calls: ${b.calls} (${b.meshes} meshes${ms.enabled ? '' : ', merging off'})</p>`;
+    }
     if (manifest.errors.length || manifest.warnings.length) {
       out += `<details class="report" ${this._reportOpen ? 'open' : ''}><summary>${manifest.errors.length} error(s), ${manifest.warnings.length} warning(s)</summary>
         <button class="link" data-act="md-copy-report">Copy to clipboard</button><ul class="plain">`

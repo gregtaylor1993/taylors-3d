@@ -37,6 +37,13 @@ describe('card editor', () => {
     expect(mod.cleanConfig({ lights: 'off' })).toEqual({ lights: 'off' });
   });
 
+  it('offers merge as a boolean (true is the default)', () => {
+    const field = mod.SCHEMA.flatMap((x) => x.schema || [x]).find((x) => x.name === 'merge');
+    expect(field.selector).toEqual({ boolean: {} });
+    expect(mod.cleanConfig({ merge: true })).toEqual({});
+    expect(mod.cleanConfig({ merge: false })).toEqual({ merge: false });
+  });
+
   it('renders ha-form with defaults and emits cleaned config', () => {
     const el = document.createElement('floorplan3d-card-editor');
     document.body.append(el);

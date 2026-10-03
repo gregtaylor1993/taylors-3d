@@ -69,6 +69,7 @@ The options below can be set in the visual editor or in YAML.
 | `group_by` | `device` | `device`: one marker per device. `entity`: one per entity. |
 | `wall_height` | `1.0` | Height of the cut-away drawn walls in metres (rooms drawn on the card; a model is cut at its storey height instead). |
 | `occlusion` | `true` | With a model: markers hidden behind a wall from the current camera angle are shown faint (25 %) and can't be tapped; in edit mode they stay half visible and draggable. Checked once the camera has been still for 150 ms; not in top view. `false` turns it off. |
+| `merge` | `true` | With a model: static parts that share a room / zone / level / layer group and a material are merged into one mesh when the model loads (far fewer draw calls; Edit → Model shows "Draw calls: before → after"). Objects, glass and other transparent parts, `<room>_floor` pieces and parts named by a `node:` view rule stay separate. `false` keeps every part (reloads the model). |
 | `view` | `3d` | Start in `3d` or `top` view. |
 | `floor` | first floor with rooms | Floor id (or view id) to show first, or `all`. |
 | `view_id` | | View to show first (with a model: a view id such as `ground`). Wins over `floor`. |
