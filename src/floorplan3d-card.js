@@ -1621,8 +1621,7 @@ class Floorplan3dCard extends HTMLElement {
       if (m) moonBody = { dir: sunVector(m.azimuth, m.elevation, north, rot), phase: m.phase, illumination: m.illumination };
     }
     this._moonAt = now;
-    const shown = this._config.sky_bodies !== false;
-    v.setSkyBodies({ sun: shown ? sunBody : null, moon: shown ? moonBody : null });
+    v.setSkyBodies({ sun: sunBody, moon: moonBody, north: sunVector(0, 0, north, rot), on: this._config.sky_bodies !== false });
   }
 
   // Current time; tests set window.__demoNow (Date or ms).

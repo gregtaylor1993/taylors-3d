@@ -65,11 +65,10 @@ export function moonLight(night, moon) {
   return 0.05 + 0.15 * ill * Math.min(1, night);
 }
 
-// Distance of the sun / moon sprites from the camera: 0.8 x camera far, clamped.
-export const skyDistance = (far) => Math.min(2000, Math.max(20, 0.8 * (Number(far) || 0)));
-
-// The sun sprite shows down to just below the horizon; the moon only above it.
-export const SUN_MIN_Y = -0.02;
-// Apparent size of a sky body (degrees of view) -> sprite scale at a distance.
-export const BODY_DEG = 2.5;
-export const bodyScale = (dist, deg = BODY_DEG) => 2 * dist * Math.tan((deg * RAD) / 2);
+// Dome around the house the sun / moon sit on: radius from the house's horizontal radius (m).
+export const domeRadius = (houseRadius) => Math.max(12, 1.4 * (Number(houseRadius) || 0));
+// The sun disc shows down to 2 degrees below the horizon (y of its unit vector); the moon only above it.
+export const SUN_MIN_Y = Math.sin(-2 * RAD);
+// World size of the discs on the dome (m).
+export const SUN_DISC_M = 1.6;
+export const MOON_DISC_M = 1.3;

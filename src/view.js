@@ -12,7 +12,7 @@ import { levelVisible, measuredElevations } from './bindings.js';
 import { buildManifest, threeAdapter } from './manifest.js';
 import { sectionLevels, unionBox, pivotCamera, rayPlaneY, orthoZoom, topZoom, nodeIndex, parseSelector, matches, viewTree, escapeName } from './views.js';
 import { mergeGroups, namedGroups, mergedName } from './merge.js';
-import { moonLight, skyDistance, bodyScale, SUN_MIN_Y } from './sky.js';
+import { moonLight, domeRadius, SUN_MIN_Y, SUN_DISC_M, MOON_DISC_M } from './sky.js';
 import {
   castsShadow, shadowInfo, isCoplanarOverlay, depthRange, depthChanged, isOccluded, sunDirection, ghostMaterial, pickable,
 } from './render-rules.js';
@@ -259,6 +259,9 @@ export class FloorplanView {
     this.skyBodies = { sun: null, moon: null }; // { dir: [x, y, z] world, phase?, illumination? }
     this.skySprites = { sun: null, moon: null };
     this._moonKey = null;
+    this.skyRing = null; // compass ring on the ground at the dome radius, "N" at true north
+    this._skyOn = false; // option sky_bodies (with a model)
+    this._dome = null; // { centre: Vector3 (house centre on the ground), radius }
     this.daylight = true;
     this.sky = { night: 0, sunDir: null, sun: 1 };
 
@@ -805,10 +808,12 @@ export class FloorplanView {
     this.renderer.setClearColor(day.lerp(night, t), 1);
   }
 
-  // Sun / moon sprites: { sun: { dir } | null, moon: { dir, phase, illumination } | null } (world unit
-  // vectors). Shown with a model in the 3D view; the sun down to just below the horizon, the moon above it.
-  setSkyBodies({ sun = null, moon = null } = {}) {
-    this.skyBodies = { sun: sun && sun.dir ? sun : null, moon: moon && moon.dir ? moon : null };
+  // Sun / moon on a dome around the house: { sun: { dir } | null, moon: { dir, phase, illumination } | null,
+  // north: [x, y, z] world unit vector of true north, on: sky_bodies }. Each body sits at house centre
+  // + dir x dome radius, so its azimuth / elevation read off the compass ring (3D and top view).
+  setSkyBodies({ sun = null, moon = null, north = null, on = true } = {}) {
+    this._skyOn = !!on;
+    this.skyBodies = on ? { sun: sun && sun.dir ? sun : null, moon: moon && moon.dir ? moon : null } : { sun: null, moon: null };
     if (this.skyBodies.sun && !this.skySprites.sun) this.skySprites.sun = this._skySprite(getSunTexture());
     if (this.skyBodies.moon) {
       if (!this.skySprites.moon) {
@@ -820,13 +825,46 @@ export class FloorplanView {
       }
       this._paintMoon(this.skyBodies.moon);
     }
+    if (north) this._skyNorth = north;
+    if (this._skyOn && !this.skyRing) this._makeSkyRing();
     if (this.model) this._applyMoonLight();
+    this._placeSkyBodies();
     this.dirty = true;
+  }
+
+  // Unit ring (scaled to the dome radius) with a tick and an "N" on local +x (turned to true north).
+  _makeSkyRing() {
+    const g = new THREE.Group();
+    const pts = [];
+    for (let i = 0; i < 128; i++) { const a = (i / 128) * Math.PI * 2; pts.push(new THREE.Vector3(Math.cos(a), 0, Math.sin(a))); }
+    const line = (opacity) => new THREE.LineBasicMaterial({ color: 0xffb74d, transparent: true, opacity, depthWrite: false, toneMapped: false, fog: false });
+    const ring = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), line(0.25));
+    const tick = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0.94, 0, 0), new THREE.Vector3(1.08, 0, 0)]), line(0.6));
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const ctx = c.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = 'rgba(255,183,77,0.9)';
+      ctx.font = 'bold 44px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('N', 32, 34);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, toneMapped: false, fog: false }));
+    label.position.set(1.16, 0.02, 0);
+    label.userData.ringLabel = true;
+    for (const o of [ring, tick, label]) { o.userData.helper = true; o.raycast = () => {}; }
+    g.add(ring, tick, label);
+    g.userData.helper = true;
+    g.visible = false;
+    this.skyRing = g;
+    this.skyGroup.add(g);
   }
 
   _skySprite(map) {
     const s = new THREE.Sprite(new THREE.SpriteMaterial({ map, transparent: true, depthWrite: false, toneMapped: false, fog: false }));
-    s.renderOrder = -10;
     s.castShadow = s.receiveShadow = false;
     s.frustumCulled = false; // placed per frame
     s.visible = false;
@@ -859,20 +897,30 @@ export class FloorplanView {
     }
   }
 
-  // Each frame (before rendering): sprites along their direction from the camera at 0.8 x far, so
-  // they look infinitely far and are never cut by the far plane; ~2.5 degrees of view.
+  // Sun / moon on the dome (house centre + dir x radius) as world-size discs, hidden below the horizon
+  // (sun < -2 deg, moon < 0); the ring and both discs need a model and sky_bodies.
   _placeSkyBodies() {
-    const cam = this.camera, on = !!this.model && cam === this.persp, dist = skyDistance(cam.far);
-    const put = (sprite, body, minY, k) => {
+    const d = this._dome, on = !!this.model && this._skyOn && !!d;
+    const put = (sprite, body, minY, size) => {
       if (!sprite) return;
       const show = on && !!body && body.dir[1] > minY;
       sprite.visible = show;
       if (!show) return;
-      sprite.position.copy(cam.position).addScaledVector(new THREE.Vector3(...body.dir).normalize(), dist);
-      sprite.scale.setScalar(bodyScale(dist) * k);
+      sprite.position.copy(d.centre).addScaledVector(new THREE.Vector3(...body.dir).normalize(), d.radius);
+      sprite.scale.setScalar(size);
     };
-    put(this.skySprites.sun, this.skyBodies.sun, SUN_MIN_Y, 2); // disc = half the sprite
-    put(this.skySprites.moon, this.skyBodies.moon, 0, 1 / 0.9);
+    put(this.skySprites.sun, this.skyBodies.sun, SUN_MIN_Y, SUN_DISC_M * 2); // disc = half the sprite
+    put(this.skySprites.moon, this.skyBodies.moon, 0, MOON_DISC_M / 0.9); // disc = 90 % of the sprite
+    const ring = this.skyRing;
+    if (!ring) return;
+    ring.visible = on;
+    if (!on) return;
+    ring.position.set(d.centre.x, d.centre.y + 0.02, d.centre.z);
+    ring.scale.setScalar(d.radius);
+    const n = this._skyNorth || [0, 0, -1];
+    ring.rotation.y = Math.atan2(-n[2], n[0]); // local +x -> north
+    const label = ring.children.find((o) => o.userData.ringLabel);
+    if (label) label.scale.setScalar(1.4 / d.radius); // ~1.4 m in the world
   }
 
   // Renderer, light and shadow settings for model / no model and day / night.
@@ -934,6 +982,10 @@ export class FloorplanView {
     }
     if (box.isEmpty()) box = new THREE.Box3().setFromObject(this.modelGroup);
     if (box.isEmpty()) return;
+    const ground = Math.min(Math.max(0, box.min.y), box.max.y);
+    const hc = box.getCenter(new THREE.Vector3());
+    this._dome = { centre: new THREE.Vector3(hc.x, ground, hc.z), radius: domeRadius(Math.max(box.max.x - box.min.x, box.max.z - box.min.z) / 2) };
+    this._placeSkyBodies();
     box.expandByScalar(SHADOW_MARGIN_M);
     const centre = box.getCenter(new THREE.Vector3());
     const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 1);
@@ -1649,6 +1701,10 @@ export class FloorplanView {
       });
     }
     if (box.isEmpty()) box.set(new THREE.Vector3(-5, 0, -5), new THREE.Vector3(5, 0, 5));
+    const d = this._dome;
+    if (this.mode === 'top' && d && this.model && this._skyOn) { // top view: the compass ring (sun / moon azimuth) in frame
+      box.union(new THREE.Box3(new THREE.Vector3(d.centre.x - d.radius, d.centre.y, d.centre.z - d.radius), new THREE.Vector3(d.centre.x + d.radius, d.centre.y, d.centre.z + d.radius)));
+    }
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const aspect = this.size.w / this.size.h;
@@ -1734,6 +1790,8 @@ export class FloorplanView {
       target: p.distanceTo(this.controls.target), house: b.house.distanceToPoint(p),
       centre: p.distanceTo(b.centre), radius: b.radius, ortho,
     });
+    const d = this._dome;
+    if (d && this._skyOn && this.model && !ortho) next.far = Math.max(next.far, Math.round((p.distanceTo(d.centre) + d.radius + SUN_DISC_M) * 1050) / 1000); // the dome stays in front of far
     if (!depthChanged({ near: cam.near, far: cam.far }, next)) return;
     cam.near = next.near;
     cam.far = next.far;
@@ -1997,6 +2055,11 @@ export class FloorplanView {
       s.material.dispose();
     }
     this.skySprites = { sun: null, moon: null };
+    if (this.skyRing) {
+      this.skyRing.traverse((o) => { if (o.material && o.material.map) o.material.map.dispose(); });
+      this._clearGroup(this.skyRing);
+    }
+    this.skyRing = null;
     this.markerObjects.clear();
     this.glows.clear();
     this.cssObjects = [];

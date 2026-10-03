@@ -349,21 +349,41 @@ try {
   const horizon = await page.evaluate(`({ y: ${card}._view.sun.position.y - ${card}._view.sun.target.position.y, i: ${card}._view.sun.intensity })`);
   check('sun below the horizon lights nothing and never from below', horizon.i < 0.3 && horizon.y > 0, JSON.stringify(horizon));
 
-  // sun / moon sprites (camera-relative at 0.8 x far), faint moonlight, no shader recompiles per update
-  const bodies = () => page.evaluate(`(() => { const v = ${card}._view, c = v.camera.position, o = (s) => s && s.visible
-    ? { d: [s.position.x - c.x, s.position.y - c.y, s.position.z - c.z].map((x) => x / s.position.distanceTo(c)), dist: s.position.distanceTo(c), far: v.camera.far } : null;
-    return { sun: o(v.skySprites.sun), moon: o(v.skySprites.moon), moonLight: v.moonLight.intensity, north: v.model.north || 0,
-      programs: v.renderer.info.programs.length, lights: v.scene.children.filter((x) => x.isLight).length }; })()`);
+  // sun / moon on a dome around the house + compass ring, faint moonlight, no shader recompiles per update
+  const bodies = () => page.evaluate(`(() => { const v = ${card}._view, cam = v.camera, d = v._dome;
+    const o = (s) => { if (!s || !s.visible) return null; const p = s.position.clone().project(cam);
+      const rel = s.position.clone().sub(d.centre); return { ndc: [p.x, p.y, p.z].map((x) => Math.round(x * 100) / 100), inView: Math.abs(p.x) <= 1 && Math.abs(p.y) <= 1 && p.z >= -1 && p.z <= 1,
+        el: Math.asin(rel.y / rel.length()) * 180 / Math.PI, az: (Math.atan2(rel.x, rel.z) * 180 / Math.PI + 360) % 360, r: rel.length() }; };
+    return { sun: o(v.skySprites.sun), moon: o(v.skySprites.moon), ring: !!v.skyRing && v.skyRing.visible, dome: d && d.radius,
+      moonLight: v.moonLight.intensity, north: v.model.north || 0, programs: v.renderer.info.programs.length,
+      lights: v.scene.children.filter((x) => x.isLight).length }; })()`);
   await page.evaluate('window.__demoNow = Date.UTC(2024, 3, 24, 0, 30)'); // full moon, up at 52 N 5 E
-  await tint(30, 180);
-  await sleep(300);
+  await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=exterior]').click()`);
+  await settle(page, card);
+  await tint(25, 200);
+  await sleep(400);
   let b = await bodies();
-  check('sky: sun at +30 deg south -> sun sprite up, towards south (+z)', !!b.sun && b.sun.d[1] > 0.4 && (b.north !== 0 || b.sun.d[2] > 0.7) && b.sun.dist < b.sun.far, JSON.stringify(b));
+  // north 0: azimuth 200 (from north, clockwise) = south-south-west = +z, a bit -x: atan2(x, z) ~ -20 deg -> 340
+  check('sky: sun 25 deg / 200 deg on the dome (elevation 25, south-ish), ring shown', !!b.sun && Math.abs(b.sun.el - 25) < 0.5 && Math.abs(b.sun.r - b.dome) < 0.01
+    && (b.north !== 0 || Math.abs(b.sun.az - 340) < 1) && b.ring && b.dome >= 12, JSON.stringify(b));
+  check('sky: sun inside the camera frustum in the exterior view', !!b.sun && b.sun.inView, JSON.stringify(b));
+  await sh('sky-3d.png');
+  await page.evaluate(`${card}._setMode('top')`);
+  await settle(page, card);
+  await sleep(400);
+  b = await bodies();
+  check('sky: sun and ring visible in top view', !!b.sun && b.sun.inView && b.ring, JSON.stringify(b));
+  await sh('sky-top.png');
+  await page.evaluate(`${card}._setMode('3d')`);
+  await settle(page, card);
   await tint(-20, 0);
   await sleep(300);
   b = await bodies();
   const progs = b.programs, lightCount = b.lights;
-  check('sky: sun at -20 deg -> sun hidden, moon up, faint moonlight', !b.sun && !!b.moon && b.moon.d[1] > 0 && b.moonLight > 0.15 && b.moonLight <= 0.2, JSON.stringify(b));
+  check('sky: sun at -20 deg -> sun hidden, moon up, faint moonlight', !b.sun && !!b.moon && b.moon.el > 0 && b.moonLight > 0.15 && b.moonLight <= 0.2, JSON.stringify(b));
+  await tint(-1, 270);
+  await sleep(300);
+  check('sky: sun at -1 deg still shown (down to -2)', !!(await bodies()).sun);
   for (const [e, a] of [[-15, 10], [-25, 30], [20, 120], [-20, 0]]) { await tint(e, a); await sleep(150); }
   await page.evaluate('window.__demoNow = Date.UTC(2024, 3, 24, 2, 30)');
   await tint(-21, 5);
@@ -374,21 +394,21 @@ try {
   await page.evaluate(`${btn}.click()`); // night
   await sleep(300);
   b = await bodies();
-  check('sky: manual Night -> moon visible, sun hidden, moonlight 0.17', (await mode()) === 'night' && !!b.moon && !b.sun && Math.abs(b.moonLight - 0.17) < 0.001, JSON.stringify(b));
+  check('sky: manual Night -> moon at 35 deg, sun hidden, moonlight 0.17', (await mode()) === 'night' && !!b.moon && Math.abs(b.moon.el - 35) < 0.5 && !b.sun && Math.abs(b.moonLight - 0.17) < 0.001, JSON.stringify(b));
   await sh('look-moon.png');
   await page.evaluate(`${card}.setConfig({ ...${card}._config, sky_bodies: false })`);
   await sleep(300);
   b = await bodies();
-  check('sky: sky_bodies false hides both', !b.sun && !b.moon, JSON.stringify(b));
+  check('sky: sky_bodies false hides sun, moon and ring', !b.sun && !b.moon && !b.ring, JSON.stringify(b));
   await page.evaluate(`${btn}.click()`); // auto
   await tint(30, 180);
   await sleep(300);
   b = await bodies();
-  check('sky: sky_bodies false stays hidden in auto', !b.sun && !b.moon, JSON.stringify(b));
+  check('sky: sky_bodies false stays hidden in auto', !b.sun && !b.moon && !b.ring, JSON.stringify(b));
   await page.evaluate(`${card}.setConfig({ ...${card}._config, sky_bodies: true })`);
   await sleep(300);
   b = await bodies();
-  check('sky: sky_bodies true shows the sun again', !!b.sun, JSON.stringify(b));
+  check('sky: sky_bodies true shows the sun and ring again', !!b.sun && b.ring, JSON.stringify(b));
   await page.evaluate('delete window.__demoNow');
   allErrors.push(...s.errors);
 } finally {

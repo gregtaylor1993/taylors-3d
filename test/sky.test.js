@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { moonPosition, moonLight, skyDistance } from '../src/sky.js';
+import { moonPosition, moonLight, domeRadius, SUN_MIN_Y } from '../src/sky.js';
 
 // Reference: suncalc's published test values (2013-03-05 UTC, 50.5 N, 30.5 E):
 // getMoonPosition azimuth -0.9783999522438226 rad (from south), altitude 0.014551482243892251 rad;
@@ -75,10 +75,13 @@ describe('moonLight', () => {
   });
 });
 
-describe('skyDistance', () => {
-  it('is 0.8 x far, clamped', () => {
-    expect(skyDistance(100)).toBeCloseTo(80);
-    expect(skyDistance(5)).toBe(20);
-    expect(skyDistance(1e6)).toBe(2000);
+describe('dome', () => {
+  it('radius is 1.4 x the house radius, at least 12 m', () => {
+    expect(domeRadius(20)).toBeCloseTo(28);
+    expect(domeRadius(3)).toBe(12);
+    expect(domeRadius(undefined)).toBe(12);
+  });
+  it('sun shows down to -2 deg', () => {
+    expect(SUN_MIN_Y).toBeCloseTo(-0.0349, 4);
   });
 });
