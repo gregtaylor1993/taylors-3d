@@ -3,6 +3,8 @@
 import { GLASS_RE } from './render-rules.js';
 
 export const MAX_MERGE_VERTICES = 1000000;
+export const MAX_MERGE_MESH_M = 30; // a mesh larger than this (terrain, plot-wide parts) stays as is
+export const MERGE_CELL_M = 10; // spatial owners (untagged parts of the model) merge per 10 m cell
 const FLOOR_RE = /_floor$/i; // room floor pieces (<roomId>_floor): Pick traces them one by one
 
 const matsOf = (o) => (Array.isArray(o.material) ? o.material : o.material ? [o.material] : []);
@@ -53,8 +55,10 @@ function excluded(o, opts) {
 }
 
 // meshes: candidate mesh nodes (traversal order). opts: { root, kindOf(node) -> 'object' | 'tag' | null,
-// isOwner(node) -> bool (layer groups, groups listed in the Views tree), keep: Set of nodes referenced by
-// node: selectors (a mesh is left alone, a group owns its meshes), maxVertices }.
+// isOwner(node) -> bool (layer groups, named groups, groups listed in the Views tree), keep: Set of nodes
+// referenced by node: selectors (a mesh is left alone, a group owns its meshes), maxVertices,
+// boxOf(mesh) -> { cx, cz, size } in metres (size = largest box side; over MAX_MERGE_MESH_M: not merged),
+// spatial(owner) -> bool (untagged owners: one group per MERGE_CELL_M cell of the box centre) }.
 // Owner = the nearest ancestor that is tagged, an owner or kept; else root. Anything below an object is
 // left alone. Returns [{ owner, meshes, vertices, layers, key }], only groups of two or more meshes.
 export function mergeGroups(meshes, opts) {
@@ -63,6 +67,8 @@ export function mergeGroups(meshes, opts) {
   const buckets = new Map();
   for (const m of meshes) {
     if (excluded(m, o)) continue;
+    const box = o.boxOf ? o.boxOf(m) : null;
+    if (box && !(box.size <= MAX_MERGE_MESH_M)) continue;
     let owner = null, inObject = false;
     for (let p = m.parent; p && p !== o.root; p = p.parent) {
       const k = o.kindOf(p);
@@ -73,8 +79,9 @@ export function mergeGroups(meshes, opts) {
     owner = owner || o.root;
     if (!ownerIds.has(owner)) ownerIds.set(owner, ownerIds.size);
     const layers = [...new Set(ownLayers(m))].sort();
+    const cell = box && o.spatial && o.spatial(owner) ? `${Math.floor(box.cx / MERGE_CELL_M)},${Math.floor(box.cz / MERGE_CELL_M)}` : '';
     const key = [ownerIds.get(owner), m.material.uuid, geometrySignature(m.geometry), m.castShadow ? 1 : 0, m.receiveShadow ? 1 : 0,
-      m.renderOrder || 0, m.layers ? m.layers.mask : 1, layers.join('\u0001')].join('|');
+      m.renderOrder || 0, m.layers ? m.layers.mask : 1, layers.join('\u0001'), cell].join('|');
     let b = buckets.get(key);
     if (!b) buckets.set(key, (b = { owner, layers, key, meshes: [] }));
     b.meshes.push(m);
@@ -95,3 +102,31 @@ export function mergeGroups(meshes, opts) {
   }
   return out;
 }
+
+// Named groups (not "?") with two or more meshes below them: they own their meshes, so a named piece of
+// furniture keeps a node of its own that view rules can hide. The root itself is not included.
+export function namedGroups(root) {
+  const out = new Set();
+  const walk = (n) => {
+    let count = n.isMesh ? 1 : 0;
+    for (const c of n.children || []) count += walk(c);
+    const name = nameOf(n);
+    if (n !== root && !n.isMesh && name && name !== '?' && count >= 2) out.add(n);
+    return count;
+  };
+  walk(root);
+  return out;
+}
+
+// FNV-1a 32 bit of a string as 8 hex digits.
+export function fnv1a(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+// Name of a merged mesh from what is in it: material name + the sorted original paths of its sources.
+export const mergedName = (materialName, paths) => 'fp_merged_' + fnv1a(String(materialName || '') + '\n' + [...paths].sort().join('\n'));

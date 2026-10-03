@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeGroups, geometrySignature, MAX_MERGE_VERTICES } from '../src/merge.js';
+import { mergeGroups, geometrySignature, MAX_MERGE_VERTICES, MAX_MERGE_MESH_M, fnv1a, mergedName, namedGroups } from '../src/merge.js';
 
 // fake three.js-like nodes
 const attr = (count, itemSize = 3, Arr = Float32Array) => ({ count, itemSize, normalized: false, array: new Arr(count * itemSize) });
@@ -180,4 +180,54 @@ describe('mergeGroups', () => {
     expect(geometrySignature(g)).not.toBe(geometrySignature(geo()));
     expect(geometrySignature({ attributes: {} })).toBe(null);
   });
+
+  it('a mesh over 30 m is never merged', () => {
+    const s = scene(), m = mat('m');
+    const boxOf = (x) => ({ cx: 0, cz: 0, size: x.name === 'terrain' ? 31 : 1 });
+    const g = mergeGroups([mesh('terrain', s.kitchen, m), mesh('a', s.kitchen, m), mesh('b', s.kitchen, m)], optsFor(s, { boxOf }));
+    expect(names(g)).toEqual(['a,b']);
+    expect(MAX_MERGE_MESH_M).toBe(30);
+  });
+
+  it('spatial owners split their meshes into 10 m cells; other owners do not', () => {
+    const s = scene(), m = mat('m');
+    const at = { a: [1, 1], b: [9, 2], c: [12, 1], d: [13, 4], e: [-1, 1], f: [-2, 2] };
+    const boxOf = (x) => ({ cx: at[x.name[0]][0], cz: at[x.name[0]][1], size: 1 });
+    const loose = Object.keys(at).map((k) => mesh(k, s.root, m));
+    const g = mergeGroups(loose, optsFor(s, { boxOf, spatial: (o) => o === s.root }));
+    expect(names(g).sort()).toEqual(['a,b', 'c,d', 'e,f']);
+    const room = Object.keys(at).map((k) => mesh(k + 'r', s.kitchen, m));
+    expect(names(mergeGroups(room, optsFor(s, { boxOf, spatial: (o) => o === s.root })))).toEqual(['ar,br,cr,dr,er,fr']);
+  });
+
+  it('named groups with two or more meshes below them are owners (not unnamed, "?" or one-mesh groups)', () => {
+    const s = scene(), m = mat('m');
+    const sofa = group('Sofa', s.living), cushions = group('', sofa);
+    mesh('s1', sofa, m); mesh('s2', cushions, m);
+    const one = group('Lamp shade', s.living); mesh('x', one, m);
+    const q = group('?', s.living); mesh('q1', q, m); mesh('q2', q, m);
+    const set = namedGroups(s.root);
+    expect(set.has(sofa)).toBe(true);
+    expect(set.has(cushions)).toBe(false);
+    expect(set.has(one)).toBe(false);
+    expect(set.has(q)).toBe(false);
+    expect(set.has(s.root)).toBe(false); // the root is the owner of last resort anyway
+  });
 });
+
+describe('merged mesh names', () => {
+  it('fnv1a is 8 hex digits and stable', () => {
+    expect(fnv1a('')).toBe('811c9dc5');
+    expect(fnv1a('a')).toBe('e40c292c');
+    expect(fnv1a('hello')).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it('mergedName depends on material and source paths, not their order', () => {
+    const a = mergedName('Wood', ['g/Room/Chair#0', 'g/Room/Chair#1']);
+    expect(a).toMatch(/^fp_merged_[0-9a-f]{8}$/);
+    expect(mergedName('Wood', ['g/Room/Chair#1', 'g/Room/Chair#0'])).toBe(a);
+    expect(mergedName('Oak', ['g/Room/Chair#0', 'g/Room/Chair#1'])).not.toBe(a);
+    expect(mergedName('Wood', ['g/Room/Chair#0', 'g/Room/Chair#2'])).not.toBe(a);
+  });
+});
+

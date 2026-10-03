@@ -357,7 +357,7 @@ try {
 s = await openDemo({ model: '1', view: '3d' }, { width: 1400, height: 560 });
 try {
   const { page } = s;
-  await page.waitForFunction(`!!${card}._view.model`, { timeout: 10000 });
+  await page.waitForFunction(`!!${card}._view.model && !!${card}._view.mergeStats`, { timeout: 10000 });
   const stats = () => page.evaluate(`JSON.stringify(${card}._view.mergeStats)`).then(JSON.parse);
   const on = await stats();
   check('merge: fewer meshes and draw calls, same triangles', on.enabled && on.after.meshes < on.before.meshes && on.after.calls < on.before.calls
@@ -392,9 +392,10 @@ try {
   await sleep(300);
   const off = await stats();
   check('merge: false reloads with every mesh and the old draw-call count', off.after.meshes === on.before.meshes && off.after.calls === on.before.calls && off.merged === 0, JSON.stringify(off));
-  const target = await page.evaluate(`(() => { const c = ${card}; let t = null;
-    c._view.model.root.traverse((x) => { if (!t && x.isMesh && x.parent && x.parent.name === ${JSON.stringify(probe.owner)} && x.material.name === ${JSON.stringify(probe.mat)} && !x.children.length) t = x; });
-    const n = t && c._index && c._index.nodes.find((i) => i.node === t); return n ? { path: n.path, uuid: t.uuid } : null; })()`);
+  const targets = await page.evaluate(`(() => { const c = ${card}; const t = [];
+    c._view.model.root.traverse((x) => { if (x.isMesh && x.parent && x.parent.name === ${JSON.stringify(probe.owner)} && x.material.name === ${JSON.stringify(probe.mat)} && !x.children.length) t.push(x); });
+    return t.map((m) => c._index && c._index.nodes.find((i) => i.node === m)).filter(Boolean).slice(0, 2).map((n) => ({ path: n.path })); })()`);
+  const target = targets[0] || null;
   check('found a merge candidate mesh with merge off', !!target, JSON.stringify(probe));
   if (target) {
     const views = { ground: { rules: [{ hide: 'node:' + target.path }] } };
@@ -408,6 +409,20 @@ try {
     check('a mesh named by a node: rule is not merged and the rule still hides it', !!kept && kept.mesh && !kept.merged && kept.visible === false, JSON.stringify(kept));
     const again = await stats();
     check('merging again with the rule: still fewer draw calls than merge off', again.after.calls < off.after.calls, JSON.stringify(again));
+  }
+  if (targets[1]) {
+    // a layout rule (e.g. an imported layout) for a part that was merged away: the model loads once more around it
+    const sel = 'node:' + targets[1].path;
+    const model0 = await page.evaluate(`(window.__m0 = ${card}._view.model, true)`);
+    await page.evaluate(`(() => { const c = ${card}, l = c._layout; c._commit({ ...l, views: { ...(l.views || {}), first: { ...((l.views || {}).first || {}), rules: [{ hide: ${JSON.stringify(sel)} }] } } }); })()`);
+    await page.waitForFunction(`${card}._view.model && ${card}._view.model !== window.__m0 && !!${card}._view.mergeStats`, { timeout: 10000 }).catch(() => {});
+    await sleep(300);
+    const re = await page.evaluate(`(() => { const c = ${card}, ms = c._view.mergeStats; const n = c._index && c._index.nodes.find((i) => i.path === ${JSON.stringify(targets[1].path)});
+      return { reloaded: c._view.model !== window.__m0, keep: !!ms && ms.keep.includes(${JSON.stringify(sel)}), mesh: !!n && !!n.node.isMesh && !n.node.userData.merged }; })()`);
+    check('a later layout node: rule on a merged part reloads the model once and keeps that part', model0 && re.reloaded && re.keep && re.mesh, JSON.stringify(re));
+    await page.evaluate(`(window.__m1 = ${card}._view.model, ${card}._schedule())`);
+    await sleep(500);
+    check('no second reload', await page.evaluate(`${card}._view.model === window.__m1`));
   }
   allErrors.push(...s.errors);
 } finally {

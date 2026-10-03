@@ -10,8 +10,8 @@ import { centroid } from './placement.js';
 import { wallSegments } from './layout.js';
 import { levelVisible, measuredElevations } from './bindings.js';
 import { buildManifest, threeAdapter } from './manifest.js';
-import { sectionLevels, unionBox, pivotCamera, rayPlaneY, orthoZoom, topZoom, nodeIndex, parseSelector, matches, viewTree } from './views.js';
-import { mergeGroups } from './merge.js';
+import { sectionLevels, unionBox, pivotCamera, rayPlaneY, orthoZoom, topZoom, nodeIndex, parseSelector, matches, viewTree, escapeName } from './views.js';
+import { mergeGroups, namedGroups, mergedName } from './merge.js';
 import {
   castsShadow, shadowInfo, isCoplanarOverlay, depthRange, depthChanged, isOccluded, sunDirection, ghostMaterial, pickable,
 } from './render-rules.js';
@@ -47,14 +47,27 @@ function northOf(root) {
   return null;
 }
 
-// A mesh geometry baked into its owner's space (own copy: geometries can be shared), float, not interleaved.
+// A mesh geometry baked into its owner's space (own copy: geometries can be shared), float, not
+// interleaved, cut to its drawRange.
 function bakedGeometry(mesh, toOwner) {
   const src = mesh.geometry, g = new THREE.BufferGeometry();
-  for (const [k, a] of Object.entries(src.attributes)) g.setAttribute(k, a.isInterleavedBufferAttribute ? deinterleaveAttribute(a) : a.clone());
-  if (src.index) g.setIndex(src.index.clone());
+  const idx = src.index;
+  const total = idx ? idx.count : src.attributes.position.count;
+  const start = Math.max(0, src.drawRange.start || 0), end = Math.min(total, start + src.drawRange.count);
+  const ranged = start > 0 || end < total;
+  for (const [k, a0] of Object.entries(src.attributes)) {
+    let a = a0.isInterleavedBufferAttribute ? deinterleaveAttribute(a0) : a0.clone();
+    if (ranged && !idx) a = new THREE.BufferAttribute(a.array.slice(start * a.itemSize, end * a.itemSize), a.itemSize, a.normalized);
+    g.setAttribute(k, a);
+  }
+  if (idx) g.setIndex(ranged ? new THREE.BufferAttribute(idx.array.slice(start, end), 1) : idx.clone());
   const m = new THREE.Matrix4().multiplyMatrices(toOwner, mesh.matrixWorld);
   g.applyMatrix4(m);
-  if (m.determinant() < 0) flipWinding(g); // mirrored part: three flips the face order at render time, a baked one has to be flipped here
+  if (m.determinant() < 0) { // mirrored part: three flips the face order at render time, a baked one has to be flipped here
+    flipWinding(g);
+    const t = g.attributes.tangent;
+    if (t && t.itemSize === 4) for (let i = 0; i < t.count; i++) t.setW(i, -t.getW(i)); // and its handedness
+  }
   return g;
 }
 
@@ -74,25 +87,49 @@ function flipWinding(g) {
 
 // Merges static model meshes (see merge.js: per owner, material, attribute set, shadow flags), in place.
 // selectors: view rule selectors (layout / YAML / model views) whose node: matches must stay their own nodes.
-// Returns { groups, merged (source meshes), failed }.
-export function mergeStaticMeshes(root, manifest, selectors = []) {
+// unitScale: model units -> metres (the model scale), for the 30 m / 10 m cell limits.
+// Every node keeps its original path segment (userData.fpSeg / fpDup), so node: paths do not shift when
+// siblings are merged away. Returns { groups, merged (source meshes), failed }.
+export function mergeStaticMeshes(root, manifest, selectors = [], { unitScale = 1 } = {}) {
   root.updateMatrixWorld(true);
   const index = nodeIndex(threeAdapter(root), manifest);
+  const pathOf = new Map();
+  for (const n of index.nodes) {
+    pathOf.set(n.node, n.path);
+    n.node.userData.fpSeg = n.seg;
+    if (n.dup !== null && n.dup !== undefined) n.node.userData.fpDup = n.dup;
+  }
   const keep = new Set();
   for (const s of selectors) {
     const sel = parseSelector(s);
     if (sel && sel.kind === 'node') for (const n of index.nodes) if (matches(sel, n)) keep.add(n.node);
   }
-  // groups the Views tab lists (named groups with children near the top) keep their own parts
+  // groups the Views tab lists and named groups (furniture) keep their own parts
   const listed = new Set(viewTree(index).groups.flatMap((r) => r.nodes.map((i) => index.nodes[i].node)));
+  const named = namedGroups(root);
+  const roomLevels = new Set(manifest.rooms.map((r) => r.level));
   const meshes = [];
   root.traverse((o) => { if (o.isMesh) meshes.push(o); });
+  const rootInv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+  const box = new THREE.Box3(), rel = new THREE.Matrix4(), c = new THREE.Vector3(), sz = new THREE.Vector3();
   const groups = mergeGroups(meshes, {
     root, keep,
     kindOf: (n) => { const e = manifest.byNode.get(n); return e ? (e.kind === 'object' ? 'object' : 'tag') : null; },
-    isOwner: (n) => listed.has(n) || !!(n.userData && n.userData.fp && n.userData.fp.layer),
+    isOwner: (n) => listed.has(n) || named.has(n) || !!(n.userData && n.userData.fp && n.userData.fp.layer),
+    boxOf: (m) => {
+      if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+      box.copy(m.geometry.boundingBox).applyMatrix4(rel.multiplyMatrices(rootInv, m.matrixWorld));
+      box.getCenter(c);
+      box.getSize(sz);
+      return { cx: c.x * unitScale, cz: c.z * unitScale, size: Math.max(sz.x, sz.y, sz.z) * unitScale };
+    },
+    // untagged owners (the root, layer / named groups, a level without rooms) merge per 10 m cell
+    spatial: (o) => {
+      const e = manifest.byNode.get(o);
+      return o === root || !e || (e.kind === 'level' && !roomLevels.has(e.id));
+    },
   });
-  const counter = new Map(), sources = new Set();
+  const sources = new Set();
   let merged = 0, failed = 0;
   const inv = new THREE.Matrix4();
   for (const grp of groups) {
@@ -105,14 +142,14 @@ export function mergeStaticMeshes(root, manifest, selectors = []) {
     geometry.computeBoundingSphere();
     const first = grp.meshes[0];
     const out = new THREE.Mesh(geometry, first.material);
-    const k = counter.get(grp.owner) || 0;
-    counter.set(grp.owner, k + 1);
-    out.name = `fp_merged_${k}`;
+    let name = mergedName(first.material.name, grp.meshes.map((m) => pathOf.get(m) || m.name));
+    for (let k = 2; grp.owner.children.some((x) => x.name === name); k++) name = name.replace(/(_\d+)?$/, '') + '_' + k; // hash clash among siblings
+    out.name = name;
     out.castShadow = first.castShadow;
     out.receiveShadow = first.receiveShadow;
     out.renderOrder = first.renderOrder;
     out.layers.mask = first.layers.mask;
-    out.userData = { merged: grp.meshes.length, seeThrough: false, ...(grp.layers.length ? { fp: { layer: [...grp.layers] } } : {}) };
+    out.userData = { name, fpSeg: escapeName(name), merged: grp.meshes.length, seeThrough: false, ...(grp.layers.length ? { fp: { layer: [...grp.layers] } } : {}) };
     grp.owner.add(out);
     out.updateMatrixWorld(true);
     for (const m of grp.meshes) { sources.add(m.geometry); m.removeFromParent(); }
@@ -386,6 +423,7 @@ export class FloorplanView {
   setModel(opts) {
     const base = opts && (opts.id || opts.url);
     const id = base && opts.merge === false ? base + '#nomerge' : base; // merge on / off is a reload
+    if (id && opts.reload && this.model && this.model.id === id) this._disposeModel(); // load again (e.g. merge with new keep rules)
     if (!id) {
       this._disposeModel();
       return Promise.resolve(null);
@@ -496,19 +534,26 @@ export class FloorplanView {
         this.model = { id, root, manifest, tagged, north: northOf(root), opacity: 1 };
         this.modelGroup.add(root);
         this._applyLook();
-        const before = this._modelStats();
-        let res = null;
-        if (opts.merge !== false) {
+        this.mergeStats = null;
+        const unitScale = opts.scale || 1;
+        if (opts.merge === false) {
+          const st = this._modelStats();
+          this.mergeStats = { enabled: false, before: st, after: st, groups: 0, merged: 0, keep: [] };
+        } else {
+          // the keep selectors come from the layout: merge now when it is there, else once it has loaded
           const keep = typeof opts.keep === 'function' ? opts.keep() : opts.keep || [];
-          const sels = [...keep, ...manifest.views.flatMap((v) => [...v.show, ...v.hide])];
-          try {
-            res = mergeStaticMeshes(root, manifest, sels);
-          } catch (err) {
-            console.warn('floorplan3d: could not merge model meshes', err);
+          if (keep && typeof keep.then === 'function') {
+            const model = this.model;
+            keep.then((sels) => {
+              if (this.model !== model) return;
+              this._mergeModel(sels, unitScale);
+              this._afterMerge();
+              if (opts.onMerged) opts.onMerged();
+            }, () => {});
+          } else {
+            this._mergeModel(keep, unitScale);
           }
         }
-        const after = res && res.merged ? this._modelStats() : before;
-        this.mergeStats = { enabled: opts.merge !== false, before, after, groups: res ? res.groups : 0, merged: res ? res.merged : 0 };
         place();
         resolve(null);
       };
@@ -521,6 +566,33 @@ export class FloorplanView {
       }
     });
     return this._modelLoading;
+  }
+
+  // Merge the loaded model's static meshes (keep: view rule selectors; the model's own views are added).
+  _mergeModel(keep, unitScale) {
+    const { root, manifest } = this.model;
+    this._restoreModelVisibility(); // hidden by a view: still merged (the card re-applies visibility after)
+    const before = this._modelStats();
+    const sels = [...(keep || []), ...manifest.views.flatMap((v) => [...v.show, ...v.hide])];
+    let res = null;
+    try {
+      res = mergeStaticMeshes(root, manifest, sels, { unitScale });
+    } catch (err) {
+      console.warn('floorplan3d: could not merge model meshes', err);
+    }
+    const after = res && res.merged ? this._modelStats() : before;
+    this.mergeStats = { enabled: true, before, after, groups: res ? res.groups : 0, merged: res ? res.merged : 0, keep: sels };
+  }
+
+  // Caches that hold model meshes, after a merge on a placed model.
+  _afterMerge() {
+    this._occBoxes = null;
+    this._bounds = this._sceneBounds();
+    this._fitShadow();
+    this._shadowDirty();
+    this._scheduleOcclusion(0);
+    this._objectsInvalid();
+    this.dirty = true;
   }
 
   // Model meshes, triangles and draw calls (one render of the model alone, nothing culled, shadow pass

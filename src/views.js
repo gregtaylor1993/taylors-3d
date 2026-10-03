@@ -55,12 +55,15 @@ function globRe(pattern) {
 
 export function nodeIndex(adapter, manifest) {
   const nodes = [];
-  // unique path segment per sibling list
+  // unique path segment per sibling list; a node stamped with fpSeg (its segment before static meshes
+  // were merged away from its sibling list) keeps it, so node: rules stay valid after merging
+  const stamped = (n) => { const e = adapter.extras(n) || {}; return typeof e.fpSeg === 'string' ? { seg: e.fpSeg, dup: Number.isInteger(e.fpDup) ? e.fpDup : null } : null; };
   const segments = (list) => {
-    const names = list.map((n) => adapter.name(n));
+    const names = list.map((n) => (stamped(n) ? null : adapter.name(n)));
     const count = new Map(), seen = new Map();
-    for (const n of names) count.set(n, (count.get(n) || 0) + 1);
-    return names.map((n) => {
+    for (const n of names) if (n !== null) count.set(n, (count.get(n) || 0) + 1);
+    return names.map((n, i) => {
+      if (n === null) return stamped(list[i]);
       if (count.get(n) < 2) return { seg: escapeName(n), dup: null };
       const k = seen.get(n) || 0;
       seen.set(n, k + 1);
@@ -76,7 +79,7 @@ export function nodeIndex(adapter, manifest) {
     const tag = entry ? { kind: entry.kind, id: entry.id, role: entry.role || null, type: entry.type || null, group: entry.group || null } : null;
     const lvl = entry && entry.kind === 'level' ? entry.id : levelId;
     const i = nodes.length;
-    nodes.push({ node, parent, children: [], path, name, dup, layers, tag, levelId: lvl });
+    nodes.push({ node, parent, children: [], path, seg, name, dup, layers, tag, levelId: lvl });
     if (parent >= 0) nodes[parent].children.push(i);
     const kids = adapter.children(node);
     const segs = segments(kids);

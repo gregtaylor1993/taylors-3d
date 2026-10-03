@@ -14,7 +14,7 @@ import {
 import { threeAdapter } from './manifest.js';
 import {
   nodeIndex, resolveViews, resolveVisibility, primaryLevel, defaultFloors, levelOrders, isOverview, floorLevels, deviceState,
-  defaultViewId, viewCut, orderViews, sectionPlane, sectionCamera, zoomToFor, roomAt, exteriorShown, cameraToCard, topCameraToCard,
+  defaultViewId, viewCut, orderViews, unmatchedSelectors, sectionPlane, sectionCamera, zoomToFor, roomAt, exteriorShown, cameraToCard, topCameraToCard,
 } from './views.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 import { ObjectLayer } from './objects/layer.js';
@@ -299,6 +299,7 @@ class Floorplan3dCard extends HTMLElement {
     super();
     this.attachShadow({ mode: 'open' });
     this._layout = null;
+    this._layoutReady = new Promise((r) => { this._layoutLoaded = r; }); // resolves once the stored layout has loaded (or failed)
     this._built = {};
     this._markers = [];
     this._markerEls = new Map();
@@ -353,7 +354,7 @@ class Floorplan3dCard extends HTMLElement {
   }
 
   // model: from YAML (model: url) if set, else the one uploaded to the integration (layout.model)
-  _loadModel() {
+  _loadModel(reload = false) {
     const c = this._config;
     let opts = null;
     if (c.model) {
@@ -380,7 +381,10 @@ class Floorplan3dCard extends HTMLElement {
     }
     if (opts) {
       opts.merge = c.merge !== false;
-      opts.keep = () => this._mergeKeepSelectors();
+      // node: rules in the layout must be known before merging: wait for it when it has not loaded yet
+      opts.keep = () => (this._layout ? this._mergeKeepSelectors() : this._layoutReady.then(() => this._mergeKeepSelectors()));
+      opts.onMerged = () => this._modelMerged();
+      opts.reload = reload;
     }
     const prevModel = this._view.model;
     this._view.setModel(opts).then((err) => {
@@ -404,6 +408,34 @@ class Floorplan3dCard extends HTMLElement {
       this._schedule(); // the manifest arrived: rebuild
       if (this._editing) this._edit.onModelLoaded(this._view.model !== prevModel);
     });
+  }
+
+  // The model was merged after it was shown (the layout came later): index the merged tree, re-apply the view.
+  _modelMerged() {
+    const vw = this._view;
+    if (!vw.model) return;
+    if (this._index && this._built.viewManifest === vw.model.manifest) {
+      this._index = nodeIndex(threeAdapter(vw.model.root), vw.model.manifest);
+      this._viewStates = new Map();
+      const cur = this.currentView();
+      this._viewState = cur ? this._stateFor(cur) : null;
+      if (!this._floorOnly) this._applyViewVisibility();
+      this._applyMarkerStates();
+    }
+    if (this._editing) this._edit.render();
+    this._schedule();
+  }
+
+  // Layout node: rules that match nothing and were not known when the model was merged (an imported or
+  // later-loaded layout may target merged parts): load the model once more, merging around them.
+  _checkMergeKeep() {
+    const vw = this._view, ms = vw.mergeStats;
+    if (!vw.model || !ms || !ms.enabled || !ms.merged || !this._index || this._mergeReloadFor === vw.model.id) return;
+    const known = new Set(ms.keep);
+    const fresh = this._mergeKeepSelectors().filter((x) => x.startsWith('node:') && !known.has(x));
+    if (!fresh.length || !unmatchedSelectors(this._index, fresh.map((x) => ({ hide: x }))).length) return;
+    this._mergeReloadFor = vw.model.id;
+    this._loadModel(true);
   }
 
   // View rule selectors from the layout and the card YAML: their node: matches are not merged away.
@@ -506,6 +538,7 @@ class Floorplan3dCard extends HTMLElement {
       this._layout = await this._store.load(this._hass);
     } finally {
       this._loading = false;
+      this._layoutLoaded();
     }
     this._schedule();
   }
@@ -657,6 +690,7 @@ class Floorplan3dCard extends HTMLElement {
     const mb = this.modelBindings();
     this._mb = mb;
     const viewsChanged = this._resolveViewList(mb);
+    if (viewsChanged) this._checkMergeKeep();
     const viewsOnly = viewsChanged === 'views'; // only layout.views / view_order: no scene or marker rebuild
     let viewRefreshed = false;
     const mkIn = [mb, this._config, l.model];
