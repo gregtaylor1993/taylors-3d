@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findBlob, pixelToPlan, planToPixel, medianColor, imageScale } from '../src/mower-image.js';
+import { findBlob, pickBlob, stepTrack, headingMinStep, TRACK_MAX_MISSES, pixelToPlan, planToPixel, medianColor, imageScale } from '../src/mower-image.js';
 
 // synthetic RGBA image filled with one colour
 function image(w, h, bg = [30, 80, 30]) {
@@ -57,7 +57,7 @@ describe('findBlob', () => {
     const a = image(40, 30);
     rect(a, 40, 10, 5, 4, 4, RED);
     const b = findBlob(a, 40, 30, RED, 40);
-    expect(b).toEqual({ px: 12, py: 7, count: 16 });
+    expect(b).toEqual({ px: 12, py: 7, count: 16, matched: true });
   });
 
   it('returns null when nothing matches', () => {
@@ -77,23 +77,95 @@ describe('findBlob', () => {
     rect(a, 30, 5, 5, 1, 3, RED);
     expect(findBlob(a, 30, 30, RED, 40, { minPixels: 4 })).toBeNull();
     rect(a, 30, 20, 20, 2, 2, RED);
-    expect(findBlob(a, 30, 30, RED, 40, { minPixels: 4 })).toEqual({ px: 21, py: 21, count: 4 });
+    expect(findBlob(a, 30, 30, RED, 40, { minPixels: 4 })).toMatchObject({ px: 21, py: 21, count: 4 });
   });
 
-  it('picks the largest blob, or the one nearest prev when sizes are close', () => {
+  it('picks the largest blob without prev, the nearest size-matched one with prev', () => {
     const a = image(60, 40);
     rect(a, 60, 2, 2, 5, 5, RED); // 25 px
     rect(a, 60, 50, 30, 5, 5, RED); // 25 px
-    rect(a, 60, 30, 2, 2, 2, RED); // 4 px, too small to compete
-    const near = findBlob(a, 60, 40, RED, 40, { prev: { px: 50, py: 30 } });
-    expect(near).toEqual({ px: 52.5, py: 32.5, count: 25 });
-    const other = findBlob(a, 60, 40, RED, 40, { prev: { px: 0, py: 0 } });
-    expect(other).toEqual({ px: 4.5, py: 4.5, count: 25 });
-    // a much bigger blob wins even far from prev
-    rect(a, 60, 2, 2, 8, 8, RED); // 64 px
-    expect(findBlob(a, 60, 40, RED, 40, { prev: { px: 50, py: 30 } })).toMatchObject({ count: 64 });
+    rect(a, 60, 30, 2, 2, 2, RED); // 4 px, too small to match 25
+    expect(findBlob(a, 60, 40, RED, 40)).toMatchObject({ count: 25, matched: true });
+    const near = findBlob(a, 60, 40, RED, 40, { prev: { px: 50, py: 30, count: 25 } });
+    expect(near).toEqual({ px: 52.5, py: 32.5, count: 25, matched: true });
+    const other = findBlob(a, 60, 40, RED, 40, { prev: { px: 0, py: 0, count: 25 } });
+    expect(other).toEqual({ px: 4.5, py: 4.5, count: 25, matched: true });
+    // unknown count (right after the colour pick): the nearest of any size
+    expect(findBlob(a, 60, 40, RED, 40, { prev: { px: 31, py: 3 } })).toMatchObject({ count: 4, matched: true });
   });
 
+  it('a big static blob never wins over the small tracked one', () => {
+    let track = { px: 10.5, py: 30.5, count: 9, misses: 0 };
+    for (let step = 0; step < 6; step++) {
+      const a = image(80, 50);
+      rect(a, 80, 40, 2, 20, 20, RED); // 400 px legend swatch, static
+      const x = 9 + step * 4;
+      rect(a, 80, x, 29, 3, 3, RED); // 9 px mower, moving east
+      const b = findBlob(a, 80, 50, RED, 40, { prev: track });
+      const r = stepTrack(track, b);
+      expect(r.found).toBe(true);
+      expect(r.track.px).toBeCloseTo(x + 1.5, 9);
+      expect(r.track.count).toBe(9);
+      track = r.track;
+    }
+  });
+
+  it('falls back to the largest blob when none matches the tracked size', () => {
+    expect(pickBlob([{ px: 1, py: 1, count: 400 }, { px: 9, py: 9, count: 2 }], { px: 9, py: 9, count: 30 }))
+      .toEqual({ px: 1, py: 1, count: 400, matched: false });
+    expect(pickBlob([], { px: 0, py: 0, count: 5 })).toBeNull();
+  });
+});
+
+describe('stepTrack', () => {
+  it('a brief miss keeps the last position; the next frame prefers the size-matched blob near it', () => {
+    let track = { px: 10, py: 10, count: 20, misses: 0 };
+    // miss: only a big look-alike far away
+    let r = stepTrack(track, pickBlob([{ px: 70, py: 40, count: 300 }], track));
+    expect(r.found).toBe(false);
+    expect(r.track).toMatchObject({ px: 10, py: 10, count: 20, misses: 1 });
+    track = r.track;
+    // icon back, plus a same-size look-alike further away: the one near the last known position
+    r = stepTrack(track, pickBlob([{ px: 70, py: 40, count: 300 }, { px: 50, py: 5, count: 20 }, { px: 12, py: 11, count: 22 }], track));
+    expect(r.found).toBe(true);
+    expect(r.track).toEqual({ px: 12, py: 11, count: 22, misses: 0 });
+  });
+
+  it('nothing found counts as a miss and keeps the track', () => {
+    expect(stepTrack({ px: 1, py: 2, count: 9, misses: 0 }, null)).toEqual({ track: { px: 1, py: 2, count: 9, misses: 1 }, found: false });
+    expect(stepTrack(null, null)).toEqual({ track: null, found: false });
+  });
+
+  it(`re-anchors on the largest blob after ${TRACK_MAX_MISSES} unmatched frames in a row`, () => {
+    let track = { px: 10, py: 10, count: 20, misses: 0 };
+    const big = { px: 70, py: 40, count: 300 };
+    for (let i = 1; i < TRACK_MAX_MISSES; i++) {
+      const r = stepTrack(track, pickBlob([big], track));
+      expect(r.found).toBe(false);
+      track = r.track;
+    }
+    const r = stepTrack(track, pickBlob([big], track));
+    expect(r).toEqual({ track: { px: 70, py: 40, count: 300, misses: 0 }, found: true });
+  });
+
+  it('starts a track from the first blob', () => {
+    expect(stepTrack(null, { px: 3, py: 4, count: 7, matched: true })).toEqual({ track: { px: 3, py: 4, count: 7, misses: 0 }, found: true });
+  });
+});
+
+describe('headingMinStep', () => {
+  it('is 5 cm for gps / xy', () => {
+    expect(headingMinStep('gps', 30, 600)).toBe(0.05);
+    expect(headingMinStep('xy')).toBe(0.05);
+  });
+  it('is max(0.25 m, 3 metres-per-pixel) for the image source', () => {
+    expect(headingMinStep('image', 30, 600)).toBeCloseTo(0.25); // 5 cm/px -> 0.15
+    expect(headingMinStep('image', 40, 400)).toBeCloseTo(0.3); // 10 cm/px
+    expect(headingMinStep('image', 30, 0)).toBe(0.25);
+  });
+});
+
+describe('findBlob (cont.)', () => {
   it('uses 4-neighbour connectivity', () => {
     const a = image(10, 10);
     rect(a, 10, 1, 1, 2, 2, RED);

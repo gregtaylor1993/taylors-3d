@@ -17,13 +17,13 @@ import {
   defaultViewId, viewCut, orderViews, unmatchedSelectors, sectionPlane, sectionCamera, zoomToFor, roomAt, exteriorShown, cameraToCard, topCameraToCard,
 } from './views.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
-import { findBlob, pixelToPlan, readImagePixels } from './mower-image.js';
+import { findBlob, stepTrack, headingMinStep, pixelToPlan, readImagePixels, imagePixels } from './mower-image.js';
 import { ObjectLayer } from './objects/layer.js';
 import { bindObjects, effectiveGroups, nightFactor, sunVector, sunStrength, clampSunDir, screenByDistance, attachedPosition } from './objects/logic.js';
 import { moonPosition } from './sky.js';
 import { ObjectPopup, objectAction, actionTarget, toggleCall } from './objects/popup.js';
 
-const VERSION = '0.4.0';
+const VERSION = '0.4.1';
 const NONE = Object.freeze({}); // stable stand-in for a missing layout.objects / groups (binding cache key)
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LONG_PRESS_MS = 500;
@@ -853,22 +853,30 @@ class Floorplan3dCard extends HTMLElement {
     const ic = (cfg && cfg.source === 'image' && cfg.image) || null;
     const entity = ic && (ic.entity || (cfg.overlay && cfg.overlay.entity));
     if (!ic || !ic.color || !entity) return;
-    const url = overlayUrl(this._hass, entity, Date.now());
-    if (!url) return;
+    // the overlay just loaded this picture (< 1 s ago): read it instead of downloading it again
+    const plane = this._view && this._view.mapPlane, ov = plane && plane.userData.loaded;
+    const fresh = ov && ov.url === plane.userData.url && cfg.overlay && cfg.overlay.entity === entity && Date.now() - ov.at < 1000 ? ov.image : null;
+    const url = fresh ? null : overlayUrl(this._hass, entity, Date.now());
+    if (!fresh && !url) return;
     this._imageBusy = true;
     let result;
     try {
-      const img = await readImagePixels(url);
+      const img = fresh
+        ? imagePixels(fresh, fresh.naturalWidth || fresh.width, fresh.naturalHeight || fresh.height)
+        : await readImagePixels(url);
       const k = img.imgW / img.width; // sampled canvas -> image pixels
-      const sameColor = this._imageBlob && this._imageBlob.color === ic.color;
-      const prev = sameColor ? { px: this._imageBlob.px / k, py: this._imageBlob.py / k } : null;
-      const b = findBlob(img.data, img.width, img.height, ic.color, ic.tolerance ?? 40, { minPixels: ic.min_pixels ?? 4, prev });
-      if (b) {
-        this._imageBlob = { px: b.px * k, py: b.py * k, imgW: img.imgW, imgH: img.imgH, color: ic.color };
+      const old = this._imageBlob;
+      const sameColor = !!old && String(old.color) === String(ic.color);
+      const track = sameColor ? { px: old.px / k, py: old.py / k, count: old.count == null ? null : old.count / (k * k), misses: old.misses || 0 } : null;
+      const b = findBlob(img.data, img.width, img.height, ic.color, ic.tolerance ?? 40, { minPixels: ic.min_pixels ?? 4, prev: track });
+      const step = stepTrack(track, b);
+      if (step.found) {
+        this._imageBlob = { px: b.px * k, py: b.py * k, count: b.count * k * k, misses: 0, imgW: img.imgW, imgH: img.imgH, sampleW: img.width, color: ic.color };
         result = { count: b.count };
       } else {
         result = { missing: true };
         if (!sameColor) this._imageBlob = null; // a stale position of another colour would mislead
+        else this._imageBlob = { ...old, misses: step.track.misses }; // last known position, count kept
       }
     } catch (e) {
       console.warn('floorplan3d: could not read the mower map image', e);
@@ -887,18 +895,24 @@ class Floorplan3dCard extends HTMLElement {
     }
   }
 
-  // A bound mower object follows the live position; heading from the last real movement (> 5 cm).
+  // A bound mower object follows the live position; heading from the last real movement (> 5 cm;
+  // image source: > max(0.25 m, 3 map pixels), so detection noise never turns it).
   _poseMowerObject(p, floorId) {
     const layer = this._objects;
     if (!layer || !layer.mowerBound()) { this._mowerHeadFrom = null; layer && layer.setMowerPose(null); return; }
     if (!p) return;
     const from = this._mowerHeadFrom;
     if (!from) this._mowerHeadFrom = [p[0], p[1]];
-    else if (Math.hypot(p[0] - from[0], p[1] - from[1]) > 0.05) {
+    else if (Math.hypot(p[0] - from[0], p[1] - from[1]) > this._headingStep()) {
       this._mowerHeading = Math.atan2(p[1] - from[1], p[0] - from[0]);
       this._mowerHeadFrom = [p[0], p[1]];
     }
     layer.setMowerPose({ x: p[0], y: p[1], floorId, heading: this._mowerHeading });
+  }
+
+  _headingStep() {
+    const m = this._layout && this._layout.mower, b = this._imageBlob;
+    return headingMinStep(m && m.source, m && m.overlay && m.overlay.width, b && b.sampleW);
   }
 
   clearTrail() {
@@ -1705,7 +1719,7 @@ class Floorplan3dCard extends HTMLElement {
     else if (auto) {
       const c = this._hass && this._hass.config;
       const m = c ? moonPosition(now, Number(c.latitude), Number(c.longitude)) : null;
-      if (m) moonBody = { dir: sunVector(m.azimuth, m.elevation, north, rot), phase: m.phase, illumination: m.illumination };
+      if (m) moonBody = { dir: sunVector(m.azimuth, m.elevation, north, rot), phase: m.phase, illumination: m.illumination, latitude: Number(c.latitude) };
     }
     this._moonAt = now;
     v.setSkyBodies({ sun: sunBody, moon: moonBody, north: sunVector(0, 0, north, rot), on: this._config.sky_bodies !== false });

@@ -12,7 +12,7 @@ import { levelVisible, measuredElevations } from './bindings.js';
 import { buildManifest, threeAdapter } from './manifest.js';
 import { sectionLevels, unionBox, pivotCamera, rayPlaneY, orthoZoom, topZoom, nodeIndex, parseSelector, matches, viewTree, escapeName } from './views.js';
 import { mergeGroups, namedGroups, mergedName } from './merge.js';
-import { moonLight, domeRadius, SUN_MIN_Y, SUN_DISC_M, MOON_DISC_M } from './sky.js';
+import { moonLight, moonLitRight, domeRadius, SUN_MIN_Y, SUN_DISC_M, MOON_DISC_M } from './sky.js';
 import {
   castsShadow, shadowInfo, isCoplanarOverlay, depthRange, depthChanged, isOccluded, sunDirection, ghostMaterial, pickable,
 } from './render-rules.js';
@@ -33,6 +33,7 @@ const SHADOW_MESH_M = 30; // untagged models: meshes up to this size make the su
 const SHADOW_MARGIN_M = 4;
 const OCCLUSION_DELAY_MS = 150; // camera still this long -> occlusion pass
 const OCCLUSION_MAX = 300; // markers per pass
+const SKY_FRAME_MARGIN_M = 1; // top view: margin around a visible sun / moon disc
 const OCCLUSION_SLICE_MS = 8; // a pass yields (setTimeout) after this long
 const PICK_LINE_M = 0.02; // raycast threshold for lines / points (three's default is 1 m)
 
@@ -206,8 +207,8 @@ function getSunTexture() {
   return sunTexture;
 }
 
-// Moon disc (90 % of the canvas): lit part by illumination, lit on the right while waxing
-// (phase < 0.5, as seen from the northern hemisphere), the dark part faint.
+// Moon disc (90 % of the canvas): lit part by illumination, lit on the right when `waxing`
+// (see moonLitRight: waxing seen from the northern hemisphere), the dark part faint.
 export function drawMoon(g, size, illumination, waxing) {
   const r = size * 0.45, cx = size / 2, cy = size / 2;
   g.clearRect(0, 0, size, size);
@@ -877,12 +878,12 @@ export class FloorplanView {
   // Redraw the moon texture only when the shape changes visibly (texture upload, no shader change).
   _paintMoon(moon) {
     const tex = this.skySprites.moon.material.map, ill = Math.round((Number(moon.illumination) || 0) * 50) / 50;
-    const waxing = !((Number(moon.phase) || 0) > 0.5);
-    const key = ill + (waxing ? '+' : '-');
+    const right = moonLitRight(moon.phase, moon.latitude); // mirrored south of the equator
+    const key = ill + (right ? '+' : '-');
     if (key === this._moonKey) return;
     this._moonKey = key;
     const g = tex.image.getContext && tex.image.getContext('2d');
-    if (g) drawMoon(g, tex.image.width, ill, waxing);
+    if (g) drawMoon(g, tex.image.width, ill, right);
     tex.needsUpdate = true;
   }
 
@@ -900,7 +901,7 @@ export class FloorplanView {
   // Sun / moon on the dome (house centre + dir x radius) as world-size discs, hidden below the horizon
   // (sun < -2 deg, moon < 0); the ring and both discs need a model and sky_bodies.
   _placeSkyBodies() {
-    const d = this._dome, on = !!this.model && this._skyOn && !!d;
+    const d = this._dome, on = !!this.model && this._skyOn && !!d && !this.sectionClip; // the section's global plane would cut them
     const put = (sprite, body, minY, size) => {
       if (!sprite) return;
       const show = on && !!body && body.dir[1] > minY;
@@ -1055,6 +1056,7 @@ export class FloorplanView {
         plane.material.needsUpdate = true;
         if (old) old.dispose();
         plane.userData.aspect = tex.image.height / tex.image.width;
+        plane.userData.loaded = { url: o.url, image: tex.image, at: Date.now() };
         plane.scale.set(w, 1, w * plane.userData.aspect);
         plane.visible = this._shows(o.floorId);
         this.dirty = true;
@@ -1372,6 +1374,7 @@ export class FloorplanView {
       this.renderer.clippingPlanes = [];
     }
     this._sectionMaterials();
+    this._placeSkyBodies();
     this._applyFloorVisibility(); // the section is part of the shadow / occlusion signatures
     this.dirty = true;
   }
@@ -1701,9 +1704,14 @@ export class FloorplanView {
       });
     }
     if (box.isEmpty()) box.set(new THREE.Vector3(-5, 0, -5), new THREE.Vector3(5, 0, 5));
-    const d = this._dome;
-    if (this.mode === 'top' && d && this.model && this._skyOn) { // top view: the compass ring (sun / moon azimuth) in frame
-      box.union(new THREE.Box3(new THREE.Vector3(d.centre.x - d.radius, d.centre.y, d.centre.z - d.radius), new THREE.Vector3(d.centre.x + d.radius, d.centre.y, d.centre.z + d.radius)));
+    if (this.mode === 'top' && this.model && this._skyOn) { // top view: the house, plus a visible sun / moon disc (the ring may be cut)
+      this._placeSkyBodies();
+      for (const [s, disc] of [[this.skySprites.sun, SUN_DISC_M], [this.skySprites.moon, MOON_DISC_M]]) {
+        if (!s || !s.visible) continue;
+        const r = disc / 2 + SKY_FRAME_MARGIN_M;
+        box.expandByPoint(new THREE.Vector3(s.position.x - r, box.min.y, s.position.z - r));
+        box.expandByPoint(new THREE.Vector3(s.position.x + r, box.min.y, s.position.z + r));
+      }
     }
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());

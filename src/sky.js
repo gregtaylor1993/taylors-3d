@@ -72,3 +72,10 @@ export const SUN_MIN_Y = Math.sin(-2 * RAD);
 // World size of the discs on the dome (m).
 export const SUN_DISC_M = 1.6;
 export const MOON_DISC_M = 1.3;
+
+// Lit side of the moon disc: right while waxing (phase < 0.5) seen from the northern hemisphere,
+// mirrored south of the equator.
+export function moonLitRight(phase, latitude) {
+  const waxing = !((Number(phase) || 0) > 0.5);
+  return Number(latitude) < 0 ? !waxing : waxing;
+}

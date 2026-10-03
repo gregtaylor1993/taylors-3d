@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { moonPosition, moonLight, domeRadius, SUN_MIN_Y } from '../src/sky.js';
+import { moonPosition, moonLight, moonLitRight, domeRadius, SUN_MIN_Y } from '../src/sky.js';
 
 // Reference: suncalc's published test values (2013-03-05 UTC, 50.5 N, 30.5 E):
 // getMoonPosition azimuth -0.9783999522438226 rad (from south), altitude 0.014551482243892251 rad;
@@ -83,5 +83,15 @@ describe('dome', () => {
   });
   it('sun shows down to -2 deg', () => {
     expect(SUN_MIN_Y).toBeCloseTo(-0.0349, 4);
+  });
+});
+
+describe('moonLitRight', () => {
+  it('waxing is lit on the right in the north, on the left in the south', () => {
+    expect(moonLitRight(0.2, 52)).toBe(true);
+    expect(moonLitRight(0.8, 52)).toBe(false);
+    expect(moonLitRight(0.2, -34)).toBe(false);
+    expect(moonLitRight(0.8, -34)).toBe(true);
+    expect(moonLitRight(0.2)).toBe(true); // no latitude: northern view
   });
 });

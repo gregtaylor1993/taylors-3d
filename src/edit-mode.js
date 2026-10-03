@@ -574,6 +574,8 @@ export class EditMode {
       }
       const color = medianColor(img.data, img.width, img.height, px, py);
       this.message = null;
+      // start tracking at the clicked icon (not the largest blob of its colour)
+      this.card._imageBlob = { px: q.px, py: q.py, count: null, misses: 0, imgW: img.imgW, imgH: img.imgH, sampleW: img.width, color };
       this.setMower({ image: { tolerance: 40, min_pixels: 4, ...ic, color } });
     } catch (e) {
       console.warn('floorplan3d: could not read the mower map image', e);
