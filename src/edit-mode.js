@@ -6,7 +6,8 @@ import * as E from './editor.js';
 import { roomFloorId, LEVEL_SPACING } from './layout.js';
 import { pointInPolygon, signedArea } from './placement.js';
 import { buildMarkers, areaName } from './registry.js';
-import { readSource, calibrationError } from './mower.js';
+import { readSource, calibrationError, overlayUrl } from './mower.js';
+import { readImagePixels, planToPixel, medianColor } from './mower-image.js';
 import { ruleState, setRuleState, nextEyeState, viewTree, pickSelector, nextViewId, unmatchedSelectors, legacyShowRules,
   SECTION_DIRS, sectionDir, sectionPos, sectionAt, sectionRange, zoomToFor } from './views.js';
 import { levelsFromFloorMap } from './bindings.js';
@@ -50,6 +51,7 @@ export class EditMode {
     this._outlineModel = null;
     this.doorMode = false;
     this.calibrating = null; // { src } waiting for a click on the plan
+    this.colorPick = false; // waiting for a click on the mower icon in the map overlay
     this.overlayMove = false;
     this.drag = null;
     this.confirmDelete = false;
@@ -140,6 +142,7 @@ export class EditMode {
     this.picking = null;
     this.doorMode = false;
     this.calibrating = null;
+    this.colorPick = false;
     this.overlayMove = false;
     this.selectedRoom = null;
     this.selectedMarker = null;
@@ -202,6 +205,14 @@ export class EditMode {
   _click(e) {
     if (this.pivoting) {
       this._setPivot(e);
+      return;
+    }
+    if (this.colorPick) {
+      const p = this._planPoint(e, this.card._mowerFloor());
+      if (!p) return;
+      this.colorPick = false;
+      this._syncStageClasses();
+      this._pickMowerColor(p[0], p[1]);
       return;
     }
     if (this.calibrating) {
@@ -458,7 +469,8 @@ export class EditMode {
       } else return;
       e.preventDefault();
     } else if (e.key === 'Escape') {
-      if (this.doorMode) this.doorMode = false;
+      if (this.colorPick) this.colorPick = false;
+      else if (this.doorMode) this.doorMode = false;
       else if (this.selectedRoom) this.selectedRoom = null;
       else if (this.selectedMarker) this.selectMarker(null);
       this._syncStageClasses();
@@ -468,7 +480,7 @@ export class EditMode {
   }
 
   _syncStageClasses() {
-    this.card._stage.classList.toggle('drawing', !!this.drawing || !!this.picking || this.doorMode || !!this.calibrating || !!this.pivoting);
+    this.card._stage.classList.toggle('drawing', !!this.drawing || !!this.picking || this.doorMode || !!this.calibrating || this.colorPick || !!this.pivoting);
     this.view.setPivotMarker(!!this.card._editing && this.tab === 'views');
     this.card._stage.classList.toggle('moving', this.overlayMove);
     const picking = !!this.card._editing && (this.tab === 'model' || this.tab === 'views') && !!this.view.model;
@@ -516,8 +528,9 @@ export class EditMode {
   _mowerLiveHtml() {
     const m = this.mower();
     const st = m.entity && this.hass.states[m.entity];
-    if (!m.entity) return 'Pick the entity that reports the mower position.';
+    if (!m.entity) return m.source === 'image' ? 'Pick the mower entity: its marker follows the icon found on the map image.' : 'Pick the entity that reports the mower position.';
     if (!st) return `Entity <b>${esc(m.entity)}</b> not found.`;
+    if (m.source === 'image') return this._mowerImageHtml();
     const r = readSource(st, m);
     if (!r) return m.source === 'xy'
       ? `No numeric <b>${esc(m.x_attr || 'x')}</b> / <b>${esc(m.y_attr || 'y')}</b> attributes on ${esc(m.entity)}.`
@@ -526,6 +539,47 @@ export class EditMode {
     const raw = r.raw.map((v) => (m.source === 'xy' ? fmt(v) : v.toFixed(6))).join(', ');
     const plan = live && live.floorId ? `on plan (${fmt(live.x)}, ${fmt(live.y)})` : 'not on the plan yet: add a calibration point';
     return `Reading ${raw}<br>${plan}`;
+  }
+
+  _mowerImageHtml() {
+    const m = this.mower();
+    const ic = m.image || {};
+    if (!m.overlay || !m.overlay.entity) return 'Add the map overlay below and align it with the plan: that alignment is the calibration.';
+    if (!ic.color) return 'Pick the mower icon colour on the map (below).';
+    const r = this.card._imageResult;
+    const live = this.card._mowerLive;
+    if (r && r.error) return `<span style="color: var(--error-color, #db4437)">${esc(r.error)}</span>`;
+    if (r && r.missing) return 'Mower icon not found' + (live && live.floorId ? ` (last seen at ${fmt(live.x)}, ${fmt(live.y)})` : '') + '.';
+    if (r && live && live.floorId) return `Found at ${fmt(live.x)}, ${fmt(live.y)} (${r.count} px)`;
+    return 'Looking for the mower icon…';
+  }
+
+  // Colour under a plan point in the map image: median of the 5x5 pixels around it.
+  async _pickMowerColor(x, y) {
+    const m = this.mower();
+    const o = m.overlay;
+    const ic = m.image || {};
+    const entity = ic.entity || (o && o.entity);
+    const url = entity && overlayUrl(this.hass, entity, Date.now());
+    if (!url || !o) { this.message = { text: 'Set the map overlay first.', error: true }; this.render(); return; }
+    try {
+      const img = await readImagePixels(url);
+      const q = planToPixel(x, y, img.imgW, img.imgH, o);
+      const k = img.width / img.imgW;
+      const px = Math.floor(q.px * k), py = Math.floor(q.py * k);
+      if (px < 0 || py < 0 || px >= img.width || py >= img.height) {
+        this.message = { text: 'That point is outside the map image.', error: true };
+        this.render();
+        return;
+      }
+      const color = medianColor(img.data, img.width, img.height, px, py);
+      this.message = null;
+      this.setMower({ image: { tolerance: 40, min_pixels: 4, ...ic, color } });
+    } catch (e) {
+      console.warn('floorplan3d: could not read the mower map image', e);
+      this.message = { text: "Can't read the map image.", error: true };
+      this.render();
+    }
   }
 
   // ---------- overlay ----------
@@ -634,7 +688,7 @@ export class EditMode {
   markerDown(m, e) {
     if (e.button !== 0) return;
     e.stopPropagation();
-    if (this.drawing || this.doorMode || this.calibrating) return;
+    if (this.drawing || this.doorMode || this.calibrating || this.colorPick) return;
     if (m.id === this.card._mowerMarkerId) {
       this.selectMarker(m.id); // positioned live, nothing to drag
       return;
@@ -1077,8 +1131,9 @@ export class EditMode {
       <label>Entity <input list="fp-pos-ents" data-field="mower-entity" value="${esc(m.entity || '')}" placeholder="device_tracker.mower_position"></label>
       ${datalist('fp-pos-ents', posIds)}
       <label>Source <select data-field="mower-source">
-        <option value="gps" ${m.source !== 'xy' ? 'selected' : ''}>GPS (latitude / longitude)</option>
-        <option value="xy" ${m.source === 'xy' ? 'selected' : ''}>Map x / y attributes</option></select></label>
+        <option value="gps" ${m.source !== 'xy' && m.source !== 'image' ? 'selected' : ''}>GPS (latitude / longitude)</option>
+        <option value="xy" ${m.source === 'xy' ? 'selected' : ''}>Map x / y attributes</option>
+        <option value="image" ${m.source === 'image' ? 'selected' : ''}>Live map image (mower icon colour)</option></select></label>
       ${m.source === 'xy' ? `<div class="row"><label>x attribute <input data-field="mower-xattr" value="${esc(m.x_attr || 'x')}"></label>
         <label>y attribute <input data-field="mower-yattr" value="${esc(m.y_attr || 'y')}"></label></div>` : ''}
       <label>Floor <select data-field="mower-floor">${floorOpts}</select></label>
@@ -1086,7 +1141,37 @@ export class EditMode {
       <p class="hint mower-live">${this._mowerLiveHtml()}</p>`;
     if (!m.entity) return out;
 
-    out += `<div class="sub">Calibration (${cal.length} point${cal.length === 1 ? '' : 's'}${cal.length ? ': ' + fitName : ''})</div>`;
+    if (m.source !== 'image') out += this._calibrationHtml(m, cal, err, fitName);
+    else if (this.card._trail && this.card._trail.length) out += '<div class="row"><button data-act="trail-clear">Clear trail</button></div>';
+    out += this._overlayHtml(m, picIds, datalist);
+    if (m.source === 'image') out += this._mowerImageSection(m);
+    out += '<div class="row"><button data-act="mower-remove" class="danger">Remove mower</button></div>';
+    return out;
+  }
+
+  _mowerImageSection(m) {
+    const ic = m.image || {};
+    const o = m.overlay;
+    let out = '<div class="sub">Mower icon on the map</div>';
+    out += `<label>Image entity <input list="fp-pic-ents" data-field="mower-img-entity" value="${esc(ic.entity || '')}" placeholder="${esc((o && o.entity) || 'same as the overlay')}"></label>`;
+    if (this.colorPick) {
+      out += `<section class="box"><p>Click the mower icon on the map overlay. Esc cancels.</p>
+        <div class="row"><button data-act="img-pick-cancel">Cancel</button></div></section>`;
+    }
+    const sw = ic.color ? `<span class="swatch" style="display:inline-block;width:18px;height:18px;border-radius:4px;vertical-align:middle;border:1px solid var(--divider-color);background:rgb(${ic.color.map(Number).join(',')})"></span> rgb(${ic.color.join(', ')})` : '';
+    out += `<div class="row"><button data-act="img-pick" class="${ic.color || this.colorPick ? '' : 'primary'}" ${this.colorPick || !(o && o.entity) ? 'disabled' : ''}>Pick mower colour</button> ${sw}</div>`;
+    if (ic.color) {
+      const tol = ic.tolerance ?? 40;
+      out += `<label><span class="lab">Colour tolerance<span class="val" data-val="img-tolerance">${tol}</span></span>
+        <input type="range" data-field="mower-img-tolerance" min="0" max="255" step="1" value="${tol}"></label>`;
+    }
+    out += `<p class="hint">Align the map overlay with the plan first: the alignment maps image pixels to the plan, so no
+      calibration points are needed. Then pick the colour of the mower icon on the map.</p>`;
+    return out;
+  }
+
+  _calibrationHtml(m, cal, err, fitName) {
+    let out = `<div class="sub">Calibration (${cal.length} point${cal.length === 1 ? '' : 's'}${cal.length ? ': ' + fitName : ''})</div>`;
     if (this.calibrating) {
       out += `<section class="box"><p>Click on the plan where the mower is right now.</p>
         <div class="row"><button data-act="cal-cancel">Cancel</button></div></section>`;
@@ -1098,7 +1183,11 @@ export class EditMode {
       ${this.card._trail && this.card._trail.length ? '<button data-act="trail-clear">Clear trail</button>' : ''}</div>
       <p class="hint">"Add point" takes the current reading, then you click where the mower really is. One point aligns
       a GPS track north-up, two fix rotation and scale, three or more also correct skew. Spread points far apart.</p>`;
+    return out;
+  }
 
+  _overlayHtml(m, picIds, datalist) {
+    let out = '';
     const o = m.overlay;
     out += `<div class="sub">Map overlay</div>
       <label>Image or camera entity <input list="fp-pic-ents" data-field="ov-entity" value="${esc((o && o.entity) || '')}" placeholder="image.mower_map"></label>
@@ -1115,7 +1204,6 @@ export class EditMode {
       out += `<div class="row"><button data-act="ov-move" class="${this.overlayMove ? 'primary' : ''}">${this.overlayMove ? 'Drag the map on the plan…' : 'Move with mouse'}</button>
         <button data-act="ov-remove">Remove overlay</button></div>`;
     }
-    out += '<div class="row"><button data-act="mower-remove" class="danger">Remove mower</button></div>';
     return out;
   }
 
@@ -1882,16 +1970,23 @@ export class EditMode {
         break;
       }
       case 'cal-cancel': this.calibrating = null; break;
+      case 'img-pick':
+        this.colorPick = true;
+        this.calibrating = null;
+        this.overlayMove = false;
+        if (this.card._floor !== this.card._mowerFloor()) this.card._setFloor(this.card._mowerFloor());
+        break;
+      case 'img-pick-cancel': this.colorPick = false; break;
       case 'cal-del': this.setMower({ calibration: (this.mower().calibration || []).filter((_, i) => i !== Number(btn.dataset.i)) }); return;
       case 'trail-clear': this.card.clearTrail(); break;
-      case 'ov-move': this.overlayMove = !this.overlayMove; this.calibrating = null; break;
+      case 'ov-move': this.overlayMove = !this.overlayMove; this.calibrating = null; this.colorPick = false; break;
       case 'ov-remove': this.overlayMove = false; this.setMower({ overlay: null }); return;
       case 'model-fit': this.view.fit({ model: true }); return;
       case 'model-delete':
         if (!this.confirmModelDelete) { this.confirmModelDelete = true; break; }
         this._removeModel();
         return;
-      case 'mower-remove': this.calibrating = null; this.overlayMove = false; this.commit({ ...this.layout, mower: null }); this.render(); return;
+      case 'mower-remove': this.calibrating = null; this.colorPick = false; this.overlayMove = false; this.commit({ ...this.layout, mower: null }); this.render(); return;
       default: return;
     }
     this._syncStageClasses();
@@ -1947,6 +2042,14 @@ export class EditMode {
     } else if (f === 'mower-source') {
       // readings of the other kind cannot be mixed into the same calibration
       this.setMower({ source: el.value, calibration: [] });
+    } else if (f === 'mower-img-entity') {
+      const ic = { ...(this.mower().image || {}) };
+      const v = el.value.trim();
+      if (v) ic.entity = v;
+      else delete ic.entity;
+      this.setMower({ image: ic });
+    } else if (f === 'mower-img-tolerance') {
+      this.setMower({ image: { ...(this.mower().image || {}), tolerance: Math.max(0, Math.min(255, Number(el.value) || 0)) } });
     } else if (f === 'mower-xattr' || f === 'mower-yattr') {
       this.setMower({ [f === 'mower-xattr' ? 'x_attr' : 'y_attr']: el.value.trim() || (f === 'mower-xattr' ? 'x' : 'y') });
     } else if (f === 'mower-floor') {
@@ -2022,6 +2125,11 @@ export class EditMode {
         pos['xyz'.indexOf(key)] = v;
         this.setModelProps({ position: pos }, false);
       } else this.setModelProps({ [key]: v }, false);
+      return;
+    }
+    if (f === 'mower-img-tolerance') {
+      const label = this.panel.querySelector('[data-val="img-tolerance"]');
+      if (label) label.textContent = el.value;
       return;
     }
     if (!f || !f.startsWith('ov-') || el.type !== 'range') return;

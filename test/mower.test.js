@@ -136,6 +136,11 @@ describe('overlayUrl', () => {
     expect(overlayUrl(hass, 'image.map', 42)).toBe('http://ha.local:8123/api/image_proxy/image.map?token=abc&_t=42');
   });
 
+  it('leaves data: and blob: urls alone (no base, no cache busting)', () => {
+    const h = { ...hass, states: { 'image.d': { attributes: { entity_picture: 'data:image/png;base64,AAAA' } } } };
+    expect(overlayUrl(h, 'image.d', 42)).toBe('data:image/png;base64,AAAA');
+  });
+
   it('returns null without a picture', () => {
     expect(overlayUrl(hass, 'image.none')).toBeNull();
     expect(overlayUrl(hass, 'image.missing')).toBeNull();

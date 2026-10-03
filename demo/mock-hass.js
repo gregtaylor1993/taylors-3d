@@ -10,6 +10,28 @@ const areaFloor = {
   utility: 'ground', terrace: 'ground', garden: 'ground', garage: 'ground',
   kids_room: 'first', landing: 'first', office: 'first', master_bedroom: 'first', bathroom_2: 'first',
 };
+// Live map image like a robot mower integration renders it: the 9 x 17 m lawn of mower-map.svg
+// (50 px/m, centred on the garden) with the mower as a coloured dot. Aligned as the overlay at
+// (16.5, 1.5), width 9, the dot sits where the fake mower is.
+let liveCanvas = null;
+function liveMap(t) {
+  if (typeof document === 'undefined') return '';
+  const c = (liveCanvas = liveCanvas || Object.assign(document.createElement('canvas'), { width: 450, height: 850 }));
+  const g = c.getContext('2d');
+  g.fillStyle = '#1d3b1f';
+  g.fillRect(0, 0, 450, 850);
+  g.fillStyle = '#3f8f3a';
+  g.fillRect(25, 25, 400, 800);
+  g.fillStyle = '#58a852';
+  for (let y = 80; y < 825; y += 80) g.fillRect(25, y - 9, 400, 18);
+  g.fillStyle = '#f0f0f0';
+  g.fillRect(360, 770, 50, 40); // dock
+  g.fillStyle = '#ff3b30'; // the mower
+  g.beginPath();
+  g.arc(225 + 200 * Math.cos(t), 425 - 200 * Math.sin(t), 9, 0, Math.PI * 2);
+  g.fill();
+  return c.toDataURL('image/png');
+}
 const pretty = (id) => id.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 const areas = Object.fromEntries(Object.entries(areaFloor).map(([id, f]) => [id, { area_id: id, name: pretty(id), floor_id: f }]));
 
@@ -68,6 +90,7 @@ device('mower', 'Mower', 'garden', [
 ]);
 device('garden_cam', 'Garden camera', 'garden', [['camera.garden', 'idle']]);
 device('mower_map', 'Sunseeker map', 'garden', [['image.sunseeker_map', '2026-01-01T00:00:00+00:00', { entity_picture: '/demo/mower-map.svg' }]]);
+device('mower_live_map', 'Sunseeker live map', 'garden', [['image.sunseeker_live_map', '2026-01-01T00:00:00+00:00', { entity_picture: liveMap(0) }]]);
 device('garage_door', 'Garage door', 'garage', [['cover.garage', 'closed']]); // no room drawn: not shown
 
 device('kids_light', 'Kids light', 'kids_room', [light('light.kids', true, 90, [255, 120, 200])]);
@@ -154,7 +177,11 @@ export function createMockHass({ onChange }) {
     const lat = 45.0 + (Math.sin(t) * 4) / 111320;
     const lon = 10.0 + (Math.cos(t) * 4) / (111320 * Math.cos((45.0 * Math.PI) / 180));
     const s = current.states['device_tracker.sunseeker_position'];
-    update({ 'device_tracker.sunseeker_position': { ...s, attributes: { ...s.attributes, latitude: lat, longitude: lon } } });
+    const m = current.states['image.sunseeker_live_map'];
+    update({
+      'device_tracker.sunseeker_position': { ...s, attributes: { ...s.attributes, latitude: lat, longitude: lon } },
+      'image.sunseeker_live_map': { ...m, state: new Date().toISOString(), last_updated: new Date().toISOString(), attributes: { ...m.attributes, entity_picture: liveMap(t) } },
+    });
   }, 500);
 
   // headless checks: window.__setDemoSun(elevation, azimuth) adds / updates sun.sun

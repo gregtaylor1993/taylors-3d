@@ -153,6 +153,8 @@ for the format.
 Works with any entity that reports a position:
 - **GPS**: `latitude` / `longitude` attributes (device trackers), or a `"lat,lon"` state
 - **x / y**: map coordinates in two attributes, names configurable
+- **Live map image**: no position entity needed; the mower icon is found by its colour in the map
+  image or camera, and the map overlay alignment maps it onto the plan
 
 For the Sunseeker integration ([Sdahl1234/Sunseeker-lawn-mower](https://github.com/Sdahl1234/Sunseeker-lawn-mower)),
 pick the mower position entity with source GPS and the *Map* image entity (or *Live map* camera)
@@ -168,6 +170,24 @@ In the **Mower** tab:
    **Move with mouse**. Cameras refresh every N seconds; images when they change.
 
 The mower's own marker follows the live position and draws a trail for the current session.
+
+### Sunseeker without GPS (position from the live map image)
+
+Models without latitude / longitude still render a map with the mower on it. In the **Mower** tab:
+1. Pick the mower entity (e.g. its `lawn_mower.*` entity; its marker follows the detection) and
+   source **Live map image (mower icon colour)**.
+2. Add the *Live map* camera (or *Map* image) as overlay and line it up with the plan
+   (sliders or **Move with mouse**). This alignment is the calibration: no calibration points.
+3. Click **Pick mower colour**, then click the mower icon on the overlay (Esc cancels). The colour
+   (median of the 5×5 pixels around the click) is shown as a swatch; widen **Colour tolerance** if
+   the icon is shaded, narrow it if the lawn picks up matches.
+4. The tab shows "Found at x, y (N px)" or "Mower icon not found". The image is read on every
+   refresh (cameras: the overlay refresh interval, at least 2 s; images: when they change), only
+   while the card is visible. Optionally read a different image entity with the same geometry
+   (*Image entity*).
+
+The image must come from Home Assistant itself (same origin) so the card can read its pixels;
+otherwise the tab shows "Can't read the map image".
 
 A mower object in the 3D model (type `mower`) replaces the mower device's marker: the model itself drives
 around, turned to its direction of travel (`hints.front`: `+x` default, `-x`, `+z` or `-z` for the model's
@@ -360,4 +380,4 @@ operations), `src/edit-mode.js` (panel and plan interactions), `src/mower.js` (m
 - **A device is missing**: give it an area and draw that area's room, or check *Devices → Hidden*.
   Diagnostic and configuration entities are never shown.
 - **Mower not on the plan**: GPS sources need at least one calibration point; the Mower tab shows
-  the current reading.
+  the current reading. Live map image source: needs the overlay and a picked colour.

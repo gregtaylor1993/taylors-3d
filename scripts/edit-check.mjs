@@ -238,6 +238,45 @@ try {
   await panelClick('Drag the map on the plan…');
   await page.screenshot({ path: path.join(shots, 'edit-mower.png') });
 
+  // mower position from the live map image: the overlay alignment is the calibration
+  await ev('window.__demoMowerPaused = true');
+  await ev(`${card}._edit.commit({ ...${card}._edit.layout, mower: { ...${card}._edit.layout.mower, source: 'image', calibration: [],
+    overlay: { entity: 'image.sunseeker_live_map', x: 16.5, y: 1.5, rotation: 0, width: 9, opacity: 0.55, refresh: 10 } } })`);
+  await ev(`${card}._edit.render()`);
+  await sleep(300);
+  // where the fake mower is: its gps reading through the demo calibration (garden centre, north up)
+  const mowerAt = () => ev(`(() => { const a = ${card}.hass.states['device_tracker.sunseeker_position'].attributes;
+    return [16.5 + (a.longitude - 10) * 111320 * Math.cos(45 * Math.PI / 180), 1.5 + (a.latitude - 45) * 111320]; })()`);
+  const liveNear = (q, tol = 0.3) => `(() => { const c = ${card}, l = c._mowerLive; if (!l || !l.floorId) return false;
+    if (Math.hypot(l.x - ${q[0]}, l.y - ${q[1]}) > ${tol}) return false;
+    const p = c._mowerMarkerId && c._positions.get(c._mowerMarkerId);
+    return !c._mowerMarkerId || (!!p && Math.hypot(p.x - l.x, p.y - l.y) < 1e-9); })()`;
+  check('image source hides Add point', !(await ev(`[...${card}.shadowRoot.querySelectorAll('.panel button')].some((b) => b.textContent.trim() === 'Add point')`)));
+  check('pick mower colour armed', (await panelClick('Pick mower colour')) && (await ev(`${card}._edit.colorPick`)) === true);
+  await page.keyboard.press('Escape');
+  await sleep(100);
+  check('Esc cancels colour pick', (await ev(`${card}._edit.colorPick`)) === false);
+  await panelClick('Pick mower colour');
+  let q = await mowerAt();
+  await click(q[0], q[1]);
+  await page.waitForFunction(`!!(${card}._layout.mower.image && ${card}._layout.mower.image.color)`, { timeout: 10000 }).catch(() => {});
+  const col = (await layout()).mower.image && (await layout()).mower.image.color;
+  check('mower colour picked from the map image', !!col && col[0] > 200 && col[1] < 120 && col[2] < 120, JSON.stringify(col));
+  check('mower found on the map image', await page.waitForFunction(liveNear(q), { timeout: 15000 }).then(() => true, () => false),
+    JSON.stringify({ want: q, live: await ev(`${card}._mowerLive`) }));
+  await ev('window.__demoMowerPaused = false');
+  await sleep(2500);
+  await ev('window.__demoMowerPaused = true');
+  await sleep(600); // the last tick lands
+  const q2 = await mowerAt();
+  const moved = Math.hypot(q2[0] - q[0], q2[1] - q[1]);
+  check('mower follows the dot on the map image', moved > 0.5 && await page.waitForFunction(liveNear(q2), { timeout: 15000 }).then(() => true, () => false),
+    JSON.stringify({ moved, want: q2, live: await ev(`${card}._mowerLive`) }));
+  check('mower tab shows the detection', /Found at [\d.-]+, [\d.-]+ \(\d+ px\)/.test(await ev(`${card}.shadowRoot.querySelector(".mower-live").textContent`)),
+    await ev(`${card}.shadowRoot.querySelector(".mower-live").textContent`));
+  await page.screenshot({ path: path.join(shots, 'edit-mower-image.png') });
+  await ev('window.__demoMowerPaused = false');
+
   // leave edit mode: markers behave as in view mode again
   await ev(`${card}.shadowRoot.querySelector("button.edit").click()`);
   await sleep(200);

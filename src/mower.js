@@ -110,6 +110,7 @@ function solve3(A, b) {
 export function overlayUrl(hass, entityId, bust) {
   const st = hass && hass.states[entityId];
   if (!st || !st.attributes.entity_picture) return null;
+  if (/^(data|blob):/.test(st.attributes.entity_picture)) return st.attributes.entity_picture; // immutable, no base
   const url = hass.hassUrl ? hass.hassUrl(st.attributes.entity_picture) : st.attributes.entity_picture;
   if (!bust) return url;
   return url + (url.includes('?') ? '&' : '?') + '_t=' + bust;

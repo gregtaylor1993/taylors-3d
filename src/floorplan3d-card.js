@@ -17,6 +17,7 @@ import {
   defaultViewId, viewCut, orderViews, unmatchedSelectors, sectionPlane, sectionCamera, zoomToFor, roomAt, exteriorShown, cameraToCard, topCameraToCard,
 } from './views.js';
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
+import { findBlob, pixelToPlan, readImagePixels } from './mower-image.js';
 import { ObjectLayer } from './objects/layer.js';
 import { bindObjects, effectiveGroups, nightFactor, sunVector, sunStrength, clampSunDir, screenByDistance, attachedPosition } from './objects/logic.js';
 import { moonPosition } from './sky.js';
@@ -539,6 +540,7 @@ class Floorplan3dCard extends HTMLElement {
     clearInterval(this._skyTimer);
     this._skyTimer = null;
     this._setCameraTimer(0);
+    this._setImageTimer(0);
   }
 
   async _load() {
@@ -763,11 +765,19 @@ class Floorplan3dCard extends HTMLElement {
       this._view.setTrail(null);
       this._view.setMapOverlay(null);
       this._setCameraTimer(0);
+      this._setImageTimer(0);
       return;
     }
     const floorId = this._mowerFloor();
-    const reading = readSource(this._hass.states[cfg.entity], cfg);
-    const p = reading && this._mowerFn ? this._mowerFn(reading) : null;
+    let reading = null, p;
+    if (cfg.source === 'image') p = this._imageMowerPos(cfg);
+    else {
+      this._setImageTimer(0);
+      this._imageBlob = null;
+      this._imageResult = null;
+      reading = readSource(this._hass.states[cfg.entity], cfg);
+      p = reading && this._mowerFn ? this._mowerFn(reading) : null;
+    }
     this._mowerLive = p ? { x: p[0], y: p[1], floorId, reading } : (reading ? { reading } : null);
     this._poseMowerObject(p, floorId);
     this._refreshAttached(); // markers attached to the mower ride along
@@ -798,6 +808,83 @@ class Floorplan3dCard extends HTMLElement {
       this._view.setTrail(null);
     }
     this._refreshMapOverlay();
+  }
+
+  // ---------- mower position from the live map image ----------
+  // The last detected icon pixel mapped through the current overlay alignment; schedules detection
+  // when the image changes (image entities) and every refresh interval (cameras, and as a fallback).
+  _imageMowerPos(cfg) {
+    const ic = cfg.image || {};
+    const entity = ic.entity || (cfg.overlay && cfg.overlay.entity);
+    const st = entity && this._hass.states[entity];
+    const ready = !!(st && ic.color && cfg.overlay);
+    this._setImageTimer(ready ? Math.max(2, Number(cfg.overlay.refresh) || 10) : 0);
+    if (!ready) {
+      this._imageBlob = null;
+      this._imageResult = !st ? { error: entity ? `Map image ${entity} not found.` : 'Set the map overlay first.' } : null;
+      return null;
+    }
+    const key = [entity, st.last_updated, st.state, ic.color.join(','), ic.tolerance, ic.min_pixels].join('|');
+    if (key !== this._imageKey) {
+      this._imageKey = key;
+      this._detectMower();
+    }
+    const b = this._imageBlob;
+    if (!b) return null;
+    const q = pixelToPlan(b.px, b.py, b.imgW, b.imgH, cfg.overlay);
+    return [q.x, q.y];
+  }
+
+  _setImageTimer(seconds) {
+    if (!this.isConnected) seconds = 0;
+    if (this._imageTimerSec === seconds) return;
+    clearInterval(this._imageTimer);
+    this._imageTimerSec = seconds;
+    this._imageTimer = seconds ? setInterval(() => this._detectMower(), seconds * 1000) : null;
+  }
+
+  // Read the map image, find the icon colour, store the pixel. Async (fetch + createImageBitmap),
+  // one run at a time; skipped while disconnected or the tab is hidden.
+  async _detectMower() {
+    if (!this.isConnected || !this._hass || !this._layout) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    if (this._imageBusy) { this._imageAgain = true; return; }
+    const cfg = this._layout.mower;
+    const ic = (cfg && cfg.source === 'image' && cfg.image) || null;
+    const entity = ic && (ic.entity || (cfg.overlay && cfg.overlay.entity));
+    if (!ic || !ic.color || !entity) return;
+    const url = overlayUrl(this._hass, entity, Date.now());
+    if (!url) return;
+    this._imageBusy = true;
+    let result;
+    try {
+      const img = await readImagePixels(url);
+      const k = img.imgW / img.width; // sampled canvas -> image pixels
+      const sameColor = this._imageBlob && this._imageBlob.color === ic.color;
+      const prev = sameColor ? { px: this._imageBlob.px / k, py: this._imageBlob.py / k } : null;
+      const b = findBlob(img.data, img.width, img.height, ic.color, ic.tolerance ?? 40, { minPixels: ic.min_pixels ?? 4, prev });
+      if (b) {
+        this._imageBlob = { px: b.px * k, py: b.py * k, imgW: img.imgW, imgH: img.imgH, color: ic.color };
+        result = { count: b.count };
+      } else {
+        result = { missing: true };
+        if (!sameColor) this._imageBlob = null; // a stale position of another colour would mislead
+      }
+    } catch (e) {
+      console.warn('floorplan3d: could not read the mower map image', e);
+      result = { error: "Can't read the map image." };
+    } finally {
+      this._imageBusy = false;
+    }
+    const now = this._layout && this._layout.mower;
+    if (!now || now.source !== 'image') return;
+    this._imageResult = result;
+    if (this._view) this._refreshMower(false);
+    if (this._editing && this._edit) this._edit.onStates();
+    if (this._imageAgain) {
+      this._imageAgain = false;
+      this._detectMower();
+    }
   }
 
   // A bound mower object follows the live position; heading from the last real movement (> 5 cm).
