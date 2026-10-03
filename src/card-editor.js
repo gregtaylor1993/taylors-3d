@@ -1,7 +1,7 @@
 // Visual editor for the card options (Lovelace "Show visual editor"), built on HA's ha-form.
 // Rooms, devices, mower and model are edited on the card itself (its Edit button).
 
-const DEFAULTS = { layout_key: 'default', height: '520px', group_by: 'device', wall_height: 1.0, view: '3d', room_labels: 'size', zoom_to: 'center', occlusion: true, lights: 'auto', merge: true };
+const DEFAULTS = { layout_key: 'default', height: '520px', group_by: 'device', wall_height: 1.0, view: '3d', room_labels: 'size', zoom_to: 'center', occlusion: true, lights: 'auto', merge: true, sky_bodies: true };
 
 export const SCHEMA = [
   { name: 'height', selector: { text: {} } },
@@ -18,6 +18,7 @@ export const SCHEMA = [
   },
   { name: 'occlusion', selector: { boolean: {} } },
   { name: 'merge', selector: { boolean: {} } },
+  { name: 'sky_bodies', selector: { boolean: {} } },
   { name: 'layout_key', selector: { text: {} } },
   {
     type: 'expandable', name: '', title: 'Model from a URL (instead of uploading in the card)', schema: [
@@ -40,6 +41,7 @@ const LABELS = {
   wall_height: 'Cut-away wall height',
   occlusion: 'Dim markers behind walls',
   merge: 'Merge model parts (faster)',
+  sky_bodies: 'Sun and moon in the sky',
   group_by: 'Markers',
   room_labels: 'Room labels',
   zoom_to: 'Zoom towards',
@@ -56,6 +58,7 @@ const HELPERS = {
   wall_height: 'Drawn walls only; a model is cut at the top of the storey',
   occlusion: 'With a 3D model: markers hidden by a wall from the current angle are shown faint',
   merge: 'With a 3D model: static parts of a room / layer with the same material are drawn as one (fewer draw calls). Turn off to keep every part separate.',
+  sky_bodies: 'With a 3D model: show the sun and the moon (position and phase from your Home Assistant location)',
   floor: 'Empty: the first floor that has rooms',
   zoom_to: 'Centre: zoom and rotate around the view\'s rotation centre (Edit → Views)',
   lights: 'With a 3D model: lamps light the house (auto) or only glow (off)',

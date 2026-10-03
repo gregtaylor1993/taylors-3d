@@ -23,6 +23,9 @@ position over its map.
 - Day / Night button cycles Auto, Day, Night (remembered per device). Auto follows `sun.sun`: the
   sun's light and shadows point where the real sun is (using the model's `north`), and the house
   darkens smoothly through dusk; without `sun.sun` it stays Day
+- Sun and moon in the sky (3D view with a model): the sun where `sun.sun` puts it, the moon from
+  your Home Assistant location (`latitude` / `longitude`) with its current phase, and faint cool
+  moonlight on moonlit nights
 - Model objects are the controls: lamps glow and really light rooms and the facade (night is dark,
   the lamps carry it), tap a lamp to toggle it, hold it for brightness and colour; the mower model
   drives on the plan, the dock, EV charger and climate units show their state. Objects bind to
@@ -70,6 +73,7 @@ The options below can be set in the visual editor or in YAML.
 | `wall_height` | `1.0` | Height of the cut-away drawn walls in metres (rooms drawn on the card; a model is cut at its storey height instead). |
 | `occlusion` | `true` | With a model: markers hidden behind a wall from the current camera angle are shown faint (25 %) and can't be tapped; in edit mode they stay half visible and draggable. Checked once the camera has been still for 150 ms; not in top view. `false` turns it off. |
 | `merge` | `true` | With a model: static parts that share a room / zone / level / layer group and a material are merged into one mesh when the model loads (far fewer draw calls; Edit → Model shows "Draw calls: before → after"). Objects, glass and other transparent parts, `<room>_floor` pieces and parts named by a `node:` view rule stay separate. `false` keeps every part (reloads the model). |
+| `sky_bodies` | `true` | With a model: sun and moon discs in the 3D sky (moon position and phase from the HA location) and faint moonlight at night. `false` hides both discs. |
 | `view` | `3d` | Start in `3d` or `top` view. |
 | `floor` | first floor with rooms | Floor id (or view id) to show first, or `all`. |
 | `view_id` | | View to show first (with a model: a view id such as `ground`). Wins over `floor`. |
@@ -219,6 +223,14 @@ has no marker: the object is the control.
 - **Day / Night:** the toolbar button cycles Auto, Day, Night. Auto follows `sun.sun`: by night
   the house is nearly dark and the lamps carry the scene; the sun's direction and shadows follow
   the real sun.
+- **Sun and moon:** with a model the 3D view shows the sun (down to just below the horizon) and
+  the moon (while above it) as small discs in the sky, about 2.5° across. Auto: the sun from
+  `sun.sun`, the moon computed in the browser from the HA location (`hass.config.latitude` /
+  `longitude`, low-precision formulas, well under 1° off) every 60 s, with the lit part by its
+  illumination, lit on the right while waxing. At night (night factor > 0.5) a moon above the
+  horizon adds a faint shadowless light from its direction (0.05 + 0.15 × illumination). Manual
+  Day shows the sun at azimuth 200°, 40° high; manual Night a moon at 160°, 35° high, 80 % lit.
+  Both use the model's `north` and alignment rotation. Not in top view. `sky_bodies: false` hides both.
 - **Tap** a lamp to toggle it, **hold** (500 ms) for a small popup: on / off, brightness, colour,
   and for grouped fixtures the group controller and why a lamp is dark ("Facade switch is off").
   Esc or a tap outside closes it. Taps near an object (30 px, 52 px on touch) hit the object

@@ -12,6 +12,7 @@ import { levelVisible, measuredElevations } from './bindings.js';
 import { buildManifest, threeAdapter } from './manifest.js';
 import { sectionLevels, unionBox, pivotCamera, rayPlaneY, orthoZoom, topZoom, nodeIndex, parseSelector, matches, viewTree, escapeName } from './views.js';
 import { mergeGroups, namedGroups, mergedName } from './merge.js';
+import { moonLight, skyDistance, bodyScale, SUN_MIN_Y } from './sky.js';
 import {
   castsShadow, shadowInfo, isCoplanarOverlay, depthRange, depthChanged, isOccluded, sunDirection, ghostMaterial, pickable,
 } from './render-rules.js';
@@ -183,6 +184,49 @@ function getGlowTexture() {
   return glowTexture;
 }
 
+// Sun sprite texture: warm disc (half the sprite) in a soft glow.
+let sunTexture = null;
+function getSunTexture() {
+  if (sunTexture) return sunTexture;
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  if (g) {
+    const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    grad.addColorStop(0, 'rgba(255,252,236,1)');
+    grad.addColorStop(0.42, 'rgba(255,240,196,1)');
+    grad.addColorStop(0.5, 'rgba(255,214,140,0.55)');
+    grad.addColorStop(0.7, 'rgba(255,190,110,0.18)');
+    grad.addColorStop(1, 'rgba(255,180,100,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 128, 128);
+  }
+  sunTexture = new THREE.CanvasTexture(c);
+  sunTexture.colorSpace = THREE.SRGBColorSpace;
+  return sunTexture;
+}
+
+// Moon disc (90 % of the canvas): lit part by illumination, lit on the right while waxing
+// (phase < 0.5, as seen from the northern hemisphere), the dark part faint.
+export function drawMoon(g, size, illumination, waxing) {
+  const r = size * 0.45, cx = size / 2, cy = size / 2;
+  g.clearRect(0, 0, size, size);
+  g.fillStyle = 'rgba(120,135,170,0.22)';
+  g.beginPath();
+  g.arc(cx, cy, r, 0, Math.PI * 2);
+  g.fill();
+  const k = Math.max(0, Math.min(1, illumination));
+  if (k < 0.01) return;
+  const side = waxing ? 1 : -1, ex = r * Math.abs(1 - 2 * k);
+  g.fillStyle = 'rgba(236,240,250,1)';
+  g.beginPath();
+  // lit limb: half circle on the lit side, back along the terminator (an ellipse)
+  g.arc(cx, cy, r, -Math.PI / 2, Math.PI / 2, side < 0);
+  g.ellipse(cx, cy, ex, r, 0, Math.PI / 2, -Math.PI / 2, (k > 0.5) === (side < 0));
+  g.closePath();
+  g.fill();
+}
+
 export class FloorplanView {
   constructor(container) {
     this.container = container;
@@ -205,6 +249,16 @@ export class FloorplanView {
     this.sun = new THREE.DirectionalLight(0xffffff, 1.4);
     this.sun.position.set(-12, 30, 18);
     this.scene.add(this.hemi, this.sun, this.sun.target);
+    // faint moonlight: always in the scene (a light added later recompiles every shader), 0 by day
+    this.moonLight = new THREE.DirectionalLight(0xa8bcff, 0);
+    this.moonLight.castShadow = false;
+    this.scene.add(this.moonLight, this.moonLight.target);
+    this.skyGroup = new THREE.Group(); // sun / moon sprites (not in the model: never merged)
+    this.skyGroup.userData.helper = true;
+    this.scene.add(this.skyGroup);
+    this.skyBodies = { sun: null, moon: null }; // { dir: [x, y, z] world, phase?, illumination? }
+    this.skySprites = { sun: null, moon: null };
+    this._moonKey = null;
     this.daylight = true;
     this.sky = { night: 0, sunDir: null, sun: 1 };
 
@@ -587,6 +641,7 @@ export class FloorplanView {
   // Caches that hold model meshes, after a merge on a placed model.
   _afterMerge() {
     this._occBoxes = null;
+    this._applyFloorVisibility(); // floor-only mode covers the merged meshes too
     this._bounds = this._sceneBounds();
     this._fitShadow();
     this._shadowDirty();
@@ -745,8 +800,79 @@ export class FloorplanView {
     hemi.intensity = 0.9 + (0.14 - 0.9) * t;
     sun.color.setHex(0xfff0dc);
     sun.intensity = 2.6 * (1 - t) * (this.sky.sun ?? 1);
+    this._applyMoonLight();
     const day = new THREE.Color(0x2a2d30), night = new THREE.Color(0x0e0f10);
     this.renderer.setClearColor(day.lerp(night, t), 1);
+  }
+
+  // Sun / moon sprites: { sun: { dir } | null, moon: { dir, phase, illumination } | null } (world unit
+  // vectors). Shown with a model in the 3D view; the sun down to just below the horizon, the moon above it.
+  setSkyBodies({ sun = null, moon = null } = {}) {
+    this.skyBodies = { sun: sun && sun.dir ? sun : null, moon: moon && moon.dir ? moon : null };
+    if (this.skyBodies.sun && !this.skySprites.sun) this.skySprites.sun = this._skySprite(getSunTexture());
+    if (this.skyBodies.moon) {
+      if (!this.skySprites.moon) {
+        const c = document.createElement('canvas');
+        c.width = c.height = 64;
+        const tex = new THREE.CanvasTexture(c);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        this.skySprites.moon = this._skySprite(tex);
+      }
+      this._paintMoon(this.skyBodies.moon);
+    }
+    if (this.model) this._applyMoonLight();
+    this.dirty = true;
+  }
+
+  _skySprite(map) {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map, transparent: true, depthWrite: false, toneMapped: false, fog: false }));
+    s.renderOrder = -10;
+    s.castShadow = s.receiveShadow = false;
+    s.frustumCulled = false; // placed per frame
+    s.visible = false;
+    s.userData.helper = true;
+    s.raycast = () => {}; // never picked
+    this.skyGroup.add(s);
+    return s;
+  }
+
+  // Redraw the moon texture only when the shape changes visibly (texture upload, no shader change).
+  _paintMoon(moon) {
+    const tex = this.skySprites.moon.material.map, ill = Math.round((Number(moon.illumination) || 0) * 50) / 50;
+    const waxing = !((Number(moon.phase) || 0) > 0.5);
+    const key = ill + (waxing ? '+' : '-');
+    if (key === this._moonKey) return;
+    this._moonKey = key;
+    const g = tex.image.getContext && tex.image.getContext('2d');
+    if (g) drawMoon(g, tex.image.width, ill, waxing);
+    tex.needsUpdate = true;
+  }
+
+  _applyMoonLight() {
+    const l = this.moonLight, moon = this.skyBodies.moon;
+    l.intensity = this.model ? moonLight(this.sky.night, moon) : 0;
+    if (l.intensity > 0 && this._shadowBox) {
+      const { centre, radius } = this._shadowBox;
+      l.target.position.copy(centre);
+      l.position.copy(centre).addScaledVector(new THREE.Vector3(...moon.dir), radius * 2.5);
+      l.target.updateMatrixWorld();
+    }
+  }
+
+  // Each frame (before rendering): sprites along their direction from the camera at 0.8 x far, so
+  // they look infinitely far and are never cut by the far plane; ~2.5 degrees of view.
+  _placeSkyBodies() {
+    const cam = this.camera, on = !!this.model && cam === this.persp, dist = skyDistance(cam.far);
+    const put = (sprite, body, minY, k) => {
+      if (!sprite) return;
+      const show = on && !!body && body.dir[1] > minY;
+      sprite.visible = show;
+      if (!show) return;
+      sprite.position.copy(cam.position).addScaledVector(new THREE.Vector3(...body.dir).normalize(), dist);
+      sprite.scale.setScalar(bodyScale(dist) * k);
+    };
+    put(this.skySprites.sun, this.skyBodies.sun, SUN_MIN_Y, 2); // disc = half the sprite
+    put(this.skySprites.moon, this.skyBodies.moon, 0, 1 / 0.9);
   }
 
   // Renderer, light and shadow settings for model / no model and day / night.
@@ -777,6 +903,7 @@ export class FloorplanView {
       sun.color.setHex(0xffffff);
       sun.intensity = day ? 1.4 : 0;
       sun.castShadow = false;
+      this.moonLight.intensity = 0;
       sun.position.set(-12, 30, 18);
       sun.target.position.set(0, 0, 0);
     }
@@ -810,6 +937,8 @@ export class FloorplanView {
     box.expandByScalar(SHADOW_MARGIN_M);
     const centre = box.getCenter(new THREE.Vector3());
     const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 1);
+    this._shadowBox = { centre: centre.clone(), radius };
+    this._applyMoonLight();
     const dir = new THREE.Vector3(...(this.sky.sunDir || sunDirection(this.model.north, this.modelGroup.rotation.y)));
     sun.target.position.copy(centre);
     sun.position.copy(centre).addScaledVector(dir, radius * 2.5);
@@ -1814,6 +1943,7 @@ export class FloorplanView {
       this.dirty = false;
       this.stats.frames++;
       this._updateDepth();
+      this._placeSkyBodies();
       this.labelRenderer.domElement.classList.toggle('compact', this.pixelsPerMetre() < COMPACT_PPM);
       this.renderer.render(this.scene, this.camera);
       this.labelRenderer.render(this.scene, this.camera);
@@ -1861,6 +1991,12 @@ export class FloorplanView {
     this.onObjectsInvalidate = null;
     this.setMapOverlay(null);
     this.setTrail(null);
+    for (const s of Object.values(this.skySprites)) {
+      if (!s) continue;
+      if (s.material.map !== sunTexture) s.material.map.dispose();
+      s.material.dispose();
+    }
+    this.skySprites = { sun: null, moon: null };
     this.markerObjects.clear();
     this.glows.clear();
     this.cssObjects = [];

@@ -117,6 +117,7 @@ export function createMockHass({ onChange }) {
   const make = (st) => ({
     states: st, entities, devices, areas, floors,
     user: { name: 'Demo', is_admin: true },
+    config: { latitude: 52.0, longitude: 5.0, time_zone: 'UTC' }, // generic location (moon position)
     language: 'en',
     hassUrl: (p) => p,
     fetchWithAuth,

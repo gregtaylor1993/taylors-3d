@@ -19,12 +19,16 @@ import {
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 import { ObjectLayer } from './objects/layer.js';
 import { bindObjects, effectiveGroups, nightFactor, sunVector, sunStrength, clampSunDir, screenByDistance, attachedPosition } from './objects/logic.js';
+import { moonPosition } from './sky.js';
 import { ObjectPopup, objectAction, actionTarget, toggleCall } from './objects/popup.js';
 
 const VERSION = '0.4.0';
 const NONE = Object.freeze({}); // stable stand-in for a missing layout.objects / groups (binding cache key)
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LONG_PRESS_MS = 500;
+const MOON_EVERY_MS = 60000;
+const DAY_SUN = [200, 40]; // manual Day: sun azimuth / elevation (deg)
+const NIGHT_MOON = [160, 35]; // manual Night: moon azimuth / elevation
 const CLICK_SLOP_PX = 5;
 const OBJECT_HIT_PX = { touch: 52, mouse: 30 };
 const TRAIL_STEP_M = 0.15;
@@ -347,6 +351,7 @@ class Floorplan3dCard extends HTMLElement {
     if (this.isConnected && !this._view) this.connectedCallback();
     else if (this._view) {
       this._view.setOcclusion(this._config.occlusion !== false);
+      if (this._view.model) this._applySky(true); // sky_bodies
       this._applyZoomTo();
       this._loadModel();
       this._updateObjects(); // lights: auto | off
@@ -518,6 +523,8 @@ class Floorplan3dCard extends HTMLElement {
     if (!this._view) this._render();
     else if (this._editing) this._edit.attach();
     this._view.start();
+    clearInterval(this._skyTimer);
+    this._skyTimer = setInterval(() => this._applySky(false), MOON_EVERY_MS); // the moon moves without hass updates
     this._ro = new ResizeObserver(() => this._resize());
     this._ro.observe(this._stage);
     this._schedule();
@@ -529,6 +536,8 @@ class Floorplan3dCard extends HTMLElement {
     if (this._popup) this._popup.close(); // window listeners
     if (this._editing && this._edit) this._edit.detach(); // window listeners (keys, pick menu)
     if (this._ro) this._ro.disconnect();
+    clearInterval(this._skyTimer);
+    this._skyTimer = null;
     this._setCameraTimer(0);
   }
 
@@ -1576,25 +1585,51 @@ class Floorplan3dCard extends HTMLElement {
   }
 
   // Auto reads sun.sun; setSky only when night moved > 0.01 or the sun > 1 degree since the last call.
+  // Sun / moon sprites: with the sun change, else the moon at most every 60 s (option sky_bodies).
   _applySky(force) {
     const v = this._view;
     if (!v || !v.model) return;
-    let sky = { night: 0, sunDir: null };
+    const north = v.model.north || 0, rot = this._modelAlign().rotation || 0;
+    let sky = { night: 0, sunDir: null }, sunBody = null, auto = false;
     if (this._skyMode === 'night') sky = { night: 1, sunDir: null };
-    else if (this._skyMode === 'auto') {
+    else if (this._skyMode === 'day') sunBody = { dir: sunVector(...DAY_SUN, north, rot) };
+    else {
+      auto = true;
       const a = this._hass && this._hass.states && this._hass.states['sun.sun'];
       const el = a ? Number(a.attributes.elevation) : NaN, az = a ? Number(a.attributes.azimuth) : NaN;
       if (Number.isFinite(el) && Number.isFinite(az)) {
-        const rot = this._modelAlign().rotation || 0;
-        sky = { night: nightFactor(el), sunDir: clampSunDir(sunVector(az, el, v.model.north || 0, rot)), sun: sunStrength(el) };
+        const dir = sunVector(az, el, north, rot);
+        sky = { night: nightFactor(el), sunDir: clampSunDir(dir), sun: sunStrength(el) };
+        sunBody = { dir };
       }
     }
     const l = this._skyLast;
-    if (!force && l && Math.abs(l.night - sky.night) <= 0.01 && Math.abs((l.sun ?? 1) - (sky.sun ?? 1)) <= 0.01 && !!l.sunDir === !!sky.sunDir
-      && (!sky.sunDir || Math.acos(Math.max(-1, Math.min(1, l.sunDir[0] * sky.sunDir[0] + l.sunDir[1] * sky.sunDir[1] + l.sunDir[2] * sky.sunDir[2]))) <= Math.PI / 180)) return;
-    this._skyLast = sky;
-    this._daylight = sky.night < 0.5;
-    v.setSky(sky);
+    const same = !force && l && Math.abs(l.night - sky.night) <= 0.01 && Math.abs((l.sun ?? 1) - (sky.sun ?? 1)) <= 0.01 && !!l.sunDir === !!sky.sunDir
+      && (!sky.sunDir || Math.acos(Math.max(-1, Math.min(1, l.sunDir[0] * sky.sunDir[0] + l.sunDir[1] * sky.sunDir[1] + l.sunDir[2] * sky.sunDir[2]))) <= Math.PI / 180);
+    const now = this._now();
+    if (same && !(auto && now - (this._moonAt ?? -Infinity) >= MOON_EVERY_MS)) return;
+    if (!same) {
+      this._skyLast = sky;
+      this._daylight = sky.night < 0.5;
+      v.setSky(sky);
+    }
+    let moonBody = null;
+    if (this._skyMode === 'night') moonBody = { dir: sunVector(...NIGHT_MOON, north, rot), phase: 0.4, illumination: 0.8 };
+    else if (auto) {
+      const c = this._hass && this._hass.config;
+      const m = c ? moonPosition(now, Number(c.latitude), Number(c.longitude)) : null;
+      if (m) moonBody = { dir: sunVector(m.azimuth, m.elevation, north, rot), phase: m.phase, illumination: m.illumination };
+    }
+    this._moonAt = now;
+    const shown = this._config.sky_bodies !== false;
+    v.setSkyBodies({ sun: shown ? sunBody : null, moon: shown ? moonBody : null });
+  }
+
+  // Current time; tests set window.__demoNow (Date or ms).
+  _now() {
+    const t = typeof window !== 'undefined' ? window.__demoNow : undefined;
+    if (t !== undefined && t !== null) return t instanceof Date ? t.getTime() : Number(t);
+    return Date.now();
   }
 
   _syncToolbar() {

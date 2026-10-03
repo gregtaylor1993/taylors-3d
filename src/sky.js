@@ -1,0 +1,75 @@
+// Sun / moon in the sky: moon position and phase (low precision, the suncalc formulas:
+// https://github.com/mourner/suncalc, after "Astronomy Answers" by Aa. Kirsch), moonlight strength.
+
+const RAD = Math.PI / 180;
+const DAY_MS = 86400000, J1970 = 2440588, J2000 = 2451545;
+const OBLIQUITY = RAD * 23.4397;
+const SUN_DIST_KM = 149598000;
+
+const toDays = (ms) => ms / DAY_MS - 0.5 + J1970 - J2000;
+const rightAscension = (l, b) => Math.atan2(Math.sin(l) * Math.cos(OBLIQUITY) - Math.tan(b) * Math.sin(OBLIQUITY), Math.cos(l));
+const declination = (l, b) => Math.asin(Math.sin(b) * Math.cos(OBLIQUITY) + Math.cos(b) * Math.sin(OBLIQUITY) * Math.sin(l));
+const siderealTime = (d, lw) => RAD * (280.16 + 360.9856235 * d) - lw;
+
+// Atmospheric refraction (rad) for an altitude h (rad), clamped at the horizon.
+function refraction(h) {
+  if (h < 0) h = 0;
+  return 0.0002967 / Math.tan(h + 0.00312536 / (h + 0.08901179));
+}
+
+function sunCoords(d) {
+  const M = RAD * (357.5291 + 0.98560028 * d);
+  const C = RAD * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
+  const L = M + C + RAD * 102.9372 + Math.PI;
+  return { dec: declination(L, 0), ra: rightAscension(L, 0) };
+}
+
+function moonCoords(d) {
+  const L = RAD * (218.316 + 13.176396 * d); // ecliptic longitude
+  const M = RAD * (134.963 + 13.064993 * d); // mean anomaly
+  const F = RAD * (93.272 + 13.229350 * d); // mean distance
+  const l = L + RAD * 6.289 * Math.sin(M), b = RAD * 5.128 * Math.sin(F);
+  return { ra: rightAscension(l, b), dec: declination(l, b), dist: 385001 - 20905 * Math.cos(M) };
+}
+
+// date: Date or ms; lat / lon degrees. -> { azimuth (deg from north, clockwise, 0..360),
+// elevation (deg, refraction included), phase 0..1 (0 new, 0.5 full, < 0.5 waxing), illumination 0..1 }
+// or null without a valid time / location.
+export function moonPosition(date, latDeg, lonDeg) {
+  const ms = date instanceof Date ? date.getTime() : Number(date);
+  if (!Number.isFinite(ms) || !Number.isFinite(latDeg) || !Number.isFinite(lonDeg)) return null;
+  const d = toDays(ms), phi = RAD * latDeg, lw = RAD * -lonDeg;
+  const m = moonCoords(d);
+  const H = siderealTime(d, lw) - m.ra;
+  let h = Math.asin(Math.sin(phi) * Math.sin(m.dec) + Math.cos(phi) * Math.cos(m.dec) * Math.cos(H));
+  h += refraction(h);
+  const azSouth = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(m.dec) * Math.cos(phi));
+  const azimuth = (((azSouth / RAD + 180) % 360) + 360) % 360;
+  const s = sunCoords(d);
+  const dra = s.ra - m.ra;
+  const elong = Math.acos(Math.sin(s.dec) * Math.sin(m.dec) + Math.cos(s.dec) * Math.cos(m.dec) * Math.cos(dra));
+  const inc = Math.atan2(SUN_DIST_KM * Math.sin(elong), m.dist - SUN_DIST_KM * Math.cos(elong));
+  const angle = Math.atan2(Math.cos(s.dec) * Math.sin(dra), Math.sin(s.dec) * Math.cos(m.dec) - Math.cos(s.dec) * Math.sin(m.dec) * Math.cos(dra));
+  return {
+    azimuth,
+    elevation: h / RAD,
+    phase: 0.5 + (0.5 * inc * (angle < 0 ? -1 : 1)) / Math.PI,
+    illumination: (1 + Math.cos(inc)) / 2,
+  };
+}
+
+// Moonlight intensity: night (0..1) > 0.5 and the moon above the horizon (dir[1] > 0, world up).
+export function moonLight(night, moon) {
+  if (!(night > 0.5) || !moon || !moon.dir || !(moon.dir[1] > 0)) return 0;
+  const ill = Math.max(0, Math.min(1, Number(moon.illumination) || 0));
+  return 0.05 + 0.15 * ill * Math.min(1, night);
+}
+
+// Distance of the sun / moon sprites from the camera: 0.8 x camera far, clamped.
+export const skyDistance = (far) => Math.min(2000, Math.max(20, 0.8 * (Number(far) || 0)));
+
+// The sun sprite shows down to just below the horizon; the moon only above it.
+export const SUN_MIN_Y = -0.02;
+// Apparent size of a sky body (degrees of view) -> sprite scale at a distance.
+export const BODY_DEG = 2.5;
+export const bodyScale = (dist, deg = BODY_DEG) => 2 * dist * Math.tan((deg * RAD) / 2);
