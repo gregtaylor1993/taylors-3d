@@ -20,7 +20,8 @@ const STYLE = `
   .taylors3d-device-popup .t3d-popup-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
   .taylors3d-device-popup h3 { margin: 0; flex: 1; font-size: 16px; overflow-wrap: anywhere; }
   .taylors3d-device-popup button { font: inherit; border-radius: 10px; cursor: pointer; min-height: 40px;
-    border: 1px solid var(--divider-color, #ddd); background: var(--secondary-background-color, #f5f5f5);
+    border: 1px solid var(--divider-color, #ddd);
+    background: var(--secondary-background-color, var(--ha-card-background, var(--card-background-color, #f5f5f5)));
     color: var(--primary-text-color, #212121); padding: 6px 10px; }
   .taylors3d-device-popup button:focus-visible, .taylors3d-device-popup input:focus-visible {
     outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; }

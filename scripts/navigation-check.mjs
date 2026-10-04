@@ -110,6 +110,7 @@ async function roomPoint(page, areaId, index = 0, model = false) {
     const xs = polygon.map((p) => p[0]), ys = polygon.map((p) => p[1]);
     const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
     const rect = c._view.renderer.domElement.getBoundingClientRect();
+    const mouseObjectPickRadius = 30; // Match OBJECT_HIT_PX.mouse in taylors3d-card.js.
     for (const fy of [.5, .3, .7, .15, .85]) for (const fx of [.5, .3, .7, .15, .85]) {
       const plan = [minX + fx * (maxX - minX), minY + fy * (maxY - minY)];
       if (!inside(plan)) continue;
@@ -118,7 +119,10 @@ async function roomPoint(page, areaId, index = 0, model = false) {
       if (c.shadowRoot.elementFromPoint(...p) !== c._view.renderer.domElement) continue;
       if (model) {
         const hit = c._view.pickModel(...p);
-        if (!hit || !hit.hit.up || (hit.kind === 'room' && hit.id !== entry.room.modelId)) continue;
+        // An upward-facing lamp/table is not the room floor. Also stay outside the
+        // nearby object's screen hit radius, which intentionally wins over room taps.
+        if (!hit || !hit.hit.up || !['room', 'zone'].includes(hit.kind) || hit.id !== entry.room.modelId
+          || c._objectHit(...p, mouseObjectPickRadius, false)) continue;
       }
       return { point: p, roomId: entry.room.id, floorId: entry.floorId, name: entry.name };
     }
@@ -147,6 +151,34 @@ async function panOrigin(page) {
 async function screenshotTheme(page, theme, name) {
   const section = await page.$(`section.${theme}`);
   await section.screenshot({ path: path.join(shots, `navigation-${theme}-${name}.png`) });
+}
+
+async function popupButtonContrast(page, index) {
+  return page.evaluate((i) => {
+    const popup = document.querySelectorAll('taylors3d-card')[i].shadowRoot.querySelector('.taylors3d-device-popup');
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    const rgba = (color) => {
+      context.clearRect(0, 0, 1, 1); context.fillStyle = color; context.fillRect(0, 0, 1, 1);
+      return [...context.getImageData(0, 0, 1, 1).data].map((v) => v / 255);
+    };
+    const blend = (front, back) => front.slice(0, 3).map((channel, j) => channel * front[3] + back[j] * (1 - front[3]));
+    const luminance = (color) => {
+      const linear = color.map((v) => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4);
+      return .2126 * linear[0] + .7152 * linear[1] + .0722 * linear[2];
+    };
+    return [...popup.querySelectorAll('button')].filter((button) => !button.disabled && button.offsetWidth > 0 && button.offsetHeight > 0).map((button) => {
+      // Composite transparent backgrounds through the shadow host to the actual theme.
+      const ancestors = [];
+      for (let node = button; node; node = node.parentElement || node.getRootNode().host) ancestors.push(node);
+      let background = [1, 1, 1];
+      for (const node of ancestors.reverse()) background = blend(rgba(getComputedStyle(node).backgroundColor), background);
+      const style = getComputedStyle(button), foreground = blend(rgba(style.color), background);
+      const a = luminance(foreground), b = luminance(background);
+      return { action: button.dataset.action, label: button.getAttribute('aria-label') || button.textContent,
+        opacity: Number(style.opacity), ratio: (Math.max(a, b) + .05) / (Math.min(a, b) + .05) };
+    });
+  }, index);
 }
 
 async function installObservers(page) {
@@ -198,6 +230,11 @@ try {
     await sleep(100);
     state = await popupState(page, index);
     check(`${theme}: a stationary room-floor tap opens the correct grouped controls`, state.open && state.title === 'Kitchen' && state.entities.includes('switch.kettle') && state.entities.includes('sensor.kettle_power') && state.entities.includes('sensor.kitchen_humidity') && state.calls.length === callsBefore, JSON.stringify(state));
+    const contrast = await popupButtonContrast(page, index);
+    check(`${theme}: enabled popup controls meet 4.5:1 text contrast`, contrast.some((b) => b.action === 'close')
+      && contrast.some((b) => b.action === 'more-info') && contrast.every((b) => b.opacity === 1 && b.ratio >= 4.5),
+    JSON.stringify({ buttons: contrast.length, minimum: Math.min(...contrast.map((b) => b.ratio)),
+      failing: contrast.filter((b) => b.opacity !== 1 || b.ratio < 4.5) }));
     await screenshotTheme(page, theme, 'room-popup');
     const stacking = await page.evaluate((i) => {
       const s = document.querySelectorAll('taylors3d-card')[i].shadowRoot;
