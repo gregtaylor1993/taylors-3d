@@ -332,6 +332,8 @@ HACS failed only because the repository had no valid topics. The other seven che
 
 The same browser checks exposed an initially-Top card restoring an unframed, zero-distance perspective camera when switching to 3D. That invalid snapshot is now ignored, so the 3D button uses normal house framing. Both fixes support the selected navigation features; the other planned features remain unimplemented.
 
+**Model fixture follow-up:** [the navigation-correction CI run](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37240222216) passed the complete editor/navigation suites and all model checks except the magnetic-drag fixture's lamp lookup, on both attempts. The lamp and model raycast worked; the reserved scene viewport projected a device marker over that small lamp, leaving no exposed pixel at the fixture's old camera angle. The fixture now uses a closer angle that exposes the real lamp, and requires an actual in-bounds canvas hit. Real wall/lamp dragging, attachment, realignment, fallback, Alt-drag and detach assertions remain intact. A complete follow-up CI run is required.
+
 Local build, lint and all 514 JavaScript tests passed before upload. The full HA Python harness was not run locally; it passed in GitHub.
 
 **Complete when:** diagnosed failures are resolved or precisely documented, and the required integration/card/HACS checks succeed. Do not silence a meaningful check merely to get a green result.
@@ -367,6 +369,7 @@ A feature is Done only after its agreed behavior works, it persists where approp
 | 2026-10-04 | Requirements | Taylor's complete initial feature list recorded; foundations and pending inputs checked against the code | `a2c49d0` |
 | 2026-10-04 | Phase 1 | First bubble bar, room/device panels and mini-map implemented. 571 JS unit tests and lint pass. Existing editor browser checks and the complete new navigation browser suite pass, covering real clicks, correct service payloads, grouped rooms, map floors, keyboard focus, narrow layouts and GLB overlays. Shared-storage/key-change regressions pass. Actual HA/panel testing remains. | Phase 1 commit on `main` |
 | 2026-10-04 | Navigation correction | Fixed immediate drag-to-mini-map drift and initially-Top to 3D framing. Complete navigation browser suite passes, including real active-pan regressions in both modes, unchanged destination tolerances and all GLB overlay checks. GitHub follow-up CI and actual HA/panel validation remain. | Follow-up commit on `main` |
+| 2026-10-04 | Model fixture correction | Exposed the lamp with a closer fixture camera and required a real uncovered canvas pixel. All 15 focused magnetic checks pass, with unchanged tolerances and zero browser errors. App code and navigation controls are unchanged by this correction. Full CI rerun follows. | Follow-up commit on `main` |
 
 ### Phase 1: Taylor's Home Assistant check
 

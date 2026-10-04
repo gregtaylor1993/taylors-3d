@@ -1592,22 +1592,26 @@ try {
   await page.evaluate(`${sr}.querySelector('.chip[data-view=ground]').click()`);
   await settle(page, card);
   await clickText('Devices');
-  // closer to the living room: the ceiling lamp is a small disc, too small to hit from the default distance
-  await page.evaluate(`${card}._view.setCamera({ position: [8, 8.5, 8], target: [3, 1, -2.5] }, { instant: true })`);
+  // Aim closer at the lamp: the reserved scene viewport otherwise projects its small disc
+  // entirely under the living-room device marker. Keep the real marker and navigation UI present.
+  await page.evaluate(`${card}._view.setCamera({ position: [3, 7, 4], target: [2.5, 2.56, -2.5] }, { instant: true })`);
   await settle(page, card);
   // the demo model's living-room ceiling lamp (a real object, bound to light.demo_living)
   const injected = await page.evaluate(`(() => { const o = ${card}._objects.objectAt('lamp_living'); return o ? o.obj.node.name : null; })()`);
   check('magnetic: the demo model has the living-room lamp object', !!injected, String(injected));
   await sleep(200);
   // the lamp is small on screen: search around its projected anchor for a pixel whose model hit is the lamp
-  // (and that no marker covers)
+  // Require an exposed canvas pixel, so no marker or navigation control covers the real hit.
   const findLamp = () => page.evaluate(`(() => { const c = ${card}, v = c._view, a = c._objects.anchorOf('lamp_living');
-    const p = a && v.projectWorld(a);
+    const p = a && v.projectWorld(a), r = v.renderer.domElement.getBoundingClientRect();
     if (!p) return null;
     for (let rad = 0; rad <= 30; rad++) for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
       if (Math.max(Math.abs(dx), Math.abs(dy)) !== rad) continue;
-      const x = p[0] + dx, y = p[1] + dy, h = v.surfaceAt(x, y);
-      if (h && h.owner && h.owner.id === 'lamp_living' && !c.shadowRoot.elementFromPoint(x, y)?.closest?.('.fp-marker')) return { x, y };
+      const x = p[0] + dx, y = p[1] + dy;
+      if (x <= r.left || x >= r.right || y <= r.top || y >= r.bottom
+        || c.shadowRoot.elementFromPoint(x, y) !== v.renderer.domElement) continue;
+      const h = v.surfaceAt(x, y);
+      if (h && h.owner && h.owner.id === 'lamp_living') return { x, y };
     }
     return null; })()`);
   // screen points: a wall face (vertical normal, 0.7–2.3 m up) and the lamp
