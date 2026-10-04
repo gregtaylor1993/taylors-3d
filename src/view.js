@@ -1450,6 +1450,27 @@ export class FloorplanView {
     return { center: [r(t.x), r(-t.z)], zoom: Math.round(topZoom(this.ortho.zoom, this._orthoHalf || 10) * 1000) / 1000 };
   }
 
+  // A new navigation command supersedes the inertia from the preceding drag.
+  // Flush OrbitControls through its public update API, preserving the visible camera.
+  stopCameraMotion() {
+    this._tween = null;
+    const camera = this.controls.object;
+    const position = camera.position.clone(), target = this.controls.target.clone(), zoom = camera.zoom;
+    const damping = this.controls.enableDamping;
+    try {
+      this.controls.enableDamping = false;
+      this.controls.update();
+      camera.position.copy(position);
+      this.controls.target.copy(target);
+      camera.zoom = zoom;
+      camera.updateProjectionMatrix();
+      this.controls.update();
+    } finally {
+      this.controls.enableDamping = damping;
+    }
+    this.dirty = true;
+  }
+
   setTopCamera(c, { instant = false } = {}) {
     if (this.mode !== 'top' || !c) return;
     const target = new THREE.Vector3(c.center[0], this.controls.target.y, -c.center[1]);
@@ -1666,7 +1687,11 @@ export class FloorplanView {
 
   setMode(mode) {
     if (mode === this.mode) return;
-    if (this.mode === '3d') this._lastCam3d = this.getCamera();
+    if (this.mode === '3d') {
+      // An initially-Top card has not framed its perspective camera yet.
+      const camera = this.getCamera();
+      this._lastCam3d = Math.hypot(...camera.position.map((x, i) => x - camera.target[i])) > 0.1 ? camera : null;
+    }
     this.mode = mode;
     this.camera = mode === 'top' ? this.ortho : this.persp;
     if (mode === 'top') { this._cancelOcclusion(); this._clearOcclusion(); } // no occlusion in top view

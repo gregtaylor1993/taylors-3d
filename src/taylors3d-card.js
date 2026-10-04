@@ -1811,6 +1811,7 @@ class Taylors3dCard extends HTMLElement {
 
   _focusPlan(point) {
     if (this._editing || !this._view) return;
+    this._view.stopCameraMotion();
     this._popup.close();
     this._devicePopup.close();
     if (point.floorId && this._floor !== point.floorId) this._setFloor(point.floorId);

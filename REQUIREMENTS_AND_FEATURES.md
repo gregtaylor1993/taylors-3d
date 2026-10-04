@@ -328,6 +328,10 @@ HACS failed only because the repository had no valid topics. The other seven che
 
 **Update:** repository topics were added; [HACS validation now passes](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37237996681). The shared browser helper now waits for the document and actual card readiness instead of global network silence. Model fixtures get time to parse; each existing model test retains its specific readiness/assertions. Legacy object-toggle checks explicitly select Quick toggle; default popups are tested separately. New navigation checks run in CI. Confirm the complete new CI run before marking B02 Done.
 
+**Phase 1 follow-up:** [the first feature CI run](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37239514063) passed Python integration tests, all 571 JavaScript tests, lint and build, but failed the mini-map camera-focus check. A real pointer reproduction confirmed that tapping the map immediately after dragging could leave camera inertia pulling away from the selected room. Mini-map navigation now stops that previous motion while preserving the current visible camera, then starts its focus movement. The browser helper waits for actual camera stability, and an immediate drag-to-map regression retains the original position tolerance. The complete follow-up CI result is still required.
+
+The same browser checks exposed an initially-Top card restoring an unframed, zero-distance perspective camera when switching to 3D. That invalid snapshot is now ignored, so the 3D button uses normal house framing. Both fixes support the selected navigation features; the other planned features remain unimplemented.
+
 Local build, lint and all 514 JavaScript tests passed before upload. The full HA Python harness was not run locally; it passed in GitHub.
 
 **Complete when:** diagnosed failures are resolved or precisely documented, and the required integration/card/HACS checks succeed. Do not silence a meaningful check merely to get a green result.
@@ -362,6 +366,7 @@ A feature is Done only after its agreed behavior works, it persists where approp
 | 2026-10-04 | Base | Independent renamed base uploaded to `main`; local build/lint/514 JS tests passed; online checks need B02 | `055e30f` |
 | 2026-10-04 | Requirements | Taylor's complete initial feature list recorded; foundations and pending inputs checked against the code | `a2c49d0` |
 | 2026-10-04 | Phase 1 | First bubble bar, room/device panels and mini-map implemented. 571 JS unit tests and lint pass. Existing editor browser checks and the complete new navigation browser suite pass, covering real clicks, correct service payloads, grouped rooms, map floors, keyboard focus, narrow layouts and GLB overlays. Shared-storage/key-change regressions pass. Actual HA/panel testing remains. | Phase 1 commit on `main` |
+| 2026-10-04 | Navigation correction | Fixed immediate drag-to-mini-map drift and initially-Top to 3D framing. Complete navigation browser suite passes, including real active-pan regressions in both modes, unchanged destination tolerances and all GLB overlay checks. GitHub follow-up CI and actual HA/panel validation remain. | Follow-up commit on `main` |
 
 ### Phase 1: Taylor's Home Assistant check
 

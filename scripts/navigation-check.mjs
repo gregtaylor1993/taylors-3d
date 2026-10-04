@@ -16,19 +16,31 @@ const check = (name, ok, detail = '') => {
 };
 
 async function settle(page, index = 0) {
-  await page.waitForFunction((i) => {
+  await page.waitForFunction(async (i) => {
     const c = document.querySelectorAll('taylors3d-card')[i];
-    return c && c._view && !c._view._tween;
-  }, { timeout: 7000 }, index).catch(async (error) => {
+    const v = c?._view;
+    if (!v || v._tween) return false;
+    const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    const snapshot = () => [...v.camera.position.toArray(), ...v.controls.target.toArray(), v.camera.zoom || 1];
+    const still = (a, b) => a.every((value, j) => Math.abs(value - b[j]) < 1e-5);
+    // OrbitControls damping can keep panning after a camera tween finishes. Wait for
+    // actual camera/target stability across rendered frames, not a fixed wall-clock sleep.
+    const before = snapshot();
+    await frame();
+    if (v._tween) return false;
+    const next = snapshot();
+    await frame();
+    return !v._tween && still(before, next) && still(next, snapshot());
+  }, { timeout: 7000, polling: 'raf' }, index).catch(async (error) => {
     const diagnostic = await page.evaluate((i) => {
       const c = document.querySelectorAll('taylors3d-card')[i], v = c?._view;
       return { mode: c?._mode, viewMode: v?.mode, raf: v?._raf, dirty: v?.dirty,
         tween: !!v?._tween, tweenAge: v?._tween ? performance.now() - v._tween.t0 : null,
-        hidden: document.hidden, frame: v?.stats?.frames, size: v?.size };
+        hidden: document.hidden, frame: v?.stats?.frames, size: v?.size,
+        dampingPan: v?.controls?._panOffset?.toArray() };
     }, index);
     throw new Error(`${error.message}; camera diagnostics: ${JSON.stringify(diagnostic)}`, { cause: error });
   });
-  await sleep(150);
 }
 
 async function clickElement(page, selector, index = 0) {
@@ -117,6 +129,19 @@ async function roomPoint(page, areaId, index = 0, model = false) {
 async function clickView(page, floorId, index = 0) {
   await clickElement(page, `.chip[data-view="${floorId}"]`, index);
   await settle(page, index);
+}
+
+async function panOrigin(page) {
+  return page.evaluate(() => {
+    const c = document.querySelector('taylors3d-card'), canvas = c._view.renderer.domElement;
+    const box = canvas.getBoundingClientRect();
+    for (const fy of [.15, .3, .6]) for (const fx of [.05, .15, .3]) {
+      const point = [box.left + fx * box.width, box.top + fy * box.height];
+      if (point[0] + 130 >= box.right - 12 || point[1] + 70 >= box.bottom - 12) continue;
+      if (c.shadowRoot.elementFromPoint(...point) === canvas) return point;
+    }
+    return null;
+  });
 }
 
 async function screenshotTheme(page, theme, name) {
@@ -232,6 +257,64 @@ try {
       selected: c._selectedRoomId, calls: window.__serviceCalls.length };
   });
   check('mini-map room tap focuses its centre on the correct floor', mapFocus.floor === 'first' && focused.floor === 'first' && focused.selected === 'r-office' && Math.abs(focused.camera.center[0] - 9.75) < .05 && Math.abs(focused.camera.center[1] - 2.5) < .05 && !focused.popup && focused.calls === 1, JSON.stringify(focused));
+
+  // A rapid pan -> focus must reach the same room centre even while mouse-motion damping
+  // remains active. Do not settle between these two real gestures: that would hide drift.
+  const panStart = await panOrigin(page);
+  if (!panStart) throw new Error('No clear canvas point for the active-pan focus regression');
+  await page.mouse.move(...panStart);
+  await page.mouse.down();
+  await page.mouse.move(panStart[0] + 130, panStart[1] + 70, { steps: 3 });
+  await page.mouse.up();
+  const activePan = await page.evaluate(() => {
+    const v = document.querySelector('taylors3d-card')._view;
+    return { offset: v.controls._panOffset.toArray(), length: v.controls._panOffset.length(), tween: !!v._tween };
+  });
+  check('pan-to-focus regression starts with real camera damping still active', activePan.length > .01 && !activePan.tween, JSON.stringify(activePan));
+  await page.mouse.click(...mapFocus.point);
+  await settle(page);
+  const afterPanFocus = await page.evaluate(() => {
+    const c = document.querySelector('taylors3d-card');
+    return { camera: c._view.getTopCamera(), floor: c._floor, selected: c._selectedRoomId,
+      tween: !!c._view._tween, popup: !!c.shadowRoot.querySelector('.taylors3d-device-popup'), calls: window.__serviceCalls.length };
+  });
+  check('mini-map focus reaches the room centre during active pan damping', afterPanFocus.floor === 'first'
+    && afterPanFocus.selected === 'r-office' && Math.abs(afterPanFocus.camera.center[0] - 9.75) < .05
+    && Math.abs(afterPanFocus.camera.center[1] - 2.5) < .05 && !afterPanFocus.tween && !afterPanFocus.popup
+    && afterPanFocus.calls === 1, JSON.stringify(afterPanFocus));
+
+  // Right-drag is the 3D camera's pan gesture. Check the same interaction with perspective.
+  await clickElement(page, '.seg button[data-mode="3d"]');
+  await settle(page);
+  const perspective = await page.evaluate(() => {
+    const c = document.querySelector('taylors3d-card'), camera = c._view.getCamera();
+    return { mode: c._mode, distance: Math.hypot(...camera.position.map((value, i) => value - camera.target[i])) };
+  });
+  check('3D focus regression starts with a valid framed perspective camera', perspective.mode === '3d' && perspective.distance > .1, JSON.stringify(perspective));
+  const pan3dStart = await panOrigin(page);
+  if (!pan3dStart) throw new Error('No clear canvas point for the 3D active-pan focus regression');
+  await page.mouse.move(...pan3dStart);
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.move(pan3dStart[0] + 130, pan3dStart[1] + 70, { steps: 3 });
+  await page.mouse.up({ button: 'right' });
+  const active3dPan = await page.evaluate(() => {
+    const v = document.querySelector('taylors3d-card')._view;
+    return { offset: v.controls._panOffset.toArray(), length: v.controls._panOffset.length(), tween: !!v._tween };
+  });
+  check('3D pan-to-focus starts with real camera damping still active', active3dPan.length > .01 && !active3dPan.tween, JSON.stringify(active3dPan));
+  await page.mouse.click(...mapFocus.point);
+  await settle(page);
+  const after3dFocus = await page.evaluate(() => {
+    const c = document.querySelector('taylors3d-card');
+    return { camera: c._view.getCamera(), floor: c._floor, mode: c._mode,
+      selected: c._selectedRoomId, popup: !!c.shadowRoot.querySelector('.taylors3d-device-popup'), calls: window.__serviceCalls.length };
+  });
+  check('3D mini-map focus reaches the room centre during active pan damping', after3dFocus.mode === '3d'
+    && after3dFocus.floor === 'first' && after3dFocus.selected === 'r-office'
+    && after3dFocus.camera.target.every((value, i) => Math.abs(value - [9.75, 3, -2.5][i]) < .05)
+    && !after3dFocus.popup && after3dFocus.calls === 1, JSON.stringify(after3dFocus));
+  await clickElement(page, '.seg button[data-mode="top"]');
+  await settle(page);
   await clickElement(page, '.map-close');
   check('mini-map X hides the map', await page.evaluate(() => document.querySelector('taylors3d-card').shadowRoot.querySelector('.taylors3d-minimap').hidden));
   await clickElement(page, 'button.minimap-toggle');
