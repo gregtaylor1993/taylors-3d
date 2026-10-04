@@ -4,6 +4,8 @@ NOTICE: Based on floorplan3d-card by istals (MIT)
 
 Original project by Ingus Stals / istals. This independent copy is maintained by Taylor.
 
+See [Requirements and features](REQUIREMENTS_AND_FEATURES.md) for Taylor's development ideas, proposed build order and progress log.
+
 A Lovelace card that shows your home as a 3D floorplan with every device on it. Draw each room
 once and link it to a Home Assistant area. After that, every device assigned to the area appears
 in the room by itself, placed by type: lights on the ceiling, door sensors by the door, other
