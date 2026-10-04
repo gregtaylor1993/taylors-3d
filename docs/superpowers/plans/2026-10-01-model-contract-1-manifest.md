@@ -42,7 +42,7 @@
 | `src/bindings.js` (new) | Pure: migrate legacy bindings, resolve levels/rooms, transform outlines, build model rooms, floor overrides, binding diff. |
 | `tools/check-model.mjs` (new) | CLI validator: parse GLB, manifest, GLB-only checks (mesh size, texture size, file size). Exports `checkGlb(buffer)`. |
 | `src/view.js` (modify) | Keep `model.manifest`; fallback outlines; `setModelLevels`; `pickModel`; `highlightModelNode`; drop `floorNodes` logic. |
-| `src/floorplan3d-card.js` (modify) | Resolve bindings, combine model + drawn rooms, floor overrides, rebuild on manifest/binding change. Drop `modelFloorAssignment`. |
+| `src/taylors3d-card.js` (modify) | Resolve bindings, combine model + drawn rooms, floor overrides, rebuild on manifest/binding change. Drop `modelFloorAssignment`. |
 | `src/edit-mode.js` (modify) | Model tab: levels/rooms tables, report, regeneration summary, click-to-pick; Rooms tab shows model-covered areas. |
 | `src/layout.js` (modify) | Remove `modelFloorMap` (replaced by `resolveLevels`). |
 | `scripts/make-demo-model.mjs`, `demo/house.glb` (modify) | Demo model v2 with tags. |
@@ -1132,7 +1132,7 @@ git commit -m "View: keep the model manifest, level visibility from bindings, pi
 ### Task 5: Card — rooms and floors from the model
 
 **Files:**
-- Modify: `src/floorplan3d-card.js` (imports; `_loadModel` ~216–252; remove `modelFloorAssignment`/`_applyModelFloorMap` ~254–266; `_update` ~395–440; `_buildStructure` ~553–583; `_buildMarkers` ~585)
+- Modify: `src/taylors3d-card.js` (imports; `_loadModel` ~216–252; remove `modelFloorAssignment`/`_applyModelFloorMap` ~254–266; `_update` ~395–440; `_buildStructure` ~553–583; `_buildMarkers` ~585)
 - Modify: `src/layout.js` (remove `modelFloorMap`), `test/layout.test.js` (remove its `describe('modelFloorMap')` block and import)
 - Modify: `src/storage.js` `normalise` (migrate `model.floor_map`)
 - Test: `test/storage.test.js` (one new case)
@@ -1283,7 +1283,7 @@ Expected: all PASS (the removed `modelFloorMap` tests are gone; Tasks 1–4 test
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/floorplan3d-card.js src/layout.js src/storage.js src/view.js test/layout.test.js test/storage.test.js
+git add src/taylors3d-card.js src/layout.js src/storage.js src/view.js test/layout.test.js test/storage.test.js
 git commit -m "Card: rooms, walls and floor heights from the model's levels and outlines"
 ```
 
@@ -1293,7 +1293,7 @@ git commit -m "Card: rooms, walls and floor heights from the model's levels and 
 
 **Files:**
 - Modify: `src/edit-mode.js` (`_modelTab` ~749; remove `_modelFloorsHtml` ~790 and the `md-floor` branch ~952; `_click` ~126; `setModelProps` (create `layout.model` when missing); `_roomsTab` area rows; `_onPanelClick`/`_onPanelChange`)
-- Modify: `src/floorplan3d-card.js` STYLE (row highlight)
+- Modify: `src/taylors3d-card.js` STYLE (row highlight)
 
 **Interfaces:**
 - Consumes: `card.modelBindings()`, `card._modelRooms`, `view.pickModel()`, `view.highlightModelNode()` (Tasks 4–5).
@@ -1466,7 +1466,7 @@ Insert, as the first statements inside that loop (before `const r = …`):
 
 - [ ] **Step 5: Style the picked row**
 
-In `src/floorplan3d-card.js` STYLE add:
+In `src/taylors3d-card.js` STYLE add:
 
 ```css
   .panel tr.sel td { background: rgba(3,169,244,.12); }
@@ -1483,7 +1483,7 @@ Expected: build ok, lint clean, all tests PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/edit-mode.js src/floorplan3d-card.js
+git add src/edit-mode.js src/taylors3d-card.js
 git commit -m "Model tab: assign levels and rooms, report, regeneration notice, click to pick"
 ```
 
@@ -1494,7 +1494,7 @@ git commit -m "Model tab: assign levels and rooms, report, regeneration notice, 
 **Files:**
 - Modify: `scripts/make-demo-model.mjs`, regenerate `demo/house.glb`
 - Modify: `scripts/model-check.mjs` (replace `modelFloors()` / `modelFloorAssignment()` / `md-floor` checks)
-- Modify: `README.md` (Model section), `docs/model-builder-guide.md` (validator now exists), `package.json` version → `0.2.0`, `custom_components/floorplan3d/manifest.json` version → `0.2.0`, `src/floorplan3d-card.js` `VERSION` → `'0.2.0'`
+- Modify: `README.md` (Model section), `docs/model-builder-guide.md` (validator now exists), `package.json` version → `0.2.0`, `custom_components/taylors3d/manifest.json` version → `0.2.0`, `src/taylors3d-card.js` `VERSION` → `'0.2.0'`
 
 **Interfaces:**
 - Consumes: everything above. Demo HA floors are `ground` (level 0) and `first` (level 1); demo areas include `kitchen`, `living_room`, `garden`, `terrace`.
@@ -1593,7 +1593,7 @@ Expected: `all model checks passed`, `all edit checks passed`, screenshot saved,
 - [ ] **Step 4: Docs and version**
 
 - `README.md` → "3D model underlay": tagged models (link to `docs/model-builder-guide.md`), levels and rooms assigned in Edit → Model, click to find a part, `npm run check-model -- house.glb`.
-- `docs/model-builder-guide.md` → checklist line: "`node tools/check-model.mjs house.glb` (in the floorplan3d-card repository) reports OK".
+- `docs/model-builder-guide.md` → checklist line: "`node tools/check-model.mjs house.glb` (in the taylors3d-card repository) reports OK".
 - Bump versions to `0.2.0` in `package.json`, the integration manifest and `VERSION`; `npm install --package-lock-only`.
 
 - [ ] **Step 5: Full verification and commit**

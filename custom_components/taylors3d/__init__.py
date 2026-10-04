@@ -1,7 +1,7 @@
-"""Floorplan 3D: shared layout storage for floorplan3d-card.
+"""Taylor's 3D: shared layout storage for taylors3d-card.
 
-Added from Settings → Devices & services (or `floorplan3d:` in configuration.yaml, which is
-imported as a config entry). Stores card layouts in .storage/floorplan3d.layouts, exposes them
+Added from Settings → Devices & services (or `taylors3d:` in configuration.yaml, which is
+imported as a config entry). Stores card layouts in .storage/taylors3d.layouts, exposes them
 over the websocket API, and serves the bundled card JavaScript so no manual Lovelace resource
 is needed.
 """
@@ -62,7 +62,7 @@ class LayoutStore:
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """YAML `floorplan3d:` is imported as a config entry."""
+    """YAML `taylors3d:` is imported as a config entry."""
     if DOMAIN in config and not hass.config_entries.async_entries(DOMAIN):
         hass.async_create_task(
             hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_IMPORT}, data={})
@@ -108,7 +108,7 @@ async def _async_register_card(hass: HomeAssistant) -> None:
 
 
 @websocket_api.websocket_command(
-    {vol.Required("type"): "floorplan3d/layout/get", vol.Required("key"): KEY_SCHEMA}
+    {vol.Required("type"): "taylors3d/layout/get", vol.Required("key"): KEY_SCHEMA}
 )
 @callback
 def ws_get_layout(
@@ -121,7 +121,7 @@ def ws_get_layout(
 @websocket_api.require_admin
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "floorplan3d/layout/set",
+        vol.Required("type"): "taylors3d/layout/set",
         vol.Required("key"): KEY_SCHEMA,
         vol.Required("layout"): dict,
     }

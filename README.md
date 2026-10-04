@@ -1,4 +1,8 @@
-# Floorplan 3D for Home Assistant
+# Taylor's 3D
+
+NOTICE: Based on floorplan3d-card by istals (MIT)
+
+Original project by Ingus Stals / istals. This independent copy is maintained by Taylor.
 
 A Lovelace card that shows your home as a 3D floorplan with every device on it. Draw each room
 once and link it to a Home Assistant area. After that, every device assigned to the area appears
@@ -39,30 +43,30 @@ covers both. The integration stores the layout and makes it available to all use
 
 ### HACS
 
-1. HACS → ⋮ → Custom repositories → add `https://github.com/istals/floorplan3d-card`,
+1. HACS → ⋮ → Custom repositories → add `https://github.com/gregtaylor1993/taylors-3d`,
    type **Integration**.
-2. Search for **Floorplan 3D** in HACS and download it.
+2. Search for **Taylor's 3D** in HACS and download it.
 3. Restart Home Assistant.
-4. Settings → Devices & services → **Add integration** → **Floorplan 3D** → Submit.
+4. Settings → Devices & services → **Add integration** → **Taylor's 3D** → Submit.
 5. Reload the browser.
 
 ### Manual
 
-1. Download `floorplan3d.zip` from the [latest release](https://github.com/istals/floorplan3d-card/releases)
-   and extract it to `/config/custom_components/floorplan3d/`
-   (or build it yourself: `npm ci && npm run build`, then copy `custom_components/floorplan3d/`).
-2. Restart, then Settings → Devices & services → Add integration → **Floorplan 3D**.
+1. Download `taylors3d.zip` from the [latest release](https://github.com/gregtaylor1993/taylors-3d/releases)
+   and extract it to `/config/custom_components/taylors3d/`
+   (or build it yourself: `npm ci && npm run build`, then copy `custom_components/taylors3d/`).
+2. Restart, then Settings → Devices & services → Add integration → **Taylor's 3D**.
 
-`floorplan3d:` in `configuration.yaml` also works; it is imported as the integration entry.
+`taylors3d:` in `configuration.yaml` also works; it is imported as the integration entry.
 
 The card is loaded on every dashboard automatically; you do not need to add a resource.
-If you only want the card without the integration, add `floorplan3d-card.js` from the release
+If you only want the card without the integration, add `taylors3d-card.js` from the release
 as a dashboard resource (Settings → Dashboards → ⋮ → Resources, type JavaScript module). The
 layout is then stored per user, or per browser on old HA versions; the Data tab says which.
 
 ## Add the card
 
-Dashboard → Edit → Add card → search **Floorplan 3D** (or Manual: `type: custom:floorplan3d-card`).
+Dashboard → Edit → Add card → search **Taylor's 3D** (or Manual: `type: custom:taylors3d-card`).
 The options below can be set in the visual editor or in YAML.
 
 | Option | Default | |
@@ -198,7 +202,7 @@ front axis). Its popup shows state, battery and start / dock.
 ![Model](docs/images/model.png)
 
 Upload it on the card: **Edit → Model → Upload .glb**, then align it with the sliders. The file
-is stored in `/config/floorplan3d/models/` and only served to logged-in users.
+is stored in `/config/taylors3d/models/` and only served to logged-in users.
 
 Alternatively put a `.glb` in `/config/www/` and set `model: /local/house.glb` in the card
 (files in `www` are readable without login). A YAML `model` takes precedence over an upload.
@@ -362,19 +366,19 @@ python -m pytest      # integration tests (pip install -r requirements-test.txt 
 npm run deploy        # build and scp the integration to HA (settings in .env, see .env.example)
 ```
 
-Releases: bump the version in `package.json`, `custom_components/floorplan3d/manifest.json` and
-`src/floorplan3d-card.js`, then push a `vX.Y.Z` tag. GitHub Actions builds `floorplan3d.zip`
+Releases: bump the version in `package.json`, `custom_components/taylors3d/manifest.json` and
+`src/taylors3d-card.js`, then push a `vX.Y.Z` tag. GitHub Actions builds `taylors3d.zip`
 (the integration with the card inside) for HACS.
 
 Layout: `src/placement.js` (auto placement), `src/registry.js` (HA registries to markers),
 `src/layout.js` (floors, walls, positions), `src/view.js` (Three.js), `src/editor.js` (edit
 operations), `src/edit-mode.js` (panel and plan interactions), `src/mower.js` (mower math),
-`src/storage.js` (layout storage), `custom_components/floorplan3d/` (integration).
+`src/storage.js` (layout storage), `custom_components/taylors3d/` (integration).
 
 ## Troubleshooting
 
 - **Card not found** after install: restart HA, then reload the browser (clear cache on mobile app).
-- **Data tab says per-user or browser storage**: the Floorplan 3D integration is not added
+- **Data tab says per-user or browser storage**: the Taylor's 3D integration is not added
   (Settings → Devices & services), or HA has not been restarted since installing it.
 - **No Edit button**: only admins can edit.
 - **A device is missing**: give it an area and draw that area's room, or check *Devices → Hidden*.

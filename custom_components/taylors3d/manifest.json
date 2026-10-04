@@ -1,6 +1,6 @@
 {
-  "domain": "floorplan3d",
-  "name": "Floorplan 3D",
+  "domain": "taylors3d",
+  "name": "Taylor's 3D",
   "codeowners": [],
   "config_flow": true,
   "dependencies": [
@@ -8,11 +8,11 @@
     "http",
     "websocket_api"
   ],
-  "documentation": "https://github.com/istals/floorplan3d-card",
+  "documentation": "https://github.com/gregtaylor1993/taylors-3d",
   "integration_type": "service",
   "iot_class": "local_push",
-  "issue_tracker": "https://github.com/istals/floorplan3d-card/issues",
+  "issue_tracker": "https://github.com/gregtaylor1993/taylors-3d/issues",
   "requirements": [],
   "single_config_entry": true,
-  "version": "0.4.1"
+  "version": "0.1.0"
 }

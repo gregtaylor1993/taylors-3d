@@ -1,4 +1,4 @@
-// floorplan3d-card: Home Assistant Lovelace card showing a 3D floorplan with auto-placed devices.
+// taylors3d-card: Home Assistant Lovelace card showing a 3D floorplan with auto-placed devices.
 
 import { Color } from 'three';
 import { FloorplanView } from './view.js';
@@ -23,7 +23,7 @@ import { bindObjects, effectiveGroups, nightFactor, sunVector, sunStrength, clam
 import { moonPosition } from './sky.js';
 import { ObjectPopup, objectAction, actionTarget, toggleCall } from './objects/popup.js';
 
-const VERSION = '0.4.1';
+const VERSION = '0.1.0';
 const NONE = Object.freeze({}); // stable stand-in for a missing layout.objects / groups (binding cache key)
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LONG_PRESS_MS = 500;
@@ -35,7 +35,7 @@ const OBJECT_HIT_PX = { touch: 52, mouse: 30 };
 const TRAIL_STEP_M = 0.15;
 const TRAIL_MAX = 3000;
 const MOWER_Z = 0.15;
-const MODEL_API = '/api/floorplan3d/model';
+const MODEL_API = '/api/taylors3d/model';
 const nodeShown = (n) => { for (let x = n; x; x = x.parent) if (!x.visible) return false; return true; };
 
 const STYLE = `
@@ -293,13 +293,13 @@ const luminance = (c) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
 
 function readSkyMode() {
   try {
-    const v = localStorage.getItem('floorplan3d.sky');
+    const v = localStorage.getItem('taylors3d.sky');
     if (v === 'auto' || v === 'day' || v === 'night') return v;
   } catch (e) { /* storage blocked */ }
   return 'auto';
 }
 
-class Floorplan3dCard extends HTMLElement {
+class Taylors3dCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
@@ -338,7 +338,7 @@ class Floorplan3dCard extends HTMLElement {
   }
 
   static getConfigElement() {
-    return document.createElement('floorplan3d-card-editor');
+    return document.createElement('taylors3d-card-editor');
   }
 
   setConfig(config) {
@@ -595,7 +595,7 @@ class Floorplan3dCard extends HTMLElement {
     this._dayBtn = root.querySelector('button.daynight');
     this._dayBtn.addEventListener('click', () => {
       this._skyMode = { auto: 'day', day: 'night', night: 'auto' }[this._skyMode];
-      try { localStorage.setItem('floorplan3d.sky', this._skyMode); } catch (e) { /* private mode */ }
+      try { localStorage.setItem('taylors3d.sky', this._skyMode); } catch (e) { /* private mode */ }
       this._applySky(true);
       this._syncToolbar();
     });
@@ -879,7 +879,7 @@ class Floorplan3dCard extends HTMLElement {
         else this._imageBlob = { ...old, misses: step.track.misses }; // last known position, count kept
       }
     } catch (e) {
-      console.warn('floorplan3d: could not read the mower map image', e);
+      console.warn('taylors3d: could not read the mower map image', e);
       result = { error: "Can't read the map image." };
     } finally {
       this._imageBusy = false;
@@ -1761,14 +1761,14 @@ class Floorplan3dCard extends HTMLElement {
   }
 }
 
-if (!customElements.get('floorplan3d-card')) {
-  customElements.define('floorplan3d-card', Floorplan3dCard);
+if (!customElements.get('taylors3d-card')) {
+  customElements.define('taylors3d-card', Taylors3dCard);
   window.customCards = window.customCards || [];
   window.customCards.push({
-    type: 'floorplan3d-card',
-    name: 'Floorplan 3D',
+    type: 'taylors3d-card',
+    name: "Taylor's 3D",
     description: '3D floorplan with automatically placed devices',
     preview: false,
   });
-  console.info(`%c floorplan3d-card ${VERSION} `, 'background:#03a9f4;color:#fff;border-radius:3px');
+  console.info(`%c taylors3d-card ${VERSION} `, 'background:#03a9f4;color:#fff;border-radius:3px');
 }

@@ -24,5 +24,5 @@ const run = (cmd, args) => {
 run('node', ['scripts/build.mjs']);
 const port = ['-P', env.HA_SSH_PORT];
 run('ssh', ['-p', env.HA_SSH_PORT, env.HA_SSH, `mkdir -p ${env.HA_CONFIG}/custom_components`]);
-run('scp', [...port, '-r', 'custom_components/floorplan3d', `${env.HA_SSH}:${env.HA_CONFIG}/custom_components/`]);
+run('scp', [...port, '-r', 'custom_components/taylors3d', `${env.HA_SSH}:${env.HA_CONFIG}/custom_components/`]);
 console.log('Deployed. Restart Home Assistant if the integration changed; for card-only changes reload the browser.');

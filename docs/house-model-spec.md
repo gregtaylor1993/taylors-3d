@@ -2,7 +2,7 @@
 
 # House model spec
 
-What a house design (for example a Three.js scene) should produce so floorplan3d-card can use it.
+What a house design (for example a Three.js scene) should produce so taylors3d-card can use it.
 Two files: the room plan (required) and a visual model (optional).
 
 ## Coordinates

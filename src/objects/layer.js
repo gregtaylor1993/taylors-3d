@@ -70,7 +70,7 @@ export class ObjectLayer {
         try {
           this.parts.set(obj.id, { obj, type, part: type.prepare(obj, ctx), chain: null, result: null, inputs: null });
         } catch (e) {
-          console.warn('floorplan3d: object', obj.id, e);
+          console.warn('taylors3d: object', obj.id, e);
         }
       }
     }

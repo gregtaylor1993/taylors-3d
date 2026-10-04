@@ -248,7 +248,7 @@ export function resolveViews({ manifest, haFloors, layoutViews, yamlViews, saved
   for (const id of Object.keys(yv)) {
     if (!all.some((b) => b.id === id) && !warned.has(id)) {
       warned.add(id);
-      console.warn(`floorplan3d: card YAML views.${id} does not match any view; ignored`);
+      console.warn(`taylors3d: card YAML views.${id} does not match any view; ignored`);
     }
   }
   return all.map((b) => {

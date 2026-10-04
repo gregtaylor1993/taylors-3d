@@ -116,7 +116,7 @@ device('demo_climate', 'Living climate unit', 'living_room', [['climate.demo_liv
 device('demo_charger', 'EV charger', 'garden', [['sensor.demo_charger', 'charging', { power: 7.4, energy: 12.6 }]]);
 void temp;
 
-// In-memory stand-in for the integration's /api/floorplan3d/model/<key> endpoint.
+// In-memory stand-in for the integration's /api/taylors3d/model/<key> endpoint.
 const models = new Map();
 async function fetchWithAuth(url, init = {}) {
   const key = decodeURIComponent(new URL(url, location.href).pathname.split('/').pop());
@@ -158,8 +158,8 @@ export function createMockHass({ onChange }) {
       update({ [data.entity_id]: { ...s, state: on ? 'on' : 'off', attributes: attrs } });
     },
     callWS: async (msg) => {
-      if (msg.type === 'floorplan3d/layout/get') return { layout: layoutStore };
-      if (msg.type === 'floorplan3d/layout/set') { layoutStore = msg.layout; window.__savedLayout = msg.layout; return null; }
+      if (msg.type === 'taylors3d/layout/get') return { layout: layoutStore };
+      if (msg.type === 'taylors3d/layout/set') { layoutStore = msg.layout; window.__savedLayout = msg.layout; return null; }
       throw { code: 'unknown_command', message: 'Unknown command.' };
     },
   });

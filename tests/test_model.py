@@ -8,9 +8,9 @@ import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
-from custom_components.floorplan3d.const import DOMAIN
+from custom_components.taylors3d.const import DOMAIN
 
-URL = "/api/floorplan3d/model/default"
+URL = "/api/taylors3d/model/default"
 
 
 def glb(payload: bytes = b"{}  ") -> bytes:
@@ -44,7 +44,7 @@ async def test_upload_get_delete(hass: HomeAssistant, setup, hass_client) -> Non
     assert info["size"] == len(data)
     assert info["name"] == "house.glb"
     assert len(info["version"]) == 12
-    assert (await hass.async_add_executor_job(open, hass.config.path("floorplan3d/models/default.glb"), "rb")).read() == data
+    assert (await hass.async_add_executor_job(open, hass.config.path("taylors3d/models/default.glb"), "rb")).read() == data
 
     resp = await client.get(URL)
     assert resp.status == 200
@@ -73,7 +73,7 @@ async def test_rejects_non_glb(hass: HomeAssistant, setup, hass_client) -> None:
 
 
 async def test_rejects_too_large(hass: HomeAssistant, setup, hass_client, monkeypatch) -> None:
-    monkeypatch.setattr("custom_components.floorplan3d.model.MAX_MODEL_BYTES", 1000)
+    monkeypatch.setattr("custom_components.taylors3d.model.MAX_MODEL_BYTES", 1000)
     client = await hass_client()
     resp = await client.post(URL, data=form(glb(b" " * 2000)))
     assert resp.status == 413
@@ -90,8 +90,8 @@ async def test_accepts_files_over_ha_request_limit(hass: HomeAssistant, setup, h
 
 async def test_invalid_key(hass: HomeAssistant, setup, hass_client) -> None:
     client = await hass_client()
-    assert (await client.get("/api/floorplan3d/model/..%2Fsecrets")).status in (400, 404)
-    assert (await client.post("/api/floorplan3d/model/a.b", data=form(glb()))).status == 400
+    assert (await client.get("/api/taylors3d/model/..%2Fsecrets")).status in (400, 404)
+    assert (await client.post("/api/taylors3d/model/a.b", data=form(glb()))).status == 400
 
 
 async def test_requires_login(hass: HomeAssistant, setup, hass_client_no_auth) -> None:

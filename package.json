@@ -1,6 +1,6 @@
 {
-  "name": "floorplan3d-card",
-  "version": "0.4.1",
+  "name": "taylors3d-card",
+  "version": "0.1.0",
   "description": "Home Assistant Lovelace card: 3D floorplan with auto-placed devices",
   "type": "module",
   "private": true,
@@ -31,5 +31,13 @@
     "jsdom": "29.1.1",
     "puppeteer-core": "25.12.0",
     "vitest": "5.0.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gregtaylor1993/taylors-3d.git"
+  },
+  "homepage": "https://github.com/gregtaylor1993/taylors-3d#readme",
+  "bugs": {
+    "url": "https://github.com/gregtaylor1993/taylors-3d/issues"
   }
 }

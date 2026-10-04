@@ -4,7 +4,7 @@
 
 **Goal:** Model objects (lamps, mower, dock, charger, climate) become live controls: lamps are real lights with glowing bulbs and a shadow budget, night is dark with the sun from `sun.sun`, tap/hold/popup on objects, an Objects edit tab, and magnetic drag / attach for device markers.
 
-**Architecture:** A new `src/objects/` layer: `logic.js` holds pure, unit-tested functions (binding, chain, colour, intensity, light budget, night factor, sun vector, screen hit test); `layer.js` (`ObjectLayer`) owns the Three.js side (glow materials, a fixed pool of real lights, per-type updates) and is driven by the card with `hass`; `types.js` has one small `prepare/update` pair per type; `popup.js` is the DOM popup. `view.js` only exposes the scene/camera hooks the layer needs; `floorplan3d-card.js` wires hass, taps and markers; `edit-mode.js` gets the Objects tab and the magnetic drag.
+**Architecture:** A new `src/objects/` layer: `logic.js` holds pure, unit-tested functions (binding, chain, colour, intensity, light budget, night factor, sun vector, screen hit test); `layer.js` (`ObjectLayer`) owns the Three.js side (glow materials, a fixed pool of real lights, per-type updates) and is driven by the card with `hass`; `types.js` has one small `prepare/update` pair per type; `popup.js` is the DOM popup. `view.js` only exposes the scene/camera hooks the layer needs; `taylors3d-card.js` wires hass, taps and markers; `edit-mode.js` gets the Objects tab and the magnetic drag.
 
 **Tech Stack:** Vanilla custom element, Three.js 0.169 (PointLight, SpotLight, MeshStandardMaterial emissive), CSS2DRenderer, esbuild, vitest, eslint, puppeteer-core headless checks.
 
@@ -293,7 +293,7 @@ export function screenNearest(points, x, y, radius) {
 
 **Files:**
 - Create: `src/objects/layer.js`, `src/objects/types.js`
-- Modify: `src/view.js` (hooks below), `src/floorplan3d-card.js` (wiring, hide markers of bound devices, `lights` option), `src/card-editor.js` (`lights` select)
+- Modify: `src/view.js` (hooks below), `src/taylors3d-card.js` (wiring, hide markers of bound devices, `lights` option), `src/card-editor.js` (`lights` select)
 - Test: `test/objects-types.test.js` (pure parts of types: glow lookup by name, hint defaults), headless checks in Task 8
 
 **Interfaces:**
@@ -322,11 +322,11 @@ export function screenNearest(points, x, y, radius) {
 
 ### Task 3: Day, night and the sun
 
-**Files:** Modify `src/view.js` (`_applyLook`, `_fitShadow`), `src/floorplan3d-card.js` (toolbar button cycle, sun from hass), `README.md`. Test: `test/objects-logic.test.js` already covers the math; headless in Task 8.
+**Files:** Modify `src/view.js` (`_applyLook`, `_fitShadow`), `src/taylors3d-card.js` (toolbar button cycle, sun from hass), `README.md`. Test: `test/objects-logic.test.js` already covers the math; headless in Task 8.
 
 **Interfaces:**
 - Consumes: `nightFactor`, `sunVector` (Task 1).
-- Produces: `view.setSky({ night: 0..1, sunDir: [x,y,z] | null })`; card `this._skyMode` in `'auto'|'day'|'night'` persisted at localStorage key `floorplan3d.sky` (try/catch).
+- Produces: `view.setSky({ night: 0..1, sunDir: [x,y,z] | null })`; card `this._skyMode` in `'auto'|'day'|'night'` persisted at localStorage key `taylors3d.sky` (try/catch).
 
 - [ ] **Step 1:** `setSky`: with a model, hemisphere intensity `lerp(0.9, 0.14, night)`, colours sky `#c4d6ff` / ground `#2a2520` (both day and night), sun intensity `lerp(2.6, 0, night)` colour `#fff0dc`, `sun.castShadow = night < 1`, background `lerp(#2a2d30, #0e0f10, night)` (only when the card's background is the model background, i.e. keep today's theme background handling for no-model), sun position = shadow-box centre + `sunDir × distance` when `sunDir` is given (else today's fixed bearing from `fp.north`). Remove the moonlight branch. Without a model: unchanged (`setDaylight` path).
 - [ ] **Step 2:** card: toolbar button cycles `auto → day → night → auto` with icons `mdi:theme-light-dark` / `mdi:white-balance-sunny` / `mdi:weather-night` and title "Day / night: auto|day|night". Auto: read `hass.states['sun.sun']` attributes `elevation`, `azimuth`; `night = nightFactor(elevation)`; `sunDir = sunVector(azimuth, elevation, manifestNorth, layout.model.rotation || 0)`; call `setSky` only when night changed by > 0.01 or the sun moved > 1° since the last call. Day: `{ night: 0, sunDir: null }`; Night: `{ night: 1, sunDir: null }`. No `sun.sun` → day.
@@ -336,7 +336,7 @@ export function screenNearest(points, x, y, radius) {
 
 ### Task 4: Tap, hold and the popup
 
-**Files:** Create `src/objects/popup.js`; modify `src/floorplan3d-card.js` (pointer handling), STYLE; Test: `test/objects-popup.test.js` (row building is pure).
+**Files:** Create `src/objects/popup.js`; modify `src/taylors3d-card.js` (pointer handling), STYLE; Test: `test/objects-popup.test.js` (row building is pure).
 
 **Interfaces:**
 - Consumes: `screenNearest` (Task 1), `ObjectLayer.anchors()`, `TYPES[type].defaults`, `chainState`.
@@ -351,7 +351,7 @@ export function screenNearest(points, x, y, radius) {
 
 ### Task 5: Mower, dock, charger, climate
 
-**Files:** Modify `src/objects/types.js`, `src/floorplan3d-card.js` (mower position feed), Test: `test/objects-types.test.js` (state → colour/label mapping).
+**Files:** Modify `src/objects/types.js`, `src/taylors3d-card.js` (mower position feed), Test: `test/objects-types.test.js` (state → colour/label mapping).
 
 **Interfaces:**
 - Consumes: the card's existing live mower position (`readSource` + calibration in `src/mower.js`, used where `_mowerMarkerId` is updated), Task 2 layer.
@@ -366,7 +366,7 @@ export function screenNearest(points, x, y, radius) {
 
 ### Task 6: Edit mode — Objects tab
 
-**Files:** Modify `src/edit-mode.js`, `src/floorplan3d-card.js` (STYLE), `src/editor.js` (pure layout helpers), Test: `test/editor.test.js`.
+**Files:** Modify `src/edit-mode.js`, `src/taylors3d-card.js` (STYLE), `src/editor.js` (pure layout helpers), Test: `test/editor.test.js`.
 
 **Interfaces:**
 - Consumes: bindings (Task 1), `ObjectLayer`, `saveLayout` path via `this.commit(...)`.
@@ -380,7 +380,7 @@ export function screenNearest(points, x, y, radius) {
 
 ### Task 7: Magnetic drag and attach
 
-**Files:** Modify `src/edit-mode.js` (marker drag), `src/view.js` (surface raycast helper), `src/floorplan3d-card.js` (attached marker positions), `src/editor.js`, Test: `test/editor.test.js`, `test/objects-logic.test.js` (`snapPin`).
+**Files:** Modify `src/edit-mode.js` (marker drag), `src/view.js` (surface raycast helper), `src/taylors3d-card.js` (attached marker positions), `src/editor.js`, Test: `test/editor.test.js`, `test/objects-logic.test.js` (`snapPin`).
 
 **Interfaces:**
 - Produces: `view.surfaceAt(clientX, clientY)` → `{ point: Vector3, normal: Vector3, object, owner }` (visible model meshes only, section/cut respected) or null; pure `snapPin(hit, floorElevation, floorId)` → `{ x, y, z, floor_id }` (plan coords, z = hit.y + normal.y×0.05 − floorElevation, x/y from hit + normal×0.05); `E.attachPin(layout, markerId, objectId, offset)`; card: markers with `pins[id].attach` positioned at the object's anchor + offset every time positions are computed (and when the mower object moves).
@@ -393,7 +393,7 @@ export function screenNearest(points, x, y, radius) {
 
 ### Task 8: Demo model objects, headless checks, docs, v0.4.0
 
-**Files:** `scripts/make-demo-model.mjs`, `demo/house.glb`, `demo/mock-hass.js` (lights `light.demo_*`, a `switch.demo_facade`, `sun.sun` with settable elevation/azimuth, a charger sensor, a climate entity), `scripts/model-check.mjs`, `docs/model-builder-guide.md`, `README.md`, versions (package.json, manifest.json, `VERSION` in `src/floorplan3d-card.js`, `npm install --package-lock-only`).
+**Files:** `scripts/make-demo-model.mjs`, `demo/house.glb`, `demo/mock-hass.js` (lights `light.demo_*`, a `switch.demo_facade`, `sun.sun` with settable elevation/azimuth, a charger sensor, a climate entity), `scripts/model-check.mjs`, `docs/model-builder-guide.md`, `README.md`, versions (package.json, manifest.json, `VERSION` in `src/taylors3d-card.js`, `npm install --package-lock-only`).
 
 - [ ] **Step 1:** Demo model: in the ground level add 3 ceiling lamps (`type: light`, `glow: 'glow'` child sphere r 0.05, `hints: { beam: 'point', max: 20, distance: 8, decay: 2 }`, `suggest.entity: 'light.demo_living'` etc.), a facade group of 3 (`group: 'facade'`, `hints.beam: 'down'`, `max: 5`, `castShadow: false`, all `suggest.entity: 'light.demo_facade'`), one spot (`beam: 'spot'`, `target`), a light_strip; in the exterior a mower (`suggest.entity: 'lawn_mower.demo'`), dock (`hints.led: 'led'`), ev_charger and in a room a climate object. `node tools/check-model.mjs demo/house.glb` → OK.
 - [ ] **Step 2:** Headless checks: lamps bound automatically (Objects tab shows entities, none "not found"); light on → glow emissiveIntensity > 0 and a pool light with intensity > 0 near it; ≤ 12 pool lights with intensity > 0 and ≤ 4 shadow casters lit; facade group on → exactly one pool light for the group; group controller off → fixtures dark and popup reason text; tap on a lamp toggles its entity (mock `callService` records); hold opens the popup, brightness slider calls `light.turn_on`; `sun.sun` elevation −20 → hemisphere ≈ 0.14 and sun 0, +30 → 0.9 and 2.6; mower object node moves when the fake mower moves and the mower marker is gone; markers of bound lamps hidden; drag a marker onto a wall → pin z between 0.5 and 2.6 and x/y on the wall ±0.1; drag onto a lamp → `attach` stored and marker follows when the model is realigned; `lights: off` → all pool intensities 0; ten hass updates with no change → no budget recompute and no shadow update (instrument with counters on the layer).

@@ -77,7 +77,7 @@ export function cleanConfig(config) {
   return out;
 }
 
-export class Floorplan3dCardEditor extends HTMLElement {
+export class Taylors3dCardEditor extends HTMLElement {
   setConfig(config) {
     this._config = config;
     this._render();
@@ -114,4 +114,4 @@ export class Floorplan3dCardEditor extends HTMLElement {
   }
 }
 
-if (!customElements.get('floorplan3d-card-editor')) customElements.define('floorplan3d-card-editor', Floorplan3dCardEditor);
+if (!customElements.get('taylors3d-card-editor')) customElements.define('taylors3d-card-editor', Taylors3dCardEditor);

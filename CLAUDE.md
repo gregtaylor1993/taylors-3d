@@ -1,4 +1,4 @@
-# floorplan3d-card — Home Assistant 3D floorplan
+# Taylor's 3D — Home Assistant 3D floorplan
 
 Custom Lovelace card (Three.js) for a home floorplan. Goal: map HA areas to rooms
 once, then every device assigned to an area shows up on the plan automatically, positioned
@@ -6,9 +6,9 @@ by device type, with mouse-drag for exact placement. Plus Sunseeker robot mower 
 position and map overlay.
 
 ## Stack
-- Vanilla custom element (no Lit), Three.js 0.169, esbuild bundle -> `dist/floorplan3d-card.js`
+- Vanilla custom element (no Lit), Three.js 0.169, esbuild bundle -> `dist/taylors3d-card.js`
 - OrbitControls, CSS2DRenderer (markers/labels as DOM, so `<ha-icon>` works), GLTFLoader
-- Companion integration `custom_components/floorplan3d/` for shared server-side storage
+- Companion integration `custom_components/taylors3d/` for shared server-side storage
 - Respect HA theme CSS vars (--card-background-color, --primary-color, --primary-text-color,
   --divider-color, --state-light-active-color). Light and dark themes must both look right.
 
@@ -49,7 +49,7 @@ the area's floor_id.
 
 ## Card YAML (minimal)
 ```yaml
-type: custom:floorplan3d-card
+type: custom:taylors3d-card
 layout_key: default      # storage key
 height: 520px
 group_by: device         # device | entity
@@ -93,15 +93,15 @@ a Mower position (GPS derived from map coordinates). Inspect the real entities i
 iiseppi/sunseeker_local_control (MQTT).
 
 ## Companion integration
-`custom_components/floorplan3d/`: manifest.json, `__init__.py` with `async_setup` (enabled by
-`floorplan3d:` in configuration.yaml), `homeassistant.helpers.storage.Store` (key
-`floorplan3d.layouts`), websocket commands `floorplan3d/layout/get` {key} and
-`floorplan3d/layout/set` {key, layout} (set requires admin).
+`custom_components/taylors3d/`: manifest.json, `__init__.py` with `async_setup` (enabled by
+`taylors3d:` in configuration.yaml), `homeassistant.helpers.storage.Store` (key
+`taylors3d.layouts`), websocket commands `taylors3d/layout/get` {key} and
+`taylors3d/layout/set` {key, layout} (set requires admin).
 
 ## Repo / delivery
 - GitHub (`origin`) is the main remote; HACS installs it as an Integration from release
-  `floorplan3d.zip` (integration with the card bundled; it registers the card via
-  add_extra_js_url). Manual: copy `custom_components/floorplan3d/` after `npm run build`.
+  `taylors3d.zip` (integration with the card bundled; it registers the card via
+  add_extra_js_url). Manual: copy `custom_components/taylors3d/` after `npm run build`.
 - CI: `.github/workflows/ci.yml` (lint, vitest, build, headless checks, pytest);
   `release.yml` on `v*` tags builds the zip and creates the release.
 - Add `npm run deploy` that scp's dist + integration to the HA host (host from .env, not committed).

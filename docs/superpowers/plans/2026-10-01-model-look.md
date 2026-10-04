@@ -124,7 +124,7 @@ Also update the existing `resolveLevels` expectations: exterior now `{ show: 'al
 ### Task 3: Card wiring, Day/Night button, headless checks, docs
 
 **Files:**
-- Modify: `src/floorplan3d-card.js` (toolbar button, structure flags, `has-model` class, rebuild on edit toggle, CSS)
+- Modify: `src/taylors3d-card.js` (toolbar button, structure flags, `has-model` class, rebuild on edit toggle, CSS)
 - Modify: `scripts/model-check.mjs`, `scripts/edit-check.mjs` (only if needed), `README.md`, `docs/superpowers/specs/2026-10-01-model-contract-design.md` (section 2 defaults), `docs/model-builder-guide.md` (walls/ceiling rule)
 
 **Interfaces:**

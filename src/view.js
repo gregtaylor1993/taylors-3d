@@ -525,7 +525,7 @@ export class FloorplanView {
     const label = opts.name || opts.url || 'model';
     this._modelLoading = new Promise((resolve) => {
       const fail = (err) => {
-        console.warn('floorplan3d: could not load model', label, err);
+        console.warn('taylors3d: could not load model', label, err);
         if (this._modelId === id) this._modelId = null;
         resolve(`Could not load model ${label}`);
       };
@@ -636,7 +636,7 @@ export class FloorplanView {
     try {
       res = mergeStaticMeshes(root, manifest, sels, { unitScale });
     } catch (err) {
-      console.warn('floorplan3d: could not merge model meshes', err);
+      console.warn('taylors3d: could not merge model meshes', err);
     }
     const after = res && res.merged ? this._modelStats() : before;
     this.mergeStats = { enabled: true, before, after, groups: res ? res.groups : 0, merged: res ? res.merged : 0, keep: sels };
@@ -1060,7 +1060,7 @@ export class FloorplanView {
         plane.scale.set(w, 1, w * plane.userData.aspect);
         plane.visible = this._shows(o.floorId);
         this.dirty = true;
-      }, undefined, () => console.warn('floorplan3d: could not load mower map', o.url));
+      }, undefined, () => console.warn('taylors3d: could not load mower map', o.url));
     }
     if (plane.material.map) plane.visible = this._shows(o.floorId);
     this.dirty = true;

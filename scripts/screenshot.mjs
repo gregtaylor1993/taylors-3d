@@ -9,7 +9,7 @@ const view = args.view || '3d';
 const { page, errors, close } = await openDemo({ view, floor: args.floor });
 try {
   await new Promise((r) => setTimeout(r, 300));
-  const stats = await page.evaluate(() => [...document.querySelectorAll('floorplan3d-card')].map((c) => ({
+  const stats = await page.evaluate(() => [...document.querySelectorAll('taylors3d-card')].map((c) => ({
     markers: c.shadowRoot.querySelectorAll('.fp-marker').length,
     labels: c.shadowRoot.querySelectorAll('.fp-room-label').length,
     chips: [...c.shadowRoot.querySelectorAll('.chip')].map((b) => b.textContent + (b.classList.contains('on') ? '*' : '')),

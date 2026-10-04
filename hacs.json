@@ -1,7 +1,7 @@
 {
-  "name": "Floorplan 3D",
+  "name": "Taylor's 3D",
   "homeassistant": "2024.7.0",
   "zip_release": true,
-  "filename": "floorplan3d.zip",
+  "filename": "taylors3d.zip",
   "render_readme": true
 }

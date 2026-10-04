@@ -16,7 +16,7 @@ const check = (name, ok, detail = '') => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // wait until the 400 ms camera tween has finished (fixed sleeps flake under load)
 const settle = async (page, card) => { await page.waitForFunction(`!${card}._view._tween`, { timeout: 5000 }).catch(() => {}); await sleep(100); };
-const card = 'document.querySelector("floorplan3d-card")';
+const card = 'document.querySelector("taylors3d-card")';
 // move the camera and wait for the occlusion pass that follows it to finish (no fixed sleeps)
 const camAndOcclusion = async (page, cam) => {
   const before = await page.evaluate(`${card}._view.stats.occDone`);
@@ -203,7 +203,7 @@ try {
     let roofShown = true; for (let o = roof; o; o = o.parent) if (!o.visible) roofShown = false;
     return { planes: v.renderer.clippingPlanes.length, roofShown, removedHidden, removedShown, keptShown, dbl, n, cam: v.getCamera(),
       on: c.shadowRoot.querySelector('button.section').classList.contains('on') }; })()`);
-  await page.waitForFunction((c0) => JSON.stringify(document.querySelector('floorplan3d-card')._view.getCamera()) !== c0, { timeout: 8000 }, JSON.stringify(cam0)).catch(() => {});
+  await page.waitForFunction((c0) => JSON.stringify(document.querySelector('taylors3d-card')._view.getCamera()) !== c0, { timeout: 8000 }, JSON.stringify(cam0)).catch(() => {});
   await settle(page, card);
   let sec = await secState();
   check('Section on: one global clipping plane, roof shown, button on', sec.planes === 1 && sec.roofShown && sec.on, JSON.stringify(sec));
@@ -338,7 +338,7 @@ try {
   for (let i = 0; i < 3; i++) { await page.evaluate(`${btn}.click()`); seq.push(await mode()); }
   check('button cycles auto -> day -> night -> auto', seq.join() === 'day,night,auto', seq.join());
   await page.evaluate(`${btn}.click()`);
-  check('mode persists in localStorage', (await page.evaluate(`localStorage.getItem('floorplan3d.sky')`)) === 'day');
+  check('mode persists in localStorage', (await page.evaluate(`localStorage.getItem('taylors3d.sky')`)) === 'day');
   await page.evaluate(`${btn}.click()`);
   await page.evaluate(`${btn}.click()`);
   await tint(60, 180);
@@ -438,7 +438,7 @@ try {
   await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
   await sleep(200);
   await page.evaluate(() => {
-    const b = [...document.querySelector('floorplan3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === 'Model');
+    const b = [...document.querySelector('taylors3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === 'Model');
     if (b) b.click();
   });
   await sleep(200);
@@ -901,7 +901,7 @@ try {
   const { page } = s;
   const panel = (sel) => `${card}.shadowRoot.querySelector(".panel ${sel}")`;
   const clickText = (t) => page.evaluate((t) => {
-    const b = [...document.querySelector('floorplan3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === t);
+    const b = [...document.querySelector('taylors3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === t);
     if (b) b.click();
     return !!b;
   }, t);
@@ -1173,7 +1173,7 @@ try {
   const sr = `${card}.shadowRoot`;
   const clickText = async (t) => {
     const ok = await page.evaluate((t) => {
-      const b = [...document.querySelector('floorplan3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === t);
+      const b = [...document.querySelector('taylors3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === t);
       if (b) b.click();
       return !!b;
     }, t);
@@ -1190,7 +1190,7 @@ try {
   const nodeVis = (name) => page.evaluate(`(() => { const n = ${card}._view.model.root.getObjectByName(${JSON.stringify(name)}); for (let p = n; p; p = p.parent) if (!p.visible) return false; return !!n; })()`);
   // a screen point over a plan spot that is not covered by a marker or other DOM (so the click reaches the canvas)
   const freePoint = (spots, z, floor) => page.evaluate((spots, z, floor) => {
-    const c = document.querySelector('floorplan3d-card');
+    const c = document.querySelector('taylors3d-card');
     for (const [x, y] of spots) {
       const [cx, cy] = c._view.screenPoint(x, y, z, floor);
       const el = c.shadowRoot.elementFromPoint(cx, cy);
@@ -1318,7 +1318,7 @@ try {
   await sleep(300);
   await clickText('Rooms');
   const pickBtn = () => page.evaluate(() => {
-    const li = [...document.querySelector('floorplan3d-card').shadowRoot.querySelectorAll('.panel li')].find((x) => x.querySelector('.name') && x.querySelector('.name').textContent.trim() === 'Kitchen');
+    const li = [...document.querySelector('taylors3d-card').shadowRoot.querySelectorAll('.panel li')].find((x) => x.querySelector('.name') && x.querySelector('.name').textContent.trim() === 'Kitchen');
     const b = li && [...li.querySelectorAll('button')].find((x) => x.textContent.trim() === 'Pick');
     if (b) b.click();
     return !!b;
@@ -1452,7 +1452,7 @@ try {
     const x = b.left + (w.x + 1) / 2 * b.width, y = b.top + (1 - w.y) / 2 * b.height;
     const hit = v.pivotPoint(x, y, v.floorElevation('ground'));
     return { x, y, hit, cam: v.getCamera() }; })()`);
-  await page.evaluate(({ x, y }) => { const e = document.querySelector('floorplan3d-card')._edit; e.canvasDown({ button: 0, clientX: x, clientY: y }); e.canvasUp({ clientX: x, clientY: y }); }, aim);
+  await page.evaluate(({ x, y }) => { const e = document.querySelector('taylors3d-card')._edit; e.canvasDown({ button: 0, clientX: x, clientY: y }); e.canvasUp({ clientX: x, clientY: y }); }, aim);
   await settle(page, card);
   const near = (a, b, tol = 0.05) => !!a && !!b && a.every((x, i) => Math.abs(x - b[i]) <= tol);
   const piv = await page.evaluate(`(() => { const c = ${card}, v = c._view; return { target: v.controls.target.toArray(), pos: v.persp.position.toArray(),
@@ -1572,7 +1572,7 @@ try {
   const sr = `${card}.shadowRoot`;
   const clickText = async (t) => {
     const ok = await page.evaluate((t) => {
-      const b = [...document.querySelector('floorplan3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === t);
+      const b = [...document.querySelector('taylors3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === t);
       if (b) b.click();
       return !!b;
     }, t);
@@ -1801,8 +1801,8 @@ try {
   // a real download would leave headless Chrome hanging on close
   await page.evaluate('HTMLAnchorElement.prototype.click = function () { window.__downloaded = this.download; }');
   await page.evaluate(fs.readFileSync(path.join(root, 'tools/export-glb.js'), 'utf8'));
-  await page.waitForFunction('!!window.__floorplan3dGlb', { timeout: 10000 });
-  const glb = Buffer.from(await page.evaluate('Array.from(new Uint8Array(window.__floorplan3dGlb))'));
+  await page.waitForFunction('!!window.__taylors3dGlb', { timeout: 10000 });
+  const glb = Buffer.from(await page.evaluate('Array.from(new Uint8Array(window.__taylors3dGlb))'));
   check('export is a binary glTF', glb.toString('ascii', 0, 4) === 'glTF');
   check('download offered as house.glb', (await page.evaluate('window.__downloaded')) === 'house.glb');
   const jsonLen = glb.readUInt32LE(12);
@@ -1951,7 +1951,7 @@ if (process.env.REAL_MODEL) {
     await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
     await sleep(200);
     await page.evaluate(() => {
-      const b = [...document.querySelector('floorplan3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === 'Model');
+      const b = [...document.querySelector('taylors3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === 'Model');
       if (b) b.click();
     });
     await sleep(150);
@@ -1988,7 +1988,7 @@ if (process.env.USER_MODEL) {
       await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
       await sleep(200);
       await page.evaluate(() => {
-        const b = [...document.querySelector('floorplan3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === 'Model');
+        const b = [...document.querySelector('taylors3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === 'Model');
         if (b) b.click();
       });
       await sleep(150);

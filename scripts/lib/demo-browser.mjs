@@ -53,7 +53,7 @@ export async function openDemo(query = {}, viewport = { width: 1400, height: 560
     const q = new URLSearchParams(Object.entries(query).filter(([, v]) => v !== undefined));
     await page.goto(`${base}/demo/index.html?${q}`, { waitUntil: 'networkidle0' });
     await page.waitForFunction(() => {
-      const c = document.querySelector('floorplan3d-card');
+      const c = document.querySelector('taylors3d-card');
       return c && c.shadowRoot && c.shadowRoot.querySelectorAll('.fp-marker').length > 0;
     }, { timeout: 10000 });
     await new Promise((r) => setTimeout(r, 500));

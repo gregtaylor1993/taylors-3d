@@ -48,7 +48,7 @@
 | `src/bindings.js` (modify) | `measuredElevations(levels)` |
 | `src/layout.js` (modify) | `roomLabel(name, polygon, mode)` |
 | `src/view.js` (modify) | visible floor set, `applyModelVisibility`, `setMarkerStates`, `setCut`, `getCamera`/`setCamera`, `meshTriangles`, `pickModel` returns hit |
-| `src/floorplan3d-card.js` (modify) | resolve views, chips from views, `_setView`, markers state, cameras, labels, YAML `views`, `room_labels` |
+| `src/taylors3d-card.js` (modify) | resolve views, chips from views, `_setView`, markers state, cameras, labels, YAML `views`, `room_labels` |
 | `src/edit-mode.js` (modify) | Views tab, click-in-3D menu, Model tab "belongs to floor", Rooms tab Pick + Advanced floors |
 | `scripts/make-demo-model.mjs`, `demo/house.glb`, `scripts/model-check.mjs` | demo model with views/layers, headless checks |
 | `docs/model-builder-guide.md`, `README.md` | views/layers/ceilings/room-floor rules, usage |
@@ -731,7 +731,7 @@ export function roomLabel(name, polygon, mode = 'size') {
 
 ### Task 5: Card — views, chips, devices, cameras, elevations, labels
 
-**Files:** Modify `src/floorplan3d-card.js` (+ `src/layout.js` call sites if needed).
+**Files:** Modify `src/taylors3d-card.js` (+ `src/layout.js` call sites if needed).
 
 **Interfaces:**
 - Consumes: Tasks 1–4.
@@ -754,7 +754,7 @@ export function roomLabel(name, polygon, mode = 'size') {
 
 ### Task 6: Edit mode — Views tab, click-in-3D menu, Model/Rooms tab changes
 
-**Files:** Modify `src/edit-mode.js`, `src/floorplan3d-card.js` (STYLE only).
+**Files:** Modify `src/edit-mode.js`, `src/taylors3d-card.js` (STYLE only).
 
 **Interfaces:**
 - Consumes: card `this._views`, `currentView()`, `viewIndex()`, `_setView`, `saveViewPatch`, `_viewState`; view `pickModel` (with `hit`), `highlightModelNode`; `unmatchedSelectors`, `parseSelector`.
@@ -777,7 +777,7 @@ export function roomLabel(name, polygon, mode = 'size') {
 
 ### Task 7: Pick a room from the model
 
-**Files:** Modify `src/edit-mode.js` (Rooms tab + click handling), `src/floorplan3d-card.js` (STYLE if needed).
+**Files:** Modify `src/edit-mode.js` (Rooms tab + click handling), `src/taylors3d-card.js` (STYLE if needed).
 
 **Interfaces:** Consumes `outlineFromTriangles`, view `pickModel` (with `hit`), `meshTriangles`, `E.newRoomId`, `E.upsertRoom`, `setModelProps`.
 

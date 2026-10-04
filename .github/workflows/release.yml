@@ -22,16 +22,17 @@ jobs:
         run: |
           TAG=${GITHUB_REF_NAME#v}
           test "$(node -p "require('./package.json').version")" = "$TAG"
-          test "$(node -p "require('./custom_components/floorplan3d/manifest.json').version")" = "$TAG"
-          grep -q "const VERSION = '$TAG'" src/floorplan3d-card.js
+          test "$(node -p "require('./custom_components/taylors3d/manifest.json').version")" = "$TAG"
+          grep -q "const VERSION = '$TAG'" src/taylors3d-card.js
       - run: npm run build
       - name: Package integration (card bundled inside) for HACS
         run: |
-          cd custom_components/floorplan3d
-          zip -r "$GITHUB_WORKSPACE/floorplan3d.zip" . -x '__pycache__/*'
+          cp LICENSE custom_components/taylors3d/LICENSE
+          cd custom_components/taylors3d
+          zip -r "$GITHUB_WORKSPACE/taylors3d.zip" . -x '__pycache__/*'
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" floorplan3d.zip dist/floorplan3d-card.js \
+          gh release create "$GITHUB_REF_NAME" taylors3d.zip dist/taylors3d-card.js \
             --title "$GITHUB_REF_NAME" --generate-notes

@@ -4,7 +4,7 @@ import * as esbuild from 'esbuild';
 const watch = process.argv.includes('--watch');
 const builds = [
   // the card itself, a single ES module for /config/www
-  { entryPoints: ['src/floorplan3d-card.js'], outfile: 'dist/floorplan3d-card.js', minify: !watch },
+  { entryPoints: ['src/taylors3d-card.js'], outfile: 'dist/taylors3d-card.js', minify: !watch },
   // demo-only helpers (mock hass, ha-icon stand-in)
   { entryPoints: ['demo/demo.js'], outfile: 'dist/demo.js' },
 ];
@@ -15,8 +15,8 @@ const copyToIntegration = {
   setup(build) {
     build.onEnd((r) => {
       if (r.errors.length) return;
-      fs.mkdirSync('custom_components/floorplan3d/frontend', { recursive: true });
-      fs.copyFileSync('dist/floorplan3d-card.js', 'custom_components/floorplan3d/frontend/floorplan3d-card.js');
+      fs.mkdirSync('custom_components/taylors3d/frontend', { recursive: true });
+      fs.copyFileSync('dist/taylors3d-card.js', 'custom_components/taylors3d/frontend/taylors3d-card.js');
     });
   },
 };

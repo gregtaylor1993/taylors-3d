@@ -14,13 +14,13 @@ const check = (name, ok, detail = '') => {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ' – ' + detail : ''}`);
   if (!ok) failures.push(name);
 };
-const card = 'document.querySelector("floorplan3d-card")';
+const card = 'document.querySelector("taylors3d-card")';
 const ev = (fn, ...args) => page.evaluate(fn, ...args);
 const layout = () => ev(`${card}._layout`);
 const saved = () => ev('window.__savedLayout || null');
 const panelClick = async (text) => {
   const ok = await ev((t) => {
-    const b = [...document.querySelector('floorplan3d-card').shadowRoot.querySelectorAll('.panel button')]
+    const b = [...document.querySelector('taylors3d-card').shadowRoot.querySelectorAll('.panel button')]
       .find((x) => x.textContent.trim() === t);
     if (b) b.click();
     return !!b;
@@ -30,7 +30,7 @@ const panelClick = async (text) => {
 };
 const rowButton = async (name, text) => {
   const ok = await ev((n, t) => {
-    const li = [...document.querySelector('floorplan3d-card').shadowRoot.querySelectorAll('.panel li')]
+    const li = [...document.querySelector('taylors3d-card').shadowRoot.querySelectorAll('.panel li')]
       .find((x) => x.querySelector('.name') && x.querySelector('.name').textContent.trim().startsWith(n));
     const b = li && [...li.querySelectorAll('button')].find((x) => x.textContent.trim() === t);
     if (b) b.click();
@@ -41,7 +41,7 @@ const rowButton = async (name, text) => {
 };
 // client px of a plan point on the active floor
 const at = (x, y, z = 0) => ev((x, y, z) => {
-  const c = document.querySelector('floorplan3d-card');
+  const c = document.querySelector('taylors3d-card');
   return c._view.screenPoint(x, y, z, c._floor);
 }, x, y, z);
 const click = async (x, y) => {

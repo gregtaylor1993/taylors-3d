@@ -578,7 +578,7 @@ export class EditMode {
       this.card._imageBlob = { px: q.px, py: q.py, count: null, misses: 0, imgW: img.imgW, imgH: img.imgH, sampleW: img.width, color };
       this.setMower({ image: { tolerance: 40, min_pixels: 4, ...ic, color } });
     } catch (e) {
-      console.warn('floorplan3d: could not read the mower map image', e);
+      console.warn('taylors3d: could not read the mower map image', e);
       this.message = { text: "Can't read the map image.", error: true };
       this.render();
     }
@@ -1678,7 +1678,7 @@ export class EditMode {
   }
 
   _modelApi() {
-    return `/api/floorplan3d/model/${encodeURIComponent(this.card._config.layout_key)}`;
+    return `/api/taylors3d/model/${encodeURIComponent(this.card._config.layout_key)}`;
   }
 
   async _uploadModel(file) {
@@ -1729,7 +1729,7 @@ export class EditMode {
         + this._modelBindingsHtml();
     }
     if (this.card._store.backend !== 'shared') {
-      return `<p class="note warn">Uploading a model needs the Floorplan 3D integration (Settings → Devices &amp; services → Add integration).
+      return `<p class="note warn">Uploading a model needs the Taylor's 3D integration (Settings → Devices &amp; services → Add integration).
         Without it, put a .glb in /config/www and set <code>model: /local/house.glb</code> in the card YAML.</p>`;
     }
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(c.layout_key)) {
@@ -1737,7 +1737,7 @@ export class EditMode {
     }
     const m = this.layout.model;
     let out = `<p class="hint">A 3D model of the house (.glb) shown under the plan. Parts tagged as levels, rooms and zones
-      (<code>fp</code> tags, see <a href="https://github.com/istals/floorplan3d-card/blob/main/docs/model-builder-guide.md" target="_blank" rel="noopener">docs/model-builder-guide.md</a>)
+      (<code>fp</code> tags, see <a href="https://github.com/gregtaylor1993/taylors-3d/blob/main/docs/model-builder-guide.md" target="_blank" rel="noopener">docs/model-builder-guide.md</a>)
       are shown per floor and become rooms; a tagged model shows whole levels (lower floors stay, upper ones are hidden); only an untagged model is cut at the top of the selected storey. It is stored in Home Assistant and only shown to logged-in users.</p>
       <div class="row"><label class="button ${this.uploading ? 'disabled' : 'primary'}">${this.uploading ? 'Uploading ' + esc(this.uploading) + '…' : (m ? 'Replace model' : 'Upload .glb')}
       <input type="file" accept=".glb,model/gltf-binary" data-field="model-file" hidden ${this.uploading ? 'disabled' : ''}></label></div>`;
@@ -1844,9 +1844,9 @@ export class EditMode {
   _dataTab() {
     const b = this.card._store.backend;
     const info = {
-      shared: ['ok', 'Shared: stored by the floorplan3d integration, every user and device sees the same layout.'],
-      user: ['warn', 'Per user: stored in your HA user data. Other users will not see this layout. Install the floorplan3d integration to share it.'],
-      browser: ['warn', 'This browser only: other browsers and devices will not see this layout. Install the floorplan3d integration to share it.'],
+      shared: ['ok', "Shared: stored by the Taylor's 3D integration, every user and device sees the same layout."],
+      user: ['warn', "Per user: stored in your HA user data. Other users will not see this layout. Install the Taylor's 3D integration to share it."],
+      browser: ['warn', "This browser only: other browsers and devices will not see this layout. Install the Taylor's 3D integration to share it."],
     }[b] || ['warn', 'Storage not loaded yet.'];
     return `<div class="sub">Storage</div><p class="note ${info[0]}">${esc(info[1])}</p>
       <div class="sub">Export / import</div>
@@ -2175,7 +2175,7 @@ export class EditMode {
     const blob = new Blob([JSON.stringify(this.layout, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `floorplan3d-${this.card._config.layout_key}.json`;
+    a.download = `taylors3d-${this.card._config.layout_key}.json`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }

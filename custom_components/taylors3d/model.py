@@ -1,6 +1,6 @@
 """Upload and serve the house model (.glb) per layout key.
 
-Files live in <config>/floorplan3d/models/<key>.glb, outside /config/www, so they are only
+Files live in <config>/taylors3d/models/<key>.glb, outside /config/www, so they are only
 served to logged-in users. Upload and delete are admin only.
 """
 
@@ -43,7 +43,7 @@ class ModelView(HomeAssistantView):
     """GET (any logged-in user), POST multipart field "file" and DELETE (admin)."""
 
     url = MODEL_URL + "/{key}"
-    name = "api:floorplan3d:model"
+    name = "api:taylors3d:model"
     requires_auth = True
 
     def __init__(self, hass: HomeAssistant) -> None:

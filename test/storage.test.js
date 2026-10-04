@@ -21,7 +21,7 @@ describe('LayoutStore', () => {
   afterEach(() => vi.useRealTimers());
 
   it('prefers the companion integration', async () => {
-    const callWS = vi.fn(async (m) => (m.type === 'floorplan3d/layout/get' ? { layout: { rooms: [{ id: 'r' }] } } : null));
+    const callWS = vi.fn(async (m) => (m.type === 'taylors3d/layout/get' ? { layout: { rooms: [{ id: 'r' }] } } : null));
     const s = new LayoutStore('k');
     const l = await s.load({ callWS });
     expect(s.backend).toBe('shared');
@@ -29,12 +29,12 @@ describe('LayoutStore', () => {
     const p = s.save({ callWS }, l);
     await vi.runAllTimersAsync();
     expect(await p).toBe(true);
-    expect(callWS).toHaveBeenLastCalledWith({ type: 'floorplan3d/layout/set', key: 'k', layout: l });
+    expect(callWS).toHaveBeenLastCalledWith({ type: 'taylors3d/layout/set', key: 'k', layout: l });
   });
 
   it('migrates an older per-user layout when nothing is shared yet', async () => {
     const callWS = vi.fn(async (m) => {
-      if (m.type === 'floorplan3d/layout/get') return { layout: null };
+      if (m.type === 'taylors3d/layout/get') return { layout: null };
       if (m.type === 'frontend/get_user_data') return { value: { rooms: [{ id: 'old' }] } };
       return null;
     });
@@ -44,9 +44,9 @@ describe('LayoutStore', () => {
   });
 
   it('migrates a browser layout when nothing is shared yet', async () => {
-    localStorage.setItem('floorplan3d_k', JSON.stringify({ rooms: [{ id: 'local' }] }));
+    localStorage.setItem('taylors3d_k', JSON.stringify({ rooms: [{ id: 'local' }] }));
     const callWS = vi.fn(async (m) => {
-      if (m.type === 'floorplan3d/layout/get') return { layout: null };
+      if (m.type === 'taylors3d/layout/get') return { layout: null };
       throw new Error('unknown');
     });
     const s = new LayoutStore('k');
@@ -66,22 +66,22 @@ describe('LayoutStore', () => {
     const p = s.save({ callWS }, { a: 1 });
     await vi.runAllTimersAsync();
     await p;
-    expect(callWS).toHaveBeenLastCalledWith({ type: 'frontend/set_user_data', key: 'floorplan3d_default', value: { a: 1 } });
+    expect(callWS).toHaveBeenLastCalledWith({ type: 'frontend/set_user_data', key: 'taylors3d_default', value: { a: 1 } });
   });
 
   it('falls back to localStorage', async () => {
-    localStorage.setItem('floorplan3d_k', JSON.stringify({ rooms: [{ id: 'z' }] }));
+    localStorage.setItem('taylors3d_k', JSON.stringify({ rooms: [{ id: 'z' }] }));
     const s = new LayoutStore('k');
     expect((await s.load({ callWS: fail })).rooms).toEqual([{ id: 'z' }]);
     expect(s.backend).toBe('browser');
     const p = s.save({ callWS: fail }, { rooms: [] });
     await vi.runAllTimersAsync();
     expect(await p).toBe(true);
-    expect(JSON.parse(localStorage.getItem('floorplan3d_k'))).toEqual({ rooms: [] });
+    expect(JSON.parse(localStorage.getItem('taylors3d_k'))).toEqual({ rooms: [] });
   });
 
   it('debounces saves and settles superseded promises', async () => {
-    const callWS = vi.fn(async (m) => (m.type === 'floorplan3d/layout/get' ? { layout: null } : null));
+    const callWS = vi.fn(async (m) => (m.type === 'taylors3d/layout/get' ? { layout: null } : null));
     const s = new LayoutStore('k');
     await s.load({ callWS });
     callWS.mockClear();

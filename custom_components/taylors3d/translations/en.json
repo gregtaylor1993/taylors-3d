@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Taylor's 3D",
+        "description": "Stores Taylor's 3D layouts in Home Assistant so every user and device sees the same plan, and loads the card on all dashboards."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Taylor's 3D is already set up."
+    }
+  }
+}

@@ -13,7 +13,7 @@ class DemoIcon extends HTMLElement {
 }
 if (!customElements.get('ha-icon')) customElements.define('ha-icon', DemoIcon);
 
-const cards = [...document.querySelectorAll('floorplan3d-card')];
+const cards = [...document.querySelectorAll('taylors3d-card')];
 const themes = new Map(cards.map((c) => [c, { darkMode: !!c.closest('.dark') }]));
 const push = (hass) => { for (const c of cards) c.hass = { ...hass, themes: themes.get(c) }; };
 const params = new URLSearchParams(location.search);

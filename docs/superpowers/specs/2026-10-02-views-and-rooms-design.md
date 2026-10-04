@@ -154,7 +154,7 @@ The binding keeps only the floor (`{ floor }` or auto). The Model tab's level dr
 - Limitation (from `docs/prototype-findings.md`): the prototype merges static geometry per material, so
   on an **untagged** export one floor mesh can span several rooms and the traced loop may cover them
   all. The pick then shows the traced outline for confirmation ("Use" / "Draw instead"), and the user
-  can reshape it. Tagged exports (the prototype's "floorplan3d-card (house.glb)" export writes
+  can reshape it. Tagged exports (the prototype's "taylors3d-card (house.glb)" export writes
   `fp` room groups with outlines) avoid this entirely: rooms appear without picking.
 - The polygon is in plan coordinates of the current alignment (inverse of the model alignment is not
   needed: rooms are stored in plan space). The room is created on the selected floor, selected, and can

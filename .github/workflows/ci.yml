@@ -27,7 +27,7 @@ jobs:
         with:
           name: card
           path: |
-            dist/floorplan3d-card.js
+            dist/taylors3d-card.js
             screenshots/
 
   integration:

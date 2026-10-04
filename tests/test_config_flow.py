@@ -1,11 +1,11 @@
-"""Tests for the Floorplan 3D config flow."""
+"""Tests for the Taylor's 3D config flow."""
 
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.setup import async_setup_component
 
-from custom_components.floorplan3d.const import DOMAIN
+from custom_components.taylors3d.const import DOMAIN
 
 
 async def test_user_flow_creates_entry_and_sets_up(hass: HomeAssistant, hass_ws_client) -> None:
@@ -14,12 +14,12 @@ async def test_user_flow_creates_entry_and_sets_up(hass: HomeAssistant, hass_ws_
     assert result["type"] is FlowResultType.FORM
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == "Floorplan 3D"
+    assert result["title"] == "Taylor's 3D"
     await hass.async_block_till_done()
 
     # set up without any YAML: the websocket API works
     client = await hass_ws_client(hass)
-    await client.send_json_auto_id({"type": "floorplan3d/layout/get", "key": "default"})
+    await client.send_json_auto_id({"type": "taylors3d/layout/get", "key": "default"})
     assert (await client.receive_json())["success"]
 
 
@@ -50,5 +50,5 @@ async def test_reload_keeps_working(hass: HomeAssistant, hass_ws_client) -> None
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
     client = await hass_ws_client(hass)
-    await client.send_json_auto_id({"type": "floorplan3d/layout/get", "key": "default"})
+    await client.send_json_auto_id({"type": "taylors3d/layout/get", "key": "default"})
     assert (await client.receive_json())["success"]

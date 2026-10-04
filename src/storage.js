@@ -1,5 +1,5 @@
 // Layout persistence.
-// 1. floorplan3d companion integration (shared across all users and devices)
+// 1. taylors3d companion integration (shared across all users and devices)
 // 2. frontend user data (stored in HA, but per user)
 // 3. browser localStorage (last resort)
 
@@ -25,7 +25,7 @@ export class LayoutStore {
   async load(hass) {
     let shared;
     try {
-      const r = await hass.callWS({ type: 'floorplan3d/layout/get', key: this.key });
+      const r = await hass.callWS({ type: 'taylors3d/layout/get', key: this.key });
       shared = r && r.layout;
       this.backend = 'shared';
     } catch (e) { /* integration not installed */ }
@@ -40,7 +40,7 @@ export class LayoutStore {
 
   async _userData(hass) {
     try {
-      const r = await hass.callWS({ type: 'frontend/get_user_data', key: 'floorplan3d_' + this.key });
+      const r = await hass.callWS({ type: 'frontend/get_user_data', key: 'taylors3d_' + this.key });
       return { ok: true, value: r && r.value };
     } catch (e) {
       return { ok: false, value: null };
@@ -49,7 +49,7 @@ export class LayoutStore {
 
   _browser() {
     try {
-      return JSON.parse(localStorage.getItem('floorplan3d_' + this.key) || 'null');
+      return JSON.parse(localStorage.getItem('taylors3d_' + this.key) || 'null');
     } catch (e) {
       return null;
     }
@@ -65,15 +65,15 @@ export class LayoutStore {
         this._pending = null;
         try {
           if (this.backend === 'shared') {
-            await hass.callWS({ type: 'floorplan3d/layout/set', key: this.key, layout });
+            await hass.callWS({ type: 'taylors3d/layout/set', key: this.key, layout });
           } else if (this.backend === 'user') {
-            await hass.callWS({ type: 'frontend/set_user_data', key: 'floorplan3d_' + this.key, value: layout });
+            await hass.callWS({ type: 'frontend/set_user_data', key: 'taylors3d_' + this.key, value: layout });
           } else {
-            localStorage.setItem('floorplan3d_' + this.key, JSON.stringify(layout));
+            localStorage.setItem('taylors3d_' + this.key, JSON.stringify(layout));
           }
           resolve(true);
         } catch (e) {
-          console.error('floorplan3d: save failed', e);
+          console.error('taylors3d: save failed', e);
           resolve(false);
         }
       }, delay);

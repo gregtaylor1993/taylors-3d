@@ -93,7 +93,7 @@ Yes, `BGU.mergeGeometries` is used once (offset ~114001), log message `static me
   - Light hit spheres: `userData.id = 'light.xxx'`.
 - No fence/terrain/furniture/roof/ceiling category tags exist at runtime. The category is implied only by which container a mesh sits in (`roofG` = roof) and, at export, by position tests (Q3 export tags, Q12).
 
-### userData.fp tags written by "floorplan3d-card (house.glb)" export (`fp3dExport`, offset ~147936)
+### userData.fp tags written by "taylors3d-card (house.glb)" export (`fp3dExport`, offset ~147936)
 
 All tags are objects in `userData.fp` (GLTFExporter writes them as `extras.fp`). Common helper: plan transform `PL([x,z]) = [z+0.27, x+0.27]` (x_plan = model z + 0.27, y_plan = model x + 0.27), origin at the SW outer wall corner (model -0.27,-0.27).
 
@@ -325,7 +325,7 @@ Facade labels (exterior): 4 world-scaled `Sprite`s (IBM Plex Sans, light backgro
 Opens a modal with YAML text from `buildYaml`, plus a "Download renders + YAML (.zip)" button. Produces `<view>_floorplan.zip` containing: `<view>_base.jpg` (all lights off, night), one `<view>_<light_slug>.jpg` per light in the view (that light on, bri 255, red-hue 0/100 for bulb mode, mower hidden), and `<view>_floorplan.yaml`. Render: width 1920, JPEG 0.9, current camera (or orthographic top view if prop `exportTopOrtho` and Exterior).
 YAML: `type: custom:config-template-card` wrapping a `picture-elements` card: base image `/local/floorplan/<view>_base.jpg`, one `type: image` element per light with `mix-blend-mode: lighten` and templated opacity/hue-rotate (Q7), one `state-icon` per light (position = projected screen % of `l.pos`, tap `toggle`), and, for Exterior, conditional Wallbox and Sunseeker markers plus (in ortho mode) a camera image overlay with a CSS matrix computed from the mower-map fit.
 
-### "floorplan3d-card (house.glb)" (`fp3dExport`)
+### "taylors3d-card (house.glb)" (`fp3dExport`)
 Builds a new `THREE.Scene` containing level groups `ground`, `attic`, `exterior`, `roof` with room/zone/object groups tagged with `userData.fp` (Q3), clones scene meshes into them (skips lights, sprites, lines, helpers, `lowZone`, light-entity items, transparent meshes with opacity <0.6 such as glass, and planes >=100 m wide i.e. ground), runs `GLTFExporter.parseAsync(root,{binary:true,maxTextureSize:2048,onlyVisible:false})`. Output: `house_house_glb.zip` with `house.glb` and a README noting levels ground (0 / 2.89) and attic (3.25 / 2.5), objects (lamp fixtures, mower, mower_dock, ev_charger, heat_pump), "plan north = house long axis", `environment.north = -26.4` (true north is 26.4 degrees west of model north; = 333.6), and instructions `model: /local/house.glb`. Plan coordinates: x = model z + 0.27, y = model x + 0.27.
 
 ### "House Plan backgrounds (PNG)" (`housePlanExport`)

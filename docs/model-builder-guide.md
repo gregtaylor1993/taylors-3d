@@ -1,4 +1,4 @@
-# Model builder guide (floorplan3d-card)
+# Model builder guide (Taylor's 3D)
 
 Instructions for whoever builds the house model. Hand this whole file to the model builder
 session. The model describes **what exists**; Home Assistant decides **what it is connected to**
@@ -260,7 +260,7 @@ don't flicker (z-fighting).
       stable ids, glow mesh named where it matters, moving parts as separate nodes with `hinge`.
 - [ ] No mesh larger than the plot inside a storey; no world ground plane in storeys.
 - [ ] No lights / cameras / helpers in the export. Under ~20 MB, textures ≤ 2048 px.
-- [ ] `node tools/check-model.mjs house.glb` reports OK (run it in the floorplan3d-card repository).
+- [ ] `node tools/check-model.mjs house.glb` reports OK (run it in the taylors3d-card repository).
 
 ## Example (Three.js)
 

@@ -1,4 +1,4 @@
-"""Fixtures for the floorplan3d integration tests."""
+"""Fixtures for the taylors3d integration tests."""
 
 import pytest
 
