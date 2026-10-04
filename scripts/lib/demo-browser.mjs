@@ -51,11 +51,14 @@ export async function openDemo(query = {}, viewport = { width: 1400, height: 560
   try {
     const { page, errors } = await newPage(browser, viewport);
     const q = new URLSearchParams(Object.entries(query).filter(([, v]) => v !== undefined));
-    await page.goto(`${base}/demo/index.html?${q}`, { waitUntil: 'networkidle0' });
+    // The live preview refreshes images/state. Wait for the document and the actual card
+    // below, rather than requiring every network request to stay idle together.
+    // Model checks add their own readiness predicates (including expected load errors).
+    await page.goto(`${base}/demo/index.html?${q}`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => {
       const c = document.querySelector('taylors3d-card');
       return c && c.shadowRoot && c.shadowRoot.querySelectorAll('.fp-marker').length > 0;
-    }, { timeout: 10000 });
+    }, { timeout: query.model ? 30000 : 10000 }); // model parsing may finish after DOMContentLoaded
     await new Promise((r) => setTimeout(r, 500));
     return { page, errors, close, browser, base };
   } catch (e) {

@@ -23,6 +23,9 @@ position and map overlay.
   xy: configurable attributes), calibration: 1 pt translate, 2 pts similarity, 3+ pts
   least-squares affine. `overlayUrl()` for image./camera. entities via entity_picture.
 - `storage.js` — LayoutStore: companion integration WS -> `frontend/set_user_data` -> localStorage.
+- `device-popup.js` — room/device panels; explicit quick controls and HA All controls fallback.
+- `minimap.js` — north-up SVG mini-map sharing room outlines and live marker/model-object positions.
+- `navigation.js` — bubble control ordering, room picking and camera focus math.
 
 Review these, fix bugs, add unit tests (vitest) for placement + mower math.
 
@@ -62,9 +65,15 @@ model_scale: 1
 
 ## Behaviour
 View mode:
-- Floor chips (each floor + All), 3D / Top view toggle, edit button (admins only).
-- Marker tap: toggle for light/switch/fan/input_boolean, otherwise more-info.
+- Bottom bubble bar: floor/view chips, 3D / Top, reset, section, day/night, mini-map and Edit (admins only).
+  Visual card editor chooses button visibility/order, map size/corner and device tap behavior.
+- Marker/model-object tap: open device controls; explicit supported toggles/light brightness and
+  All controls opens HA more-info. `device_tap_action: toggle` retains the original quick-toggle mode.
   Long-press (500 ms): more-info (`hass-more-info` event, bubbles + composed).
+- Tap a room floor in view mode: show the linked area's devices/readings, including bound GLB devices.
+- SVG mini-map: selected floor, devices and camera focus, click-to-focus; hidden during editing.
+  The scene has its own container above the reserved bottom bar. Capture-phase object gestures
+  must ignore `[data-taylors3d-ui]` and both popup elements, including their outside-dismiss events.
 - Lights that are on: additive radial glow on the floor, colour from rgb_color, strength from brightness.
 - Marker shows secondary sensor value (e.g. temperature) when the device has one.
 
@@ -102,7 +111,7 @@ iiseppi/sunseeker_local_control (MQTT).
 - GitHub (`origin`) is the main remote; HACS installs it as an Integration from release
   `taylors3d.zip` (integration with the card bundled; it registers the card via
   add_extra_js_url). Manual: copy `custom_components/taylors3d/` after `npm run build`.
-- CI: `.github/workflows/ci.yml` (lint, vitest, build, headless checks, pytest);
+- CI: `.github/workflows/ci.yml` (lint, vitest, build, headless checks including `check:navigation`, pytest);
   `release.yml` on `v*` tags builds the zip and creates the release.
 - Add `npm run deploy` that scp's dist + integration to the HA host (host from .env, not committed).
 - `demo/index.html` with a mock `hass` object (few areas, floors, lights, sensors, a fake mower

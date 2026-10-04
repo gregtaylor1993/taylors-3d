@@ -60,4 +60,131 @@ describe('card editor', () => {
     form.dispatchEvent(new CustomEvent('value-changed', { detail: { value: { ...form.data, height: '600px', view: '3d' } } }));
     expect(got).toEqual({ type: 'custom:taylors3d-card', height: '600px' });
   });
+
+  it('lets a visual edit hide navigation and preserves unrelated YAML options', () => {
+    const el = document.createElement('taylors3d-card-editor');
+    el.setConfig({
+      type: 'custom:taylors3d-card', model: '/local/home.glb',
+      views: { garden: { label: 'Garden', hidden: false } }, custom_future_option: 'keep me',
+    });
+    const form = el.querySelector('ha-form');
+    expect(form.data).toMatchObject({ show_bubble_bar: true, mini_map: true, mini_map_size: 180, mini_map_position: 'top-right', device_tap_action: 'popup' });
+    expect(form.data.bubble_bar_controls).toEqual(['mode', 'reset', 'section', 'daynight', 'minimap', 'edit']);
+
+    let got, event;
+    el.addEventListener('config-changed', (e) => { got = e.detail.config; event = e; });
+    form.dispatchEvent(new CustomEvent('value-changed', { detail: { value: {
+      ...form.data, show_bubble_bar: false, mini_map: false, mini_map_position: 'top-left',
+      mini_map_size: 220, device_tap_action: 'toggle', bubble_bar_controls: ['edit', 'reset'],
+    } } }));
+    expect(got).toEqual({
+      type: 'custom:taylors3d-card', model: '/local/home.glb',
+      views: { garden: { label: 'Garden', hidden: false } }, custom_future_option: 'keep me',
+      show_bubble_bar: false, mini_map: false, mini_map_position: 'top-left',
+      mini_map_size: 220, device_tap_action: 'toggle', bubble_bar_controls: ['edit', 'reset'],
+    });
+    expect(event.bubbles).toBe(true);
+    expect(event.composed).toBe(true);
+    expect(form.computeHelper({ name: 'device_tap_action' })).toContain('All controls opens Home Assistant');
+  });
+
+  it('clamps mini-map size before emitting it and updates the displayed field', () => {
+    const el = document.createElement('taylors3d-card-editor');
+    el.setConfig({ type: 'custom:taylors3d-card' });
+    const form = el.querySelector('ha-form');
+    let got;
+    el.addEventListener('config-changed', (e) => { got = e.detail.config; });
+    for (const [input, expected] of [[30, 120], [500, 260], ['215', 215]]) {
+      form.dispatchEvent(new CustomEvent('value-changed', { detail: { value: { ...form.data, mini_map_size: input } } }));
+      expect(got.mini_map_size).toBe(expected);
+      expect(form.data.mini_map_size).toBe(expected);
+    }
+    form.dispatchEvent(new CustomEvent('value-changed', { detail: { value: { ...form.data, mini_map_size: 'broken' } } }));
+    expect(got).toEqual({ type: 'custom:taylors3d-card' });
+    expect(form.data.mini_map_size).toBe(180);
+  });
+
+  it('filters unsupported bubble controls without changing their order or the caller’s array', () => {
+    const controls = ['edit', 'unexpected', 'reset', 'edit'];
+    expect(mod.cleanConfig({ bubble_bar_controls: controls })).toEqual({ bubble_bar_controls: ['edit', 'reset'] });
+    expect(controls).toEqual(['edit', 'unexpected', 'reset', 'edit']);
+    expect(mod.cleanConfig({ bubble_bar_controls: [] })).toEqual({ bubble_bar_controls: [] });
+    expect(mod.cleanConfig({ bubble_bar_controls: ['mode', 'reset', 'section', 'daynight', 'minimap', 'edit'] })).toEqual({});
+    expect(mod.cleanConfig({ mini_map_position: 'bottom', device_tap_action: 'delete', mini_map: 'false' })).toEqual({});
+  });
+
+  it('moves selected buttons through the visual editor and keeps other card options', () => {
+    const el = document.createElement('taylors3d-card-editor');
+    document.body.append(el);
+    const original = {
+      type: 'custom:taylors3d-card', model: '/local/home.glb', mini_map_size: 220,
+      views: { front: { label: 'Front door' } }, bubble_bar_controls: ['minimap', 'reset', 'edit'],
+    };
+    el.setConfig(original);
+    const order = () => [...el.querySelectorAll('.bubble-control-order li')].map((row) => row.dataset.control);
+    const button = (id, direction) => el.querySelector(`[data-control="${id}"] .${direction}`);
+    expect(order()).toEqual(['minimap', 'reset', 'edit']);
+    expect(button('minimap', 'up').disabled).toBe(true);
+    expect(button('edit', 'down').disabled).toBe(true);
+
+    const changes = [];
+    el.addEventListener('config-changed', (e) => changes.push(e.detail.config));
+    button('minimap', 'up').click();
+    button('edit', 'down').click();
+    expect(changes).toHaveLength(0);
+    button('edit', 'up').click();
+    expect(changes).toEqual([{ ...original, bubble_bar_controls: ['minimap', 'edit', 'reset'] }]);
+    expect(order()).toEqual(['minimap', 'edit', 'reset']);
+    expect(document.activeElement).toBe(button('edit', 'up'));
+    expect(el.querySelector('ha-form').data.bubble_bar_controls).toEqual(['minimap', 'edit', 'reset']);
+    expect(button('minimap', 'up').disabled).toBe(true);
+    expect(button('reset', 'down').disabled).toBe(true);
+    expect(button('edit', 'up').getAttribute('aria-label')).toBe('Move Edit layout (admins) up');
+    expect(button('edit', 'up').style.minHeight).toBe('44px');
+    expect(original.bubble_bar_controls).toEqual(['minimap', 'reset', 'edit']);
+  });
+
+  it('omits the default order again when a visual move is reversed', () => {
+    const el = document.createElement('taylors3d-card-editor');
+    el.setConfig({ type: 'custom:taylors3d-card', height: '600px' });
+    let got;
+    el.addEventListener('config-changed', (e) => { got = e.detail.config; });
+    el.querySelector('[data-control="mode"] .down').click();
+    expect(got.bubble_bar_controls).toEqual(['reset', 'mode', 'section', 'daynight', 'minimap', 'edit']);
+    el.querySelector('[data-control="mode"] .up').click();
+    expect(got).toEqual({ type: 'custom:taylors3d-card', height: '600px' });
+    expect(el.querySelector('ha-form').data.bubble_bar_controls).toEqual(['mode', 'reset', 'section', 'daynight', 'minimap', 'edit']);
+  });
+
+  it('rebuilds the order after selection changes and hides it when the bar is off', () => {
+    const el = document.createElement('taylors3d-card-editor');
+    el.setConfig({ type: 'custom:taylors3d-card', bubble_bar_controls: ['reset', 'minimap'] });
+    const form = el.querySelector('ha-form');
+    const section = el.querySelector('.bubble-control-order');
+    form.dispatchEvent(new CustomEvent('value-changed', { detail: { value: { ...form.data, bubble_bar_controls: ['edit'] } } }));
+    el.hass = { states: {} };
+    expect(section.querySelectorAll('li')).toHaveLength(1);
+    expect(section.querySelector('li').dataset.control).toBe('edit');
+    expect([...section.querySelectorAll('button')].every((button) => button.disabled)).toBe(true);
+    form.dispatchEvent(new CustomEvent('value-changed', { detail: { value: { ...form.data, show_bubble_bar: false } } }));
+    expect(section.hidden).toBe(true);
+    el.setConfig({ type: 'custom:taylors3d-card', bubble_bar_controls: [] });
+    expect(section.hidden).toBe(false);
+    expect(section.querySelectorAll('li')).toHaveLength(0);
+    expect(section.textContent).toContain('Select buttons');
+  });
+
+  it('keeps ordering button identity and keyboard focus during live Home Assistant updates', () => {
+    const el = document.createElement('taylors3d-card-editor');
+    document.body.append(el);
+    el.setConfig({ type: 'custom:taylors3d-card', bubble_bar_controls: ['reset', 'minimap'] });
+    const button = el.querySelector('[data-control="minimap"] .up');
+    button.focus();
+    el.hass = { states: { 'light.lounge': { state: 'on' } } };
+    expect(el.querySelector('[data-control="minimap"] .up')).toBe(button);
+    expect(document.activeElement).toBe(button);
+    el.setConfig({ type: 'custom:taylors3d-card', height: '600px', bubble_bar_controls: ['reset', 'minimap'] });
+    expect(el.querySelector('[data-control="minimap"] .up')).toBe(button);
+    expect(document.activeElement).toBe(button);
+  });
 });

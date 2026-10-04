@@ -18,7 +18,7 @@ Every idea has a permanent number, such as **F01**, so we can discuss it without
 | Testing | Implemented, with checks still to complete. |
 | Done | Meets its completion checklist, with evidence recorded. |
 
-Taylor chose the first group: **bubble bar, room/device popups and 2D mini-map**. F18–F21 are **In progress**; the other requested additions are **Planned**. Existing foundations are listed separately; they do not mean the complete requested feature is finished.
+Taylor chose the first group: **bubble bar, room/device popups and 2D mini-map**. F18–F21 have a first implementation and are **Testing**, including checks against the actual Home Assistant/wall panel still to do. The other requested additions remain **Planned**. Existing foundations are listed separately; they do not mean the complete requested feature is finished.
 
 For each implementation, update its status, record the changed behavior, link its commit or pull request, and record the checks performed. Keep unfinished parts visible instead of marking a whole feature Done early.
 
@@ -43,10 +43,10 @@ For each implementation, update its status, record the changed behavior, link it
 | F15 | Furniture packs and drag-and-drop placement | Furniture inside GLB models and layer visibility | Planned |
 | F16 | Baked shadows for wall panels | Realtime shadows and model material textures | Planned |
 | F17 | Deeper HA floors/areas/entity integration | Registries, filtering, area/floor mappings | Planned |
-| F18 | Room selection and room control panels | Edit-mode room/model picking | In progress |
-| F19 | Bottom bubble navigation bar | Top toolbar and view chips | In progress |
-| F20 | Rich device control popups | HA more-info and supported object popups | In progress |
-| F21 | Persistent 2D mini-map | Full-card Top view | In progress |
+| F18 | Room selection and room control panels | Edit-mode room/model picking | Testing |
+| F19 | Bottom bubble navigation bar | Top toolbar and view chips | Testing |
+| F20 | Rich device control popups | HA more-info and supported object popups | Testing |
+| F21 | Persistent 2D mini-map | Full-card Top view | Testing |
 | F22 | Cars appearing on the drive | EV charger status; no vehicle detection/model | Planned |
 | F23 | Robot vacuums moving while running | Vacuum markers and reusable mower tracking math | Planned |
 | F24 | Horizontal split floors and vertical layers | Individual floors, All and section views | Planned |
@@ -229,6 +229,8 @@ Taylor confirmed Phase 1 first on 4 October 2026. Later phases remain a proposed
 
 ### F18 — room selection and room panels
 
+**First delivery:** stationary room-floor taps open an area panel with its grouped devices and readings, including devices represented by GLB objects. Navigation drags and device taps are kept separate. Registry/layout changes close an old panel so it cannot retain stale room membership. Configurable room-level shortcuts remain future work.
+
 **Want:** tap a room in normal viewing mode and open a useful room panel, like the described Lounge panel.
 
 **Already present:** room outlines, model picking and edit-mode room selection. A normal-mode room control panel is new work.
@@ -236,6 +238,10 @@ Taylor confirmed Phase 1 first on 4 October 2026. Later phases remain a proposed
 **Complete when:** tapping a room selects the correct room/floor and opens its panel; the panel lists that area's relevant devices, readings and available controls; room-level actions are configurable. A device tap reaches its own controls rather than also opening the room. Closing the panel restores navigation, and missing/empty rooms have an understandable result.
 
 ### F19 — bottom bubble bar
+
+**First delivery:** a bottom bar reserves space below the house; saved views, modes and common controls have clear active states and keyboard focus. Narrow panels use two rows with sideways scrolling. The visual card editor selects/reorders buttons with Up/Down controls; availability follows model capabilities and admin permissions.
+
+Navigation-only configuration changes preserve the selected viewing mode, temporary map visibility and the shared layout storage connection. Changing the layout key loads that key's own layout; an older delayed response cannot replace it.
 
 **Want:** a bubble-style bar at the bottom for views and useful controls.
 
@@ -245,6 +251,8 @@ Taylor confirmed Phase 1 first on 4 October 2026. Later phases remain a proposed
 
 ### F20 — device cards with all applicable options
 
+**First delivery:** taps open grouped-entity panels with live readings, explicit supported on/off and light-brightness controls, unavailable/unknown states and command errors. **All controls** opens HA's native entity UI for complete camera/climate/cover/vacuum/etc. options. Long-press retains more-info; the visual editor can restore quick-toggle taps. Specialized in-card camera feeds and richer domain shortcuts remain under their own planned features.
+
 **Want:** tapping a device opens a card with every useful option that device supports.
 
 **Already present:** device taps toggle some devices or open HA more-info; supported model objects have contextual popups.
@@ -252,6 +260,8 @@ Taylor confirmed Phase 1 first on 4 October 2026. Later phases remain a proposed
 **Complete when:** popups offer controls supported by the selected entity, such as light brightness/colour, climate settings, locks/covers, camera feeds and vacuum actions. Unsupported controls are not advertised. Current state, errors and unavailable devices are visible. HA's standard more-info remains a fallback. Choose whether quick-toggle or popup is the default tap action, with a usable touch gesture for the other action.
 
 ### F21 — 2D mini-map
+
+**First delivery:** lightweight north-up SVG room outlines, a floor selector, live device/model-object dots and camera focus/direction. Taps focus the main camera. The visual editor saves visibility, size and top corner; close/map buttons temporarily hide/show it. Editing hides it. Live updates preserve keyboard focus. Future alert/presence features will add their own map indicators.
 
 **Want:** a small 2D overview alongside the 3D house.
 
@@ -301,13 +311,13 @@ Taylor confirmed Phase 1 first on 4 October 2026. Later phases remain a proposed
 
 ### B01 — distant terrain camera range
 
-**Status:** Testing / local observation. An earlier local browser check reported a terrain corner at depth 243.35 m outside a 199.28 m far rendering limit with a camera 130 m away. This did **not** reproduce in either GitHub attempt: both passed the terrain check with a 286.82 m far limit. Rendering logic was unchanged during the rename. Investigate timing before treating this as a confirmed rendering defect.
+**Status:** Testing / local observation. An earlier local browser check reported a terrain corner at depth 243.35 m outside a 199.28 m far rendering limit with a camera 130 m away. This did **not** reproduce in either GitHub attempt, or in the Phase 1 local model check: those passed with a 286.82 m far limit. Rendering logic was unchanged during the rename and Phase 1. Investigate timing before treating this as a confirmed rendering defect.
 
 **Complete when:** the distant terrain remains visible within the intended rendering limits and the existing model checks pass, with no regression in depth precision, sky, model framing or saved views. Record the diagnosis and fix separately from feature work.
 
 ### B02 — GitHub CI and HACS validation
 
-**Status:** Planned, diagnosis recorded. Both first-upload runs completed with failure.
+**Status:** Testing. Both first-upload runs failed; the causes and improvements are recorded below.
 
 - [Base CI run](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37236933008).
 - [Base HACS validation run](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37236933000).
@@ -315,6 +325,8 @@ Taylor confirmed Phase 1 first on 4 October 2026. Later phases remain a proposed
 The GitHub CI installation, lint, JavaScript unit tests, build and Python integration tests passed. The model browser check failed on both attempts with a 30-second navigation timeout while opening the model-camera fixture (`scripts/lib/demo-browser.mjs:54`, called by `scripts/model-check.mjs:1831`). The cause beyond that timeout remains unproven; B01 was not the GitHub failure.
 
 HACS failed only because the repository had no valid topics. The other seven checks passed, including licence, HACS configuration and integration manifest. Add appropriate repository topics, then revalidate. Make the browser check load reliably without removing meaningful coverage.
+
+**Update:** repository topics were added; [HACS validation now passes](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37237996681). The shared browser helper now waits for the document and actual card readiness instead of global network silence. Model fixtures get time to parse; each existing model test retains its specific readiness/assertions. Legacy object-toggle checks explicitly select Quick toggle; default popups are tested separately. New navigation checks run in CI. Confirm the complete new CI run before marking B02 Done.
 
 Local build, lint and all 514 JavaScript tests passed before upload. The full HA Python harness was not run locally; it passed in GitHub.
 
@@ -348,7 +360,23 @@ A feature is Done only after its agreed behavior works, it persists where approp
 | Date | Item | Progress / evidence | Commit or PR |
 |---|---|---|---|
 | 2026-10-04 | Base | Independent renamed base uploaded to `main`; local build/lint/514 JS tests passed; online checks need B02 | `055e30f` |
-| 2026-10-04 | Requirements | Taylor's complete initial feature list recorded; foundations and pending inputs checked against the code; no new runtime feature implemented | This log's initial commit |
-| 2026-10-04 | Phase 1 | Taylor selected bubble bar, room/device popups and mini-map; implementation started | In progress |
+| 2026-10-04 | Requirements | Taylor's complete initial feature list recorded; foundations and pending inputs checked against the code | `a2c49d0` |
+| 2026-10-04 | Phase 1 | First bubble bar, room/device panels and mini-map implemented. 571 JS unit tests and lint pass. Existing editor browser checks and the complete new navigation browser suite pass, covering real clicks, correct service payloads, grouped rooms, map floors, keyboard focus, narrow layouts and GLB overlays. Shared-storage/key-change regressions pass. Actual HA/panel testing remains. | Phase 1 commit on `main` |
+
+### Phase 1: Taylor's Home Assistant check
+
+After installing a build containing Phase 1:
+
+1. Open Taylor's 3D and confirm the bottom buttons and mini-map appear.
+2. Change floor and 3D/Top view. Confirm the map shows the correct floor and tap it to focus a room.
+3. Tap a room's floor. Confirm its panel shows the area's actual devices and readings. Rooms need outlines and area links.
+4. Tap a light/device. Simply opening its panel should not change it. Press On/off or brightness intentionally; verify the actual device responds.
+5. Use All controls for a camera, cover, climate or vacuum; confirm HA offers its supported controls. Check an unavailable device is shown clearly.
+6. Orbit/drag the house. No device should change and no room panel should open from the drag.
+7. In the dashboard card's visual editor, change button order/visibility, map size/corner and device-tap behavior. Save, reload and confirm those settings persist.
+8. Enter the card's layout Edit mode: the map hides, room/device editing still works, and Done restores normal navigation.
+9. Try the wall panel in its real light/dark theme, including narrow layout and touch use. Record any issue here before marking F18–F21 Done.
+
+The local full-model regression run was stopped after its initial rendering/visibility/terrain/section/sky/merge checks passed, because its loaded script still expected the old default tap behavior. Those assertions now explicitly select Quick toggle. A completed full run/CI result is still required; do not treat that partial run as a full model-suite pass.
 
 When starting work, add a row here and update the feature status above. When it is completed, record exactly what was tested and any unfinished part that remains.

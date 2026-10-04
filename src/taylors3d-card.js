@@ -19,9 +19,12 @@ import {
 import { readSource, mowerTransform, overlayUrl } from './mower.js';
 import { findBlob, stepTrack, headingMinStep, pixelToPlan, readImagePixels, imagePixels } from './mower-image.js';
 import { ObjectLayer } from './objects/layer.js';
-import { bindObjects, effectiveGroups, nightFactor, sunVector, sunStrength, clampSunDir, screenByDistance, attachedPosition } from './objects/logic.js';
+import { bindObjects, effectiveGroups, nightFactor, sunVector, sunStrength, clampSunDir, screenByDistance, attachedPosition, floorAtHeight } from './objects/logic.js';
 import { moonPosition } from './sky.js';
 import { ObjectPopup, objectAction, actionTarget, toggleCall } from './objects/popup.js';
+import { DevicePopup } from './device-popup.js';
+import { MiniMap } from './minimap.js';
+import { bubbleControls, roomAtPlan, focusCamera } from './navigation.js';
 
 const VERSION = '0.1.0';
 const NONE = Object.freeze({}); // stable stand-in for a missing layout.objects / groups (binding cache key)
@@ -45,10 +48,25 @@ const STYLE = `
     border-radius: var(--ha-card-border-radius, 12px); color: var(--primary-text-color); }
   .stage { position: relative; width: 100%; touch-action: none; user-select: none; -webkit-user-select: none; }
   .stage canvas { display: block; }
-  .toolbar { position: absolute; top: 8px; left: 8px; right: 8px; display: flex; gap: 8px;
-    align-items: flex-start; z-index: 2; pointer-events: none; }
-  .toolbar > * { pointer-events: auto; }
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+  .scene { position: absolute; inset: 0 0 var(--taylors3d-bar-height, 0px) 0; }
+  .toolbar { position: absolute; bottom: 8px; left: 8px; right: 8px; display: flex; flex-direction: column;
+    gap: 6px; padding: 6px; align-items: stretch; z-index: 2; box-sizing: border-box;
+    border-radius: 28px; border: 1px solid var(--divider-color, rgba(0,0,0,.12));
+    background: var(--ha-card-background, var(--card-background-color, #fff));
+    box-shadow: 0 3px 14px rgba(0,0,0,.15); touch-action: manipulation; }
+  .toolbar[hidden] { display: none; }
+  .chips { display: flex; flex-wrap: nowrap; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+  .chips:empty { display: none; }
+  .bubble-actions { display: flex; gap: 6px; align-items: center; overflow-x: auto; scrollbar-width: thin; }
+  .toolbar button, .toolbar .seg { flex: none; }
+  .toolbar button { min-height: 44px; min-width: 44px; }
+  .toolbar button:focus-visible { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: -3px; }
+  .toolbar [hidden] { display: none !important; }
+  @container (min-width: 800px) {
+    .toolbar { flex-direction: row; align-items: center; }
+    .chips { flex: 1; }
+    .bubble-actions { flex: none; }
+  }
   .spacer { flex: 1; }
   button.chip, .seg button { font: inherit; font-size: 13px; line-height: 1; cursor: pointer;
     padding: 7px 12px; border-radius: 16px; border: 1px solid var(--divider-color, rgba(0,0,0,.12));
@@ -61,7 +79,7 @@ const STYLE = `
   .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
     text-align: center; padding: 24px; color: var(--secondary-text-color); pointer-events: none; }
   .empty[hidden], .notice[hidden] { display: none; }
-  .notice { position: absolute; left: 8px; bottom: 8px; right: 8px; padding: 6px 10px; border-radius: 6px; font-size: 12px;
+  .notice { position: absolute; left: 8px; bottom: calc(var(--taylors3d-bar-height, 0px) + 8px); right: 8px; padding: 6px 10px; border-radius: 6px; font-size: 12px;
     background: var(--card-background-color, #fff); color: var(--error-color, #db4437);
     border: 1px solid var(--divider-color, rgba(0,0,0,.12)); pointer-events: none; }
 
@@ -88,7 +106,7 @@ const STYLE = `
     background: var(--card-background-color, #fff); color: var(--primary-text-color);
     box-shadow: 0 1px 3px rgba(0,0,0,.2); }
   .fp-val:empty { display: none; }
-  .fp-popup { position: absolute; left: 0; top: 0; z-index: 3; min-width: 190px; max-width: 260px; padding: 8px 10px 10px;
+  .fp-popup { position: absolute; left: 0; top: 0; z-index: 30; min-width: 190px; max-width: 260px; padding: 8px 10px 10px;
     box-sizing: border-box; overflow: auto;
     border-radius: 12px; background: var(--card-background-color, #fff); color: var(--primary-text-color);
     border: 1px solid var(--divider-color, rgba(0,0,0,.12)); box-shadow: 0 4px 16px rgba(0,0,0,.28); font-size: 13px;
@@ -326,6 +344,7 @@ class Taylors3dCard extends HTMLElement {
     this._mowerObjectBound = false;
     this._groups = {}; // layout.groups whose controller exists in HA (objects/logic.js effectiveGroups)
     this._bindKey = null;
+    this._miniMapVisible = true;
   }
 
   static getStubConfig() {
@@ -342,20 +361,42 @@ class Taylors3dCard extends HTMLElement {
   }
 
   setConfig(config) {
-    this._config = { layout_key: 'default', height: '520px', group_by: 'device', wall_height: 1.0, view: '3d', ...config };
-    this._mode = this._config.view === 'top' ? 'top' : '3d';
-    this._store = new LayoutStore(this._config.layout_key);
+    const previous = this._config;
+    this._config = { layout_key: 'default', height: '520px', group_by: 'device', wall_height: 1.0, view: '3d',
+      show_bubble_bar: true, mini_map: true, mini_map_size: 180, mini_map_position: 'top-right', device_tap_action: 'popup', ...config };
+    if (!previous || previous.mini_map !== this._config.mini_map) this._miniMapVisible = this._config.mini_map !== false;
+    if (!previous || previous.view !== this._config.view) this._mode = this._config.view === 'top' ? 'top' : '3d';
+    const keyChanged = previous && previous.layout_key !== this._config.layout_key;
+    if (!this._store || keyChanged) this._store = new LayoutStore(this._config.layout_key);
+    if (keyChanged) {
+      this._layoutLoaded(); // release any obsolete model request waiting for the old key
+      this._layoutReady = new Promise((resolve) => { this._layoutLoaded = resolve; });
+      this._layout = null;
+      this._loading = false;
+      this._built = {};
+      this._fitted = false;
+      this._viewId = null;
+      this._saveSeq = (this._saveSeq || 0) + 1;
+      this._endGesture();
+      if (this._popup) this._popup.close();
+      if (this._devicePopup) this._devicePopup.close();
+      if (this._hass) this._load();
+    }
     if (this._stage) {
       this._stage.style.height = this._config.height;
       this._body.style.setProperty('--fp-height', this._config.height);
     }
     if (this.isConnected && !this._view) this.connectedCallback();
     else if (this._view) {
+      if (this._view.mode !== this._mode) this._setMode(this._mode);
       this._view.setOcclusion(this._config.occlusion !== false);
       if (this._view.model) this._applySky(true); // sky_bodies
       this._applyZoomTo();
       this._loadModel();
       this._updateObjects(); // lights: auto | off
+      this._configureMiniMap();
+      this._syncToolbar();
+      this._schedule();
     }
   }
 
@@ -395,7 +436,7 @@ class Taylors3dCard extends HTMLElement {
     const prevModel = this._view.model;
     this._view.setModel(opts).then((err) => {
       if (this._view.model !== prevModel && this._section) this._dropSection();
-      if (this._view.model !== prevModel) { this._endGesture(); this._popup.close(); }
+      if (this._view.model !== prevModel) { this._endGesture(); this._popup.close(); this._devicePopup.close(); }
       this._objects.setModel(this._view.model);
       // bind now: lamps light and bound markers hide without waiting for the next hass push
       if (this._hass && this._layout && this._floors && this._syncBindings()) {
@@ -528,6 +569,7 @@ class Taylors3dCard extends HTMLElement {
     this._skyTimer = setInterval(() => this._applySky(false), MOON_EVERY_MS); // the moon moves without hass updates
     this._ro = new ResizeObserver(() => this._resize());
     this._ro.observe(this._stage);
+    this._ro.observe(this._toolbar);
     this._schedule();
   }
 
@@ -535,6 +577,7 @@ class Taylors3dCard extends HTMLElement {
     if (this._view) this._view.stop();
     this._endGesture();
     if (this._popup) this._popup.close(); // window listeners
+    if (this._devicePopup) this._devicePopup.close();
     if (this._editing && this._edit) this._edit.detach(); // window listeners (keys, pick menu)
     if (this._ro) this._ro.disconnect();
     clearInterval(this._skyTimer);
@@ -544,12 +587,17 @@ class Taylors3dCard extends HTMLElement {
   }
 
   async _load() {
+    const store = this._store;
     this._loading = true;
     try {
-      this._layout = await this._store.load(this._hass);
+      const layout = await store.load(this._hass);
+      if (store !== this._store) return; // a late old-key response cannot replace the new layout
+      this._layout = layout;
     } finally {
-      this._loading = false;
-      this._layoutLoaded();
+      if (store === this._store) {
+        this._loading = false;
+        this._layoutLoaded();
+      }
     }
     this._schedule();
   }
@@ -560,20 +608,26 @@ class Taylors3dCard extends HTMLElement {
       <ha-card>
         <div class="body">
           <div class="stage">
-            <div class="toolbar">
+            <div class="scene"></div>
+            <nav class="toolbar" data-taylors3d-ui aria-label="House views and controls">
               <div class="chips"></div>
-              <div class="seg"><button data-mode="3d">3D</button><button data-mode="top">Top</button></div>
-              <button class="reset" title="Reset view"><ha-icon icon="mdi:crosshairs-gps"></ha-icon></button>
-              <button class="section" hidden title="Side section"><ha-icon icon="mdi:box-cutter"></ha-icon></button>
-              <button class="daynight" hidden title="Day / night: auto"><ha-icon icon="mdi:theme-light-dark"></ha-icon></button>
-              <button class="edit" hidden title="Edit floorplan"><ha-icon icon="mdi:pencil"></ha-icon><span>Edit</span></button>
-            </div>
+              <div class="bubble-actions">
+                <div class="seg" data-bubble="mode" role="group" aria-label="Viewing mode"><button data-mode="3d">3D</button><button data-mode="top">Top</button></div>
+                <button class="reset" data-bubble="reset" title="Reset view" aria-label="Reset view"><ha-icon icon="mdi:crosshairs-gps"></ha-icon></button>
+                <button class="section" data-bubble="section" hidden title="Side section" aria-label="Side section"><ha-icon icon="mdi:box-cutter"></ha-icon></button>
+                <button class="daynight" data-bubble="daynight" hidden title="Day / night: auto" aria-label="Day / night: auto"><ha-icon icon="mdi:theme-light-dark"></ha-icon></button>
+                <button class="minimap-toggle reset" data-bubble="minimap" title="Show or hide mini-map" aria-label="Show or hide mini-map"><ha-icon icon="mdi:map-outline"></ha-icon></button>
+                <button class="edit" data-bubble="edit" hidden title="Edit floorplan"><ha-icon icon="mdi:pencil"></ha-icon><span>Edit</span></button>
+              </div>
+            </nav>
             <div class="empty" hidden></div>
             <div class="notice" hidden></div>
           </div>
         </div>
       </ha-card>`;
     this._stage = root.querySelector('.stage');
+    this._scene = root.querySelector('.scene');
+    this._toolbar = root.querySelector('.toolbar');
     this._stage.style.height = this._config.height;
     root.querySelector('.body').style.setProperty('--fp-height', this._config.height);
     this._chips = root.querySelector('.chips');
@@ -600,7 +654,13 @@ class Taylors3dCard extends HTMLElement {
       this._syncToolbar();
     });
     this._editBtn.addEventListener('click', () => this._toggleEdit());
-    this._view = new FloorplanView(this._stage);
+    this._miniMapBtn = root.querySelector('button.minimap-toggle');
+    this._miniMapBtn.addEventListener('click', () => {
+      this._miniMapVisible = !this._miniMapVisible;
+      this._syncMiniMap();
+      this._syncToolbar();
+    });
+    this._view = new FloorplanView(this._scene);
     this._objects = new ObjectLayer(this._view);
     this._view.onObjectsInvalidate = () => this._updateObjects(); // view, section or placement changed
     this._popup = new ObjectPopup(this._stage, {
@@ -613,7 +673,15 @@ class Taylors3dCard extends HTMLElement {
         return { obj: o.obj, chain: o.chain, states: this._hass.states, groups: this._groups };
       },
     });
-    this._view.onRender = () => this._popup.position();
+    this._devicePopup = new DevicePopup(this._stage, {
+      onAction: (domain, service, data) => this._hass.callService(domain, service, data),
+      onMoreInfo: (entityId) => this._moreInfo(entityId),
+    });
+    this._configureMiniMap();
+    this._view.onRender = () => {
+      this._popup.position();
+      this._miniMap.updateCamera({ camera: this._view.getCamera(), topCamera: this._view.getTopCamera(), mode: this._mode });
+    };
     this._view.setOcclusion(this._config.occlusion !== false);
     this._view.setMode(this._mode);
     this._loadModel();
@@ -624,6 +692,7 @@ class Taylors3dCard extends HTMLElement {
       if (this._editing && e.target === canvas) this._edit.canvasDownCapture(e);
     }, true);
     canvas.addEventListener('pointerdown', (e) => this._editing && this._edit.canvasDown(e));
+    canvas.addEventListener('pointerdown', (e) => this._roomDown(e));
     canvas.addEventListener('pointermove', (e) => this._editing && this._edit.canvasMove(e));
     canvas.addEventListener('pointerup', (e) => this._editing && this._edit.canvasUp(e));
     // model objects: tap / hold, hit-tested on screen before markers and the canvas (capture phase)
@@ -634,6 +703,7 @@ class Taylors3dCard extends HTMLElement {
   _toggleEdit() {
     this._endGesture();
     this._popup.close();
+    this._devicePopup.close();
     this._editing = !this._editing;
     this._body.classList.toggle('editing', this._editing);
     if (this._editing) {
@@ -672,7 +742,11 @@ class Taylors3dCard extends HTMLElement {
   _resize() {
     const r = this._stage.getBoundingClientRect();
     if (!r.width || !r.height) return;
-    this._view.resize(r.width, r.height);
+    const barHeight = this._toolbar.hidden ? 0 : this._toolbar.getBoundingClientRect().height + 16;
+    this._stage.style.setProperty('--taylors3d-bar-height', `${barHeight}px`);
+    const scene = this._scene.getBoundingClientRect();
+    this._view.resize(scene.width, scene.height);
+    this._devicePopup.reposition();
     if (!this._fitted && this._roomList) this._initialCamera();
   }
 
@@ -747,6 +821,8 @@ class Taylors3dCard extends HTMLElement {
     }
     this._updateObjects();
     this._popup.update();
+    this._devicePopup.update(h);
+    this._syncMiniMap();
     if ((markers || viewRefreshed) && this._editing) this._edit.afterUpdate();
     else if (this._editing) this._edit.onStates();
   }
@@ -968,6 +1044,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _buildStructure(mb, viewsChanged = false) {
+    this._devicePopup.close(); // room membership/geometry may have changed
     const h = this._hass, b = this._built;
     b.rooms = this._layout.rooms;
     b.lfloors = this._layout.floors;
@@ -1212,6 +1289,7 @@ class Taylors3dCard extends HTMLElement {
     if (!v) return;
     const wasSection = this._section;
     this._popup.close();
+    this._devicePopup.close();
     this._section = false;
     this._sectionPreview = null;
     this._viewId = id;
@@ -1302,6 +1380,7 @@ class Taylors3dCard extends HTMLElement {
   // Toggle the side section. Off returns to the view's visibility and (camera: true) its camera.
   setSection(on, { camera = true } = {}) {
     if (this._popup) this._popup.close();
+    if (this._devicePopup) this._devicePopup.close();
     if (on) {
       if (this._mode !== '3d' || !this._view.model || !this._index) return;
       const was = this._section;
@@ -1412,12 +1491,13 @@ class Taylors3dCard extends HTMLElement {
   _objectDown(e, canvas) {
     if (this._gesture) { this._endGesture(); return; } // a second finger: pinch / orbit, no tap
     const path = e.composedPath();
-    if (this._popup.closedBy === e) { // this tap closed the popup: no object or marker tap (orbit may start)
+    if (this._popup.closedBy === e || this._devicePopup.closedBy === e) { // a dismissing tap never activates a device
       if (e.target !== canvas && !path.some((n) => n.classList && n.classList.contains('toolbar'))) e.stopPropagation();
       return;
     }
     if (!this._objectTapsOn() || e.button !== 0 || !e.isPrimary) return;
-    if ((this._popup.el && path.includes(this._popup.el)) || path.some((n) => n.classList && n.classList.contains('toolbar'))) return;
+    if ((this._popup.el && path.includes(this._popup.el)) || (this._devicePopup.el && path.includes(this._devicePopup.el))
+      || path.some((n) => n.dataset && n.dataset.taylors3dUi !== undefined)) return;
     const id = this._objectHit(e.clientX, e.clientY, e.pointerType === 'touch' ? OBJECT_HIT_PX.touch : OBJECT_HIT_PX.mouse, this._editing);
     if (!id) return; // markers and the model as before
     if (e.target !== canvas) e.stopPropagation(); // the object wins over a marker under the finger
@@ -1476,6 +1556,7 @@ class Taylors3dCard extends HTMLElement {
 
   // toggle: own entity, else the group controller; nothing usable (missing / unavailable): the popup says so.
   _runObjectAction(id, which) {
+    if (!this._layout) return;
     const o = this._objects.objectAt(id);
     if (!o || !this._hass) return;
     const action = objectAction(o.obj, which);
@@ -1483,6 +1564,15 @@ class Taylors3dCard extends HTMLElement {
     const target = actionTarget(o.obj, o.binding, this._groups || {}, this._hass.states);
     const st = target && this._hass.states[target];
     const usable = st && st.state !== 'unavailable' && st.state !== 'unknown';
+    if (which === 'tap' && this._config.device_tap_action !== 'toggle' && target) {
+      this._popup.close();
+      const a = this._objects.anchors().find((x) => x.id === id);
+      this._devicePopup.update(this._hass);
+      this._devicePopup.showMarker({ name: o.obj.label || o.obj.id, entityId: target,
+        entities: (o.chain && o.chain.entities || [target]).map((eid) => ({ eid })) }, a && this._view.projectWorld(a.world));
+      return;
+    }
+    this._devicePopup.close();
     if (action === 'popup' || !usable) {
       const a = this._objects.anchors().find((x) => x.id === id);
       if (a) this._popup.open(o.obj, a.world);
@@ -1491,6 +1581,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _buildMarkers() {
+    this._devicePopup.close(); // never leave controls pointing at an old registry snapshot
     const h = this._hass;
     // a device bound to a model object has no marker: the object is the control (glow sprite too).
     // With group_by: device the marker stands for the device's primary entity, so a bound primary
@@ -1571,6 +1662,12 @@ class Taylors3dCard extends HTMLElement {
     el.className = 'fp-marker ' + m.domain;
     el.innerHTML = '<div class="fp-dot"><ha-icon></ha-icon></div><div class="fp-val"></div>';
     el.title = m.name;
+    el.tabIndex = 0;
+    el.setAttribute('role', 'button');
+    el.setAttribute('aria-label', `Open ${m.name} controls`);
+    el.addEventListener('keydown', (e) => {
+      if (!this._editing && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); e.stopPropagation(); this._tap(m); }
+    });
     let start = null, timer = null, long = false;
     const cancel = () => { clearTimeout(timer); timer = null; };
     el.addEventListener('pointerdown', (e) => {
@@ -1627,7 +1724,13 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _tap(m) {
-    if (TAP_TOGGLE.has(m.domain)) {
+    if (!this._layout) return;
+    if (this._config.device_tap_action !== 'toggle') {
+      this._popup.close();
+      const p = this._positions.get(m.id);
+      this._devicePopup.update(this._hass);
+      this._devicePopup.showMarker(m, p && this._view.screenPoint(p.x, p.y, p.z || 0, p.floorId));
+    } else if (TAP_TOGGLE.has(m.domain)) {
       this._hass.callService(m.domain, 'toggle', { entity_id: m.entityId });
     } else {
       this._moreInfo(m.entityId);
@@ -1635,7 +1738,130 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _moreInfo(entityId) {
+    this._popup.close();
+    this._devicePopup.close();
     this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId }, bubbles: true, composed: true }));
+  }
+
+  _navigationFloors() {
+    if (this._floorOnly) return [this._floor];
+    const state = this._sectionActive() ? this._sectionState() : this._viewState;
+    return !state || state.allFloors ? 'all' : state.floors;
+  }
+
+  _navigationRooms() {
+    if (!this._layout) return [];
+    const floors = this._navigationFloors();
+    const state = this._sectionActive() ? this._sectionState() : this._viewState;
+    let modelRooms = null;
+    if (state && state.effective && this._index) {
+      modelRooms = new Set();
+      this._index.nodes.forEach((node, i) => {
+        if (state.effective[i] && node.tag && ['room', 'zone'].includes(node.tag.kind)) modelRooms.add(node.tag.id);
+      });
+    }
+    return (this._roomList || []).filter((r) => (floors === 'all' || floors.includes(r.floorId))
+      && (!modelRooms || !r.room.modelId || modelRooms.has(r.room.modelId)));
+  }
+
+  // A stationary tap on room geometry opens controls; orbiting and device taps do not.
+  _roomDown(e) {
+    if (!this._layout || this._editing || this._gesture || e.button !== 0 || !e.isPrimary || this._devicePopup.closedBy === e || this._popup.closedBy === e) return;
+    const g = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
+    g.move = (ev) => { if (ev.pointerId === g.pointerId && Math.hypot(ev.clientX - g.x, ev.clientY - g.y) >= CLICK_SLOP_PX) this._endGesture(); };
+    g.up = (ev) => {
+      if (ev.pointerId !== g.pointerId) return;
+      const tap = Math.hypot(ev.clientX - g.x, ev.clientY - g.y) < CLICK_SLOP_PX;
+      this._endGesture();
+      if (tap) this._openRoomAt(ev.clientX, ev.clientY);
+    };
+    g.cancel = () => this._endGesture();
+    g.menu = () => {};
+    window.addEventListener('pointermove', g.move, true);
+    window.addEventListener('pointerup', g.up, true);
+    window.addEventListener('pointercancel', g.cancel, true);
+    this._gesture = g;
+  }
+
+  _openRoomAt(x, y) {
+    const rooms = this._navigationRooms();
+    const hit = this._view.pickModel(x, y);
+    let selected = hit && ['room', 'zone'].includes(hit.kind) ? rooms.find((r) => r.room.modelId === hit.id) : null;
+    if (!selected && hit) {
+      if (!hit.hit.up) return; // a facade wall is not a room's floor
+      const [px, height, pz] = hit.hit.point;
+      const fid = floorAtHeight((this._floors || []).map((f) => ({ id: f.id, elevation: this._view.floorElevation(f.id) })), height);
+      selected = roomAtPlan(rooms, [px, -pz], fid);
+    } else if (!selected && !this._view.model) {
+      const floors = (this._floors || []).slice().sort((a, b) => b.elevation - a.elevation);
+      for (const f of floors) {
+        selected = roomAtPlan(rooms, this._view.planPoint(x, y, this._view.floorElevation(f.id)), f.id);
+        if (selected) break;
+      }
+    }
+    if (!selected) return;
+    this._selectedRoomId = selected.room.id;
+    this._popup.close();
+    this._devicePopup.update(this._hass);
+    // Include devices represented by bound model objects as well as standalone markers.
+    this._devicePopup.showRoom({ ...selected.room, name: selected.name },
+      buildMarkers(this._hass, this._layout, { group_by: this._config.group_by }), [x, y]);
+    this._syncMiniMap();
+  }
+
+  _focusPlan(point) {
+    if (this._editing || !this._view) return;
+    this._popup.close();
+    this._devicePopup.close();
+    if (point.floorId && this._floor !== point.floorId) this._setFloor(point.floorId);
+    if (this._mode === 'top') {
+      const c = this._view.getTopCamera();
+      if (c) this._view.setTopCamera({ ...c, center: [point.x, point.y] });
+    } else {
+      const c = focusCamera(this._view.getCamera(), { ...point, elevation: this._view.floorElevation(point.floorId) });
+      if (c) this._view.setCamera(c);
+    }
+    this._selectedRoomId = point.roomId || null;
+    this._syncMiniMap();
+  }
+
+  _configureMiniMap() {
+    if (!this._stage) return;
+    const size = Math.max(120, Math.min(260, Number(this._config.mini_map_size) || 180));
+    const corner = this._config.mini_map_position === 'top-left' ? 'top-left' : 'top-right';
+    const key = `${corner}|${size}`;
+    if (this._miniMapKey !== key || !this._miniMap) {
+      if (this._miniMap) this._miniMap.dispose();
+      this._miniMap = new MiniMap(this._stage, {
+        size, corner, returnFocus: () => this._miniMapBtn, onFocus: (point) => this._focusPlan(point),
+        onVisibilityChange: (visible) => { this._miniMapVisible = visible; this._syncToolbar(); },
+      });
+      this._miniMapKey = key;
+    }
+    this._syncMiniMap();
+  }
+
+  _syncMiniMap() {
+    if (!this._miniMap || !this._view) return;
+    const markers = [...this._markers], positions = new Map(this._positions || []);
+    // Bound GLB lamps replace ordinary markers, but still belong on the overview.
+    for (const anchor of this._objects ? this._objects.anchors() : []) {
+      const object = this._objects.objectAt(anchor.id);
+      if (!object || !object.binding || object.binding.hidden || !nodeShown(object.obj.node)) continue;
+      const entity = actionTarget(object.obj, object.binding, this._groups, this._hass && this._hass.states);
+      if (!entity) continue;
+      const floorId = (this._levels && this._levels.levelFloor[object.obj.level])
+        || floorAtHeight((this._floors || []).map((f) => ({ id: f.id, elevation: this._view.floorElevation(f.id) })), anchor.world.y);
+      if (!floorId) continue;
+      const id = `object:${anchor.id}`, st = this._hass && this._hass.states[entity];
+      markers.push({ id, entityId: entity, name: st && st.attributes.friendly_name || object.obj.label || object.obj.id });
+      positions.set(id, { x: anchor.world.x, y: -anchor.world.z, floorId });
+    }
+    this._miniMap.setVisible(this._miniMapVisible);
+    this._miniMap.update({ rooms: this._navigationRooms(), floors: this._floors || [], visibleFloors: this._navigationFloors(),
+      positions, markers, markerStates: this._view._markerStates, states: this._hass && this._hass.states,
+      camera: this._view.getCamera(), topCamera: this._view.getTopCamera(), mode: this._mode, editing: this._editing,
+      selectedRoomId: this._selectedRoomId });
   }
 
   // One HA floor (edit mode): the view linked to just that floor, else that floor on its own
@@ -1664,6 +1890,7 @@ class Taylors3dCard extends HTMLElement {
 
   _setMode(mode) {
     this._popup.close();
+    this._devicePopup.close();
     if (mode !== '3d' && this._section) this.setSection(false, { camera: false });
     this._mode = mode;
     this._view.setMode(mode);
@@ -1743,11 +1970,15 @@ class Taylors3dCard extends HTMLElement {
         const btn = document.createElement('button');
         btn.className = 'chip' + (v.id === this._viewId && !this._floorOnly ? ' on' : '');
         btn.dataset.view = v.id;
+        btn.setAttribute('aria-pressed', String(v.id === this._viewId && !this._floorOnly));
         btn.textContent = v.label;
         this._chips.append(btn);
       }
     }
-    for (const btn of this.shadowRoot.querySelectorAll('.seg button')) btn.classList.toggle('on', btn.dataset.mode === this._mode);
+    for (const btn of this.shadowRoot.querySelectorAll('.seg button')) {
+      btn.classList.toggle('on', btn.dataset.mode === this._mode);
+      btn.setAttribute('aria-pressed', String(btn.dataset.mode === this._mode));
+    }
     this._dayBtn.hidden = !(this._view && this._view.model);
     if (this._section && (!this._mb || !this._index || !hasModel)) this._dropSection();
     if (this._sectionBtn) {
@@ -1755,8 +1986,26 @@ class Taylors3dCard extends HTMLElement {
       this._sectionBtn.classList.toggle('on', !!this._section);
     }
     this._paintDayBtn();
+    this._dayBtn.setAttribute('aria-label', this._dayBtn.title);
     this._editBtn.hidden = !(this._hass && this._hass.user && this._hass.user.is_admin);
     this._editBtn.querySelector('span').textContent = this._editing ? 'Done' : 'Edit';
+    this._miniMapBtn.setAttribute('aria-pressed', String(this._miniMapVisible));
+    this._miniMapBtn.classList.toggle('on', this._miniMapVisible);
+    this._miniMapBtn.disabled = !!this._editing || !(this._roomList && this._roomList.length);
+    const controls = bubbleControls(this._config);
+    const actions = this._toolbar.querySelector('.bubble-actions');
+    for (const control of actions.querySelectorAll('[data-bubble]')) {
+      const id = control.dataset.bubble;
+      let available = true;
+      if (id === 'edit') available = !!(this._hass && this._hass.user && this._hass.user.is_admin);
+      if (id === 'section') available = hasModel && this._mode === '3d';
+      if (id === 'daynight') available = hasModel;
+      control.hidden = !(available && (controls.includes(id) || (id === 'edit' && this._editing)));
+    }
+    for (const id of controls) actions.append(actions.querySelector(`[data-bubble="${id}"]`));
+    this._toolbar.hidden = this._config.show_bubble_bar === false && !this._editing;
+    this._syncMiniMap();
+    requestAnimationFrame(() => this.isConnected && this._resize());
     if (this._empty && this._editing) this._empty.hidden = true;
   }
 }

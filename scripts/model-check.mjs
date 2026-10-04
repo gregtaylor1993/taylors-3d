@@ -491,11 +491,13 @@ try {
   await s.close();
 }
 
-// 1b. model objects: tap toggles, hold opens the popup, a drag never toggles (the demo model's hall ceiling lamp)
+// 1b. legacy quick-toggle mode: tap toggles, hold opens the popup, a drag never toggles.
+// The new default popup mode is exercised with real clicks in navigation-check.mjs.
 s = await openDemo({ model: '1', view: '3d' }, { width: 1400, height: 560 });
 try {
   const { page } = s;
   await page.waitForFunction(`!!${card}._view.model && !!${card}._hass`, { timeout: 10000 });
+  await page.evaluate(`${card}.setConfig({ ...${card}._config, device_tap_action: 'toggle' })`);
   await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=ground]').click()`);
   await settle(page, card);
   const injected = await page.evaluate(`(() => { const o = ${card}._objects.objectAt('lamp_hall'); return o ? o.obj.node.name : null; })()`);
@@ -682,6 +684,7 @@ s = await openDemo({ model: '1', view: '3d' }, { width: 1400, height: 560 });
 try {
   const { page } = s;
   await page.waitForFunction(`!!${card}._view.model && !!${card}._hass && ${card}._objects.parts.size > 0`, { timeout: 10000 });
+  await page.evaluate(`${card}.setConfig({ ...${card}._config, device_tap_action: 'toggle' })`);
   await page.evaluate('window.__demoMowerPaused = true');
   await page.evaluate(`${card}.shadowRoot.querySelector('.chip[data-view=ground]').click()`);
   await settle(page, card);

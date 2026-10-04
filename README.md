@@ -16,8 +16,13 @@ position over its map.
 
 - Floors from Home Assistant, a chip per floor plus "All", 3D and north-up top view; with a
   3D model the chips are the model's views (Exterior, Ground floor, …), linked to HA floors
-- Tap toggles lights, switches, fans and input booleans; other devices (and long-press) open
-  the more-info dialog
+- Bottom bubble bar for saved views, 3D/Top, reset, section, day/night, mini-map and Edit.
+  Choose the buttons and their order in the visual card editor
+- Tap a room to open its devices and readings; tap a device for quick controls. **All controls**
+  opens Home Assistant's full options for that entity. Long-press opens more-info; the original
+  single-tap toggle behavior is still available as a visual setting
+- Lightweight north-up 2D mini-map with a floor selector, live device dots and camera focus;
+  tap a room or dot to move the main view there
 - Lights that are on cast a glow on the floor in their colour and brightness
 - Markers show a value next to the icon (temperature, power, …)
 - Edit mode for admins: draw rooms, doors, floors, pin and hide devices, import/export
@@ -33,10 +38,39 @@ position over its map.
   your Home Assistant location (`latitude` / `longitude`) with its current phase, and faint cool
   moonlight on moonlit nights
 - Model objects are the controls: lamps glow and really light rooms and the facade (night is dark,
-  the lamps carry it), tap a lamp to toggle it, hold it for brightness and colour; the mower model
+  the lamps carry it), tap a lamp for controls, hold it for the existing object controls; the mower model
   drives on the plan, the dock, EV charger and climate units show their state. Objects bind to
   their entities from the model's suggestions without setup
 - Follows the HA theme, light and dark
+
+## Using the new navigation
+
+![Bottom bubble bar and north-up mini-map in the mock HA preview](docs/images/navigation-light.png)
+
+![Room controls and readings in the dark theme](docs/images/navigation-room.png)
+
+The bubble bar sits below the house, with space reserved so it does not cover the plan.
+View buttons follow the names/order saved under **Edit → Views**. On a narrow panel the bar
+uses two rows, and long button lists scroll sideways.
+
+Tap a room's floor in the main view to open its panel. Rooms need an outline and an HA area
+link to show their devices. A GLB without usable room geometry can use drawn outlines; room
+picking on the model works from its visible floor surfaces. Opening a panel does not send any
+device command. On/off and supported light brightness are quick controls; cameras, covers,
+heating, vacuums and other full options are reached through **All controls** in Home Assistant.
+Missing or unavailable devices are shown clearly, and failed commands display an error.
+
+The mini-map shows one floor at a time. Choose its floor when more than one is visible, then
+tap a room, device dot or empty point to focus the main view. It shows room outlines and device
+positions rather than a second rendering of the GLB. It hides while editing; its **×** or map
+bubble hides it temporarily. The visual editor controls its saved visibility, size and corner.
+
+Open the dashboard card's **Edit → Show visual editor → Navigation and device controls** to
+choose the bubble buttons, reorder them, change the mini-map, or select **Quick toggle** for
+the original device-tap behavior. Layout editing inside the card remains available to admins.
+
+The first navigation delivery is tested with the mock HA preview. Testing with Taylor's actual
+house model, Home Assistant and wall panel is tracked in [the feature log](REQUIREMENTS_AND_FEATURES.md).
 
 ## Install
 
@@ -363,7 +397,8 @@ npm run demo          # http://localhost:8765/demo/  (mock HA, add ?model=1 for 
 npm run make-demo-model   # regenerate demo/house.glb (views, layers, tagged rooms)
 npm test              # unit tests (vitest)
 npm run lint
-npm run check         # build + headless Chrome checks of view, edit mode and model
+npm run check:navigation  # real clicks, room/device controls and mini-map (after build)
+npm run check         # build + headless Chrome checks of view, editing, navigation and model
 python -m pytest      # integration tests (pip install -r requirements-test.txt first)
 npm run deploy        # build and scp the integration to HA (settings in .env, see .env.example)
 ```
