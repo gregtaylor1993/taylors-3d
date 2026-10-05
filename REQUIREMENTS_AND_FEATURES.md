@@ -33,7 +33,7 @@ For each implementation, update its status, record the changed behavior, link it
 | F05 | Temperature, power and energy views | Sensor readings, conversion, floor overlays and visual bindings | Testing |
 | F06 | Security doors/windows and animated doors | Contact/lock markers and room door points | Planned |
 | F07 | Camera coverage cones and live-feed popups | Native HA camera viewer, explicit approximate coverage and visual editor | Testing |
-| F08 | Presence: people/devices in rooms | Motion/occupancy markers; observed-location implementation started separately | In progress |
+| F08 | Presence: people/devices in rooms | Explicit room observations, anonymous activity and verified identity bindings | Testing |
 | F09 | Alert pulses at the affected location | Located, labelled smoke/leak/unlocked/custom alerts | Testing |
 | F10 | Actual sun plus rain, clouds and snow | Automatic sun/day/night and moon already exist | Planned |
 | F11 | Hue colour/brightness lighting the rooms | Real coloured lamps and a bounded light pool | Planned |
@@ -47,7 +47,7 @@ For each implementation, update its status, record the changed behavior, link it
 | F19 | Bottom bubble navigation bar | Top toolbar and view chips | Testing |
 | F20 | Rich device control popups | HA more-info and supported object popups | Testing |
 | F21 | Persistent 2D mini-map | Full-card Top view | Testing |
-| F22 | Cars appearing on the drive | Sustained vehicle detection/event-source implementation started separately | In progress |
+| F22 | Cars appearing on the drive | Maintained vehicle occupancy/counts and fixed-expiry sighting bindings | Testing |
 | F23 | Robot vacuums moving while running | Explicit measured-position/status implementation started separately | In progress |
 | F24 | Horizontal split floors and vertical layers | Individual floors, All and section views | Planned |
 | F25 | Translations, preview, screenshots and bundle checks | English service strings, mock HA, screenshots and source/bundle gates | In progress |
@@ -392,6 +392,7 @@ A feature is Done only after its agreed behavior works, it persists where approp
 | 2026-10-04 | Automated validation | Complete GitHub CI and HACS validation pass. Full model suite passed on the first attempt. Manual installation zip matches the generated frontend. Actual household validation remains B03. | `9de9626` |
 | 2026-10-05 | Phase 2 | Right-hand panels, individually addressed camera actions with acknowledgements/optional return, grouped Undo/Redo, and visual measurement/alert bindings implemented. All 668 JS and 48 HA Python tests pass, alongside lint/build/bundle gates and the complete GitHub browser suites. The model suite passes on its first attempt. Fixes retain named-view floors, scope keyboard Undo to the focused card and keep unrelated HA updates from redrawing the house. HACS validation passes; actual HA/house/panel checks remain. | `661e87f` |
 | 2026-10-05 | Phase 3 | Native camera views, explicitly configured approximate coverage and its editor, shared entity metadata/precision and missing-link preservation implemented. All 933 JS and 48 HA Python tests, lint/build/bundle gates, complete browser suites and HACS checks pass. The GitHub-built frontend matches the exact-commit manual package; household camera/model/panel checks remain. | `1a3e733` |
+| 2026-10-05 | Phase 4 | Explicit presence/activity, parked vehicles, measured/status vacuum symbols, Tracking editor, source panels and mini-map bindings implemented. All 1,214 JS and 48 HA Python tests, lint/build/bundle checks, complete local/GitHub browser suites and HACS validation pass. Exact-commit manual package matches the GitHub frontend. Household checks and visual vacuum calibration remain. | `90c626a` |
 
 ### Phase 1: Taylor's Home Assistant check
 
@@ -452,13 +453,15 @@ F07 remains Testing for these household checks. F17 remains In progress as each 
 
 ### Phase 4: room observations, driveway vehicles and vacuums
 
-The Tracking editor, explicit observation adapters, per-actor geometry, mini-map symbols and source-specific control panels are connected. [The tracking guide](docs/TRACKING-GUIDE.md) explains sources, locations and the meaning of each observation. This work is separate from the verified Phase 3 manual package until its final checks pass.
+The Tracking editor, explicit observation adapters, per-actor geometry, mini-map symbols and source-specific control panels are connected. [The tracking guide](docs/TRACKING-GUIDE.md) explains sources, locations and the meaning of each observation. The current manual package contains this verified Phase 4 checkpoint; the earlier Phase 3 package is preserved separately.
 
-**Checks in progress:** all 1,214 JavaScript tests in 51 files and lint pass. Browser checks pass for visual Save/Undo/Redo, focused drafts, every editor tab at 320px, measured versus fixed vacuum positioning, source arrival/departure, fixed sighting expiry without updates, replay protection and disconnect/reconnect cleanup. Real clicks now open the exact vehicle/vacuum source controls: bounded screen-label spacing fixes both ordinary-marker and nearby-actor overlap without moving the actual house positions. Light/dark tracking text contrast passes. Explicit regression tests cover restored evidence, diagnostic sources, malformed freshness, missing modes, cancelled interpolation, immutable event deadlines, independent vacuum status/coordinate freshness and registry device-class changes. The complete final 3D regression run and online CI are still pending.
+**Final automated result:** code commit `90c626adbbac25a564218e9a5cefe17fb2d4e921` passes [complete GitHub CI](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37252425200) and [HACS validation](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37252425209). All 1,214 JavaScript tests in 51 files, all 48 Home Assistant Python tests, lint/build/bundle gates and every browser suite pass. The complete final local regression also passes; the model suite passes without retry locally and online. The manual package rebuilt from this exact commit matches the downloaded GitHub frontend byte for byte (`f392743dc587546c756fae4416220f5994f75b911ac9719f635d21719da13be9`). Later calibration, security and weather drafts are excluded from that package.
 
-**Performance evidence:** in the final built tracking fixture, ten unrelated updates keep frames at 10, shadow passes at 8 and shadow-light work at 13. The same parked actor/geometry remains, with zero tracking timers or HA service calls. Overlay-off and unchanged-temperature regressions also cause zero extra frames/shadows. The complete final model run and online verification remain before certifying this checkpoint.
+**Behavior checked:** visual Save/Undo/Redo, focused drafts, every editor tab at 320px, measured versus fixed vacuum positioning, source arrival/departure, fixed sighting expiry without updates, replay protection and disconnect/reconnect cleanup. Real clicks open the exact vehicle/vacuum source controls: bounded screen-label spacing fixes both ordinary-marker and nearby-actor overlap without moving the actual house positions. Light/dark tracking text contrast passes. Regression tests cover restored evidence, diagnostic sources, malformed freshness, missing modes, cancelled interpolation, immutable event deadlines, independent vacuum status/coordinate freshness and registry device-class changes.
 
-**Remaining work:** finish final browser/source verification; provide a visual calibration workflow before arbitrary vacuum map coordinates can be configured entirely in the card; validate real presence/detection/coordinate sources, model positions and the wall panel. F08/F22/F23 remain In progress during this work.
+**Performance evidence:** in the final local tracking fixture, ten unrelated updates keep frames at 10, shadow passes at 8 and shadow-light work at 13. The same parked actor/geometry remains, with zero tracking timers or HA service calls. Overlay-off and unchanged-temperature regressions also cause zero extra frames/shadows. The complete local and GitHub model runs retain their strict idle, geometry, lighting, occlusion and editing checks.
+
+**Remaining work:** provide a visual calibration workflow before arbitrary vacuum map coordinates can be configured entirely in the card; validate real presence/detection/coordinate sources, model positions and the wall panel using [the tracking guide's household checklist](docs/TRACKING-GUIDE.md#check-in-your-home-assistant). F08/F22 remain Testing and F23 remains In progress. No release tag has been published yet.
 
 The earlier local full-model regression run was stopped after its initial rendering/visibility/terrain/section/sky/merge checks passed, because its loaded script still expected the old default tap behavior. Those assertions now explicitly select Quick toggle. That local run remained partial; the final GitHub CI subsequently completed and passed the entire model suite.
 
