@@ -432,7 +432,10 @@ async function guardScenario(page) {
 
 async function dimScenario(page, mode) {
   await setPolicy(page, { enabled: false }); await ready(page);
-  await page.evaluate(() => document.querySelector('taylors3d-card')._scene.style.setProperty('filter', 'contrast(1.1)', 'important'));
+  await page.evaluate(() => {
+    document.querySelector('taylors3d-card')._scene.style.setProperty('filter', 'contrast(1.1)', 'important');
+    window.ambientIdleSample = null; // restart only the fixture's passive stability observation
+  });
   // The fixture's own CSS setup must settle before measuring dim-only work.
   await ready(page);
   const before = await snapshot(page);
