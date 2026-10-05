@@ -10,6 +10,7 @@
 import { CameraFeedController } from './camera-feed.js';
 import { entityMetadata, formatEntityValue } from './entity-metadata.js';
 import { lightCapabilities, readLightAppearance } from './light-state.js';
+import { buildRoomSummary } from './room-summary.js';
 
 const QUICK_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LIGHT_SOURCE_ERRORS = new Set(['missing', 'state', 'attributes', 'domain', 'restored', 'unavailable', 'unknown']);
@@ -172,6 +173,7 @@ export class DevicePopup {
   }
 
   get isOpen() { return !!this.el; }
+  get isCategoryOpen() { return !!this.el && this._selection?.kind === 'category'; }
   get cameraFeed() { return this._cameraFeed; }
 
   showMarker(marker, position) {
@@ -182,6 +184,11 @@ export class DevicePopup {
   showRoom(room, markers, position) {
     const area = this.hass.areas && this.hass.areas[room.area_id];
     this._show({ kind: 'room', room, markers, title: (area && area.name) || room.name || 'Room' }, position);
+  }
+
+  showCategory({ id, title, entityIds, emptyText, resolve }, position) {
+    if (typeof id !== 'string' || typeof title !== 'string' || !Array.isArray(entityIds)) return;
+    this._show({ kind: 'category', id, title, entityIds: [...entityIds], emptyText, resolve }, position);
   }
 
   _show(selection, position) {
@@ -206,8 +213,12 @@ export class DevicePopup {
     close.setAttribute('aria-label', 'Close controls');
     const heading = element('div');
     heading.style.flex = '1';
-    heading.append(element('p', 't3d-popup-kind', selection.kind === 'room' ? 'Room controls' : 'Device controls'),
+    heading.append(element('p', 't3d-popup-kind', selection.kind === 'room' ? 'Room controls' : selection.kind === 'category' ? 'House controls' : 'Device controls'),
       element('h3', '', selection.title));
+    if (selection.kind === 'room') {
+      this._roomSummary = element('p', 't3d-room-summary'); this._roomSummary.hidden = true;
+      heading.append(this._roomSummary);
+    }
     head.append(heading, close);
     this._body = element('div', 't3d-popup-body');
     el.append(style, head, this._cameraContainer, this._body);
@@ -245,7 +256,15 @@ export class DevicePopup {
 
   _entityIds() {
     const s = this._selection;
-    const ids = s.kind === 'room' ? roomEntityIds(s.room, s.markers) : markerEntityIds(s.marker);
+    let ids;
+    if (s.kind === 'category') {
+      let current;
+      try { current = typeof s.resolve === 'function' ? s.resolve(this.hass) : s.entityIds; } catch { current = []; }
+      ids = Array.isArray(current) ? current : current?.entityIds;
+      s.currentEmptyText = typeof current?.emptyText === 'string' ? current.emptyText : s.emptyText;
+      if (!Array.isArray(ids)) ids = [];
+      ids = [...new Set(ids.filter((id) => typeof id === 'string' && /^[a-z][a-z0-9_]*\.[a-z0-9_]+$/.test(id)))];
+    } else ids = s.kind === 'room' ? roomEntityIds(s.room, s.markers) : markerEntityIds(s.marker);
     // Registry-hidden and diagnostic entities are never included in a room's controls.
     return ids.filter((id) => {
       const metadata = entityMetadata(this.hass, id);
@@ -265,6 +284,11 @@ export class DevicePopup {
   _refreshRowsNow() {
     if (!this.el) return;
     const ids = this._entityIds();
+    if (this._roomSummary) {
+      const house = this.root.getRootNode()?.host?.getAttribute('data-taylors3d-theme') === 'house';
+      this._roomSummary.hidden = !house;
+      this._roomSummary.textContent = house ? buildRoomSummary({ hass: this.hass, entityIds: ids }).text : '';
+    }
     const keep = new Set(ids);
     if (this._cameraFeed.entityId && !keep.has(this._cameraFeed.entityId)) this._cameraFeed.close();
     for (const [id, row] of this._rows) {
@@ -272,9 +296,12 @@ export class DevicePopup {
     }
     if (!ids.length) {
       if (!this._empty) {
-        this._empty = element('p', '', 'No devices are assigned to this room.');
+        this._empty = element('p');
         this._body.append(this._empty);
       }
+      this._empty.textContent = this._selection.kind === 'category'
+        ? this._selection.currentEmptyText || this._selection.emptyText || 'No current entities are available in this category.'
+        : 'No devices are assigned to this room.';
     } else if (this._empty) { this._empty.remove(); this._empty = null; }
     for (const id of ids) {
       const control = entityControl(this.hass, id);
@@ -522,6 +549,7 @@ export class DevicePopup {
     if (hadPopup) this.onVisibilityChange(false, this.placement);
     this._body = null;
     this._empty = null;
+    this._roomSummary = null;
     this._selection = null;
     this._rows.clear();
     this._pending.clear();

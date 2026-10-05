@@ -25,6 +25,7 @@ import { ScenePreviewEditor } from './scene-preview-editor.js';
 import { AmbientIdleEditor } from './ambient-idle-editor.js';
 import { WallPresentationEditor } from './wall-presentation-editor.js';
 import { FloorPresentationEditor } from './floor-presentation-editor.js';
+import { HouseSummaryEditor } from './house-summary-editor.js';
 import { entityChoices, registryIssues } from './entity-metadata.js';
 
 const DENSE_TRIS = 150000;
@@ -65,6 +66,7 @@ export class EditMode {
     this._scenePreviewEditor = new ScenePreviewEditor(card, () => this.render());
     this._ambientIdleEditor = new AmbientIdleEditor(card, () => this.render());
     this._floorPresentationEditor = new FloorPresentationEditor(card, () => this.render());
+    this._houseSummaryEditor = new HouseSummaryEditor(card, () => this.render());
     this._wallPresentationEditor = new WallPresentationEditor(card, () => this.render(), {
       onBeginPick: (pick) => this.beginWallSurfacePick(pick),
       onCancelPick: () => this.beginWallSurfacePick(null),
@@ -163,6 +165,7 @@ export class EditMode {
     this._modelRenderingEditor.reset();
     this._scenePreviewEditor.reset();
     this._ambientIdleEditor.reset();
+    this._houseSummaryEditor.reset();
     this._wallPresentationEditor.reset(); this._floorPresentationEditor.reset();
     activeEditors.delete(this);
     window.removeEventListener('keydown', this._onKey);
@@ -183,6 +186,7 @@ export class EditMode {
     this._modelRenderingEditor.dispose();
     this._scenePreviewEditor.dispose();
     this._ambientIdleEditor.dispose();
+    this._houseSummaryEditor.dispose();
     this._wallPresentationEditor.dispose(); this._floorPresentationEditor.dispose();
   }
 
@@ -217,6 +221,9 @@ export class EditMode {
 
   // called by the card after every rebuild
   afterUpdate() {
+    if (this.tab === 'house' && this.card._config?.layout_style !== 'house') {
+      this._houseSummaryEditor.reset(); this.tab = 'rooms';
+    }
     if (this.selectedRoom && !this.room(this.selectedRoom)) this.selectedRoom = null;
     this.card._applyMarkerSelection(this.selectedMarker);
     this.refreshOverlay();
@@ -264,6 +271,11 @@ export class EditMode {
     if (this.tab === 'idle' && this.panel.contains(active)
       && (active?.dataset?.field?.startsWith('ambient-idle-') || active?.dataset?.act?.startsWith('ambient-idle-'))) {
       this._ambientIdleEditor.updatePreviews(this.panel);
+      return;
+    }
+    if (this.tab === 'house' && this.panel.contains(active)
+      && (active?.dataset?.field?.startsWith('house-summary-') || active?.dataset?.act?.startsWith('house-summary-'))) {
+      this._houseSummaryEditor.updatePreviews(this.panel);
       return;
     }
     if (this._sliding) this._renderHeld = true;
@@ -317,6 +329,7 @@ export class EditMode {
     this._modelRenderingEditor.reset();
     this._scenePreviewEditor.reset();
     this._ambientIdleEditor.reset();
+    this._houseSummaryEditor.reset();
     this._wallPresentationEditor.reset(); this._floorPresentationEditor.reset();
     this._closeMenu();
     this.view?.setOverlay?.({}); this.view?.highlightModelNode?.(null);
@@ -353,6 +366,7 @@ export class EditMode {
     this._modelRenderingEditor.reset();
     this._scenePreviewEditor.reset();
     this._ambientIdleEditor.reset();
+    this._houseSummaryEditor.reset();
     this._wallPresentationEditor.reset(); this._floorPresentationEditor.reset();
     this.card[method]();
     this.updateHistoryState();
@@ -475,7 +489,7 @@ export class EditMode {
       if (point?.length >= 2 && point.every(Number.isFinite)) this._trackingEditor.acceptPlanPoint(point.slice(0, 2), trackingPick.floorId, trackingPick.token);
       this.refreshOverlay(); return;
     }
-    if (this.tab === 'tracking' || this.tab === 'scenes' || this.tab === 'idle') return; // Source/appearance edits never fall through into room selection.
+    if (this.tab === 'tracking' || this.tab === 'scenes' || this.tab === 'idle' || this.tab === 'house') return; // Source/appearance edits never fall through into room selection.
     if (this.pivoting) {
       this._setPivot(e);
       return;
@@ -826,6 +840,7 @@ export class EditMode {
 
   // live values in the Mower tab, without re-rendering the panel
   onStates() {
+    if (this.tab === 'house') { this._houseSummaryEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'idle') { this._ambientIdleEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'scenes') { this._scenePreviewEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'model') { this._modelRenderingEditor.updatePreviews(this.panel); this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel); this._syncStageClasses(); return; }
@@ -1010,7 +1025,7 @@ export class EditMode {
 
   _vertexDown(e, roomId, index) {
     if (e.button !== 0) return;
-    if (this.tab === 'idle' || this._wallSurfacePick()) return;
+    if (this.tab === 'idle' || this.tab === 'house' || this._wallSurfacePick()) return;
     e.stopPropagation();
     e.preventDefault();
     this._startWindowDrag({ kind: 'vertex', roomId, index, start: [e.clientX, e.clientY], moved: false });
@@ -1018,7 +1033,7 @@ export class EditMode {
 
   _midDown(e, roomId, edge) {
     if (e.button !== 0) return;
-    if (this.tab === 'idle' || this._wallSurfacePick()) return;
+    if (this.tab === 'idle' || this.tab === 'house' || this._wallSurfacePick()) return;
     e.stopPropagation();
     e.preventDefault();
     this._startWindowDrag({ kind: 'mid', roomId, edge, start: [e.clientX, e.clientY], moved: false });
@@ -1027,7 +1042,7 @@ export class EditMode {
   markerDown(m, e) {
     if (e.button !== 0) return;
     e.stopPropagation();
-    if (this.tab === 'tracking' || this.tab === 'scenes' || this.tab === 'idle' || this.drawing || this.doorMode || this.calibrating || this.colorPick || this._trackingPlanPick() || this._wallSurfacePick()) return;
+    if (this.tab === 'tracking' || this.tab === 'scenes' || this.tab === 'idle' || this.tab === 'house' || this.drawing || this.doorMode || this.calibrating || this.colorPick || this._trackingPlanPick() || this._wallSurfacePick()) return;
     if (m.id === this.card._mowerMarkerId) {
       this.selectMarker(m.id); // positioned live, nothing to drag
       return;
@@ -1166,6 +1181,9 @@ export class EditMode {
   }
 
   render() {
+    if (this.tab === 'house' && this.card._config?.layout_style !== 'house') {
+      this._houseSummaryEditor.reset(); this.tab = 'rooms';
+    }
     if (this._sliding) { this._renderHeld = true; this.updateHistoryState(); return; }
     // a rebuild must not move the panel under the user: keep scroll position and the focused control
     const oldBody = this.panel.querySelector('.tab-body');
@@ -1181,7 +1199,7 @@ export class EditMode {
     this._renderedTab = this.tab;
     const hasObjects = this._hasObjects();
     if (this.tab === 'objects' && !hasObjects) this.tab = 'devices';
-    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ...(hasObjects ? [['objects', 'Objects']] : []), ['overlays', 'Overlays'], ['cameras', 'Cameras'], ['tracking', 'Tracking'], ['security', 'Security'], ['environment', 'Environment'], ['scenes', 'Scenes'], ['idle', 'Idle'], ['mower', 'Mower'], ['views', 'Views'], ['model', 'Model'], ['data', 'Data']];
+    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ...(hasObjects ? [['objects', 'Objects']] : []), ['overlays', 'Overlays'], ['cameras', 'Cameras'], ['tracking', 'Tracking'], ['security', 'Security'], ['environment', 'Environment'], ['scenes', 'Scenes'], ['idle', 'Idle'], ['mower', 'Mower'], ['views', 'Views'], ['model', 'Model'], ...(this.card._config?.layout_style === 'house' ? [['house', 'House']] : []), ['data', 'Data']];
     const body = {
       rooms: () => this._roomsTab(), devices: () => this._devicesTab(), objects: () => this._objectsTab(), mower: () => this._mowerTab(), views: () => this._viewsTab(),
       model: () => this._modelTab(), data: () => this._dataTab(),
@@ -1192,6 +1210,7 @@ export class EditMode {
       security: () => this._securityEditor.render(),
       scenes: () => this._scenePreviewEditor.render(),
       idle: () => this._ambientIdleEditor.render(),
+      house: () => this._houseSummaryEditor.render(),
     }[this.tab]();
     const msg = this.message ? `<div class="msg ${this.message.error ? 'error' : this.message.warn ? 'warn' : ''}">${esc(this.message.text)}</div>` : '';
     this.panel.innerHTML = `
@@ -1210,6 +1229,7 @@ export class EditMode {
     if (this.tab === 'model') { this._modelRenderingEditor.updatePreviews(this.panel); this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel); this._syncStageClasses(); }
     if (this.tab === 'scenes') this._scenePreviewEditor.updatePreviews(this.panel);
     if (this.tab === 'idle') this._ambientIdleEditor.updatePreviews(this.panel);
+    if (this.tab === 'house') this._houseSummaryEditor.updatePreviews(this.panel);
     const newBody = this.panel.querySelector('.tab-body');
     if (newBody && scroll) newBody.scrollTop = scroll;
     if (focusKey) {
@@ -1595,6 +1615,7 @@ export class EditMode {
     this._closeMenu();
     if (this.tab === 'views') this.render();
     if (this.tab === 'idle') this._ambientIdleEditor.updatePreviews(this.panel);
+    if (this.tab === 'house') this._houseSummaryEditor.updatePreviews(this.panel);
     if (this.tab === 'model') { this._wallSurfacePick(); this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel); this._syncStageClasses(); }
     if (this.tab === 'tracking') {
       this._trackingPlanPick(); // Cancel a capture as soon as its floor is no longer displayed.
@@ -2271,6 +2292,7 @@ export class EditMode {
     if (this._modelRenderingEditor.onClick(btn.dataset.act, btn)) return;
     if (this._scenePreviewEditor.onClick(btn.dataset.act, btn)) return;
     if (this._ambientIdleEditor.onClick(btn.dataset.act, btn)) return;
+    if (this._houseSummaryEditor.onClick(btn.dataset.act, btn)) return;
     if (this._wallPresentationEditor.onClick(btn.dataset.act, btn)) return;
     if (this._floorPresentationEditor.onClick(btn.dataset.act, btn)) return;
     const sel = this.room(this.selectedRoom);
@@ -2290,6 +2312,7 @@ export class EditMode {
       case 'history-undo': this._runHistory('undo'); return;
       case 'history-redo': this._runHistory('redo'); return;
       case 'tab':
+        if (id === 'house' && this.card._config?.layout_style !== 'house') return;
         if (id !== this.tab) {
           if (this.tab === 'cameras') this._cameraEditor.cancel();
           if (this.tab === 'tracking') this._trackingEditor.cancel();
@@ -2298,6 +2321,7 @@ export class EditMode {
           if (this.tab === 'model') { this._modelRenderingEditor.reset(); this._wallPresentationEditor.reset(); this._floorPresentationEditor.reset(); }
           if (this.tab === 'scenes') this._scenePreviewEditor.reset();
           if (this.tab === 'idle') this._ambientIdleEditor.reset();
+          if (this.tab === 'house') this._houseSummaryEditor.reset();
           this.picking = null;
           this.pivoting = false;
           this.modelPick = null;
@@ -2306,7 +2330,7 @@ export class EditMode {
           this.view.highlightModelNode(null);
         }
         if (id !== 'objects') this.objSel = null;
-        if (id === 'scenes' || id === 'idle') {
+        if (id === 'scenes' || id === 'idle' || id === 'house') {
           // Source/display settings must not leave a room tool or pinned
           // marker gesture active behind the form.
           this.drawing = this.calibrating = null;
@@ -2315,7 +2339,7 @@ export class EditMode {
           this.card._applyMarkerSelection(null);
         }
         this.tab = id;
-        if (id === 'idle') {
+        if (id === 'idle' || id === 'house') {
           // A late release from an old room/device drag must not pin anything
           // after entering this settings-only tab. Remove old edit handles too.
           this._endWindowDrag(false);
@@ -2458,6 +2482,7 @@ export class EditMode {
     if (this._modelRenderingEditor.onChange(f, el)) return;
     if (this._scenePreviewEditor.onChange(f, el)) return;
     if (this._ambientIdleEditor.onChange(f, el)) return;
+    if (this._houseSummaryEditor.onChange(f, el)) return;
     if (this._wallPresentationEditor.onChange(f, el)) return;
     if (this._floorPresentationEditor.onChange(f, el)) return;
     const sel = this.room(this.selectedRoom);
@@ -2579,6 +2604,7 @@ export class EditMode {
     if (this._modelRenderingEditor.onInput(f, el)) return;
     if (this._scenePreviewEditor.onInput(f, el)) return;
     if (this._ambientIdleEditor.onInput(f, el)) return;
+    if (this._houseSummaryEditor.onInput(f, el)) return;
     if (this._wallPresentationEditor.onInput(f, el)) return;
     if (this._floorPresentationEditor.onInput(f, el)) return;
     if (f?.startsWith('cov-') && this._cameraEditor.onChange(f, el)) return;

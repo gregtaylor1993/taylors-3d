@@ -24,6 +24,8 @@ Taylor chose the first group: **bubble bar, room/device popups and 2D mini-map**
 
 Taylor's 5 October desktop/phone references add the [visual direction](docs/DESIGN-DIRECTION.md): a large house view, right-hand room/device controls on wide screens, a bottom sheet on phones, rounded theme-aware panels, amber light controls and teal accents. The reference's example readings/devices are not household evidence. Matching this presentation remains part of F18–F21/F25, separately from their already tested behavior.
 
+The **House interface checkpoint** implements that presentation with an optional layout selector, desktop rail, mobile bottom menu, room/device controls and visual House settings. Headers use explicitly selected real weather, people and alarm sources; category menus resolve current eligible entities. Existing saved cards keep their standard layout until House is chosen; new cards default to dark House. Dedicated source and built-card browser checks pass **531/531**, including a loaded tagged GLB, actual room/device taps, a 320-pixel card, opposite House/HA colour schemes, readable labels, current summaries, camera/source/resource retention and a strict zero-error/warning gate. The isolated source also passes **3,683 JavaScript tests**, lint and bundle freshness. Full regression/CI and installation packaging are tracked separately in the project guide. These simulated checks do not prove actual household video, model or panel performance. See the [House guide](docs/HOUSE-VIEW-GUIDE.md).
+
 For each implementation, update its status, record the changed behavior, link its commit or pull request, and record the checks performed. Keep unfinished parts visible instead of marking a whole feature Done early.
 
 ## Feature overview
@@ -33,7 +35,7 @@ For each implementation, update its status, record the changed behavior, link it
 | F01 | Named camera presets and automation-triggered flights | Named saved 3D/top views and smooth camera moves | Testing |
 | F02 | Complete visual configuration | Visual card editor and in-card edit tabs; new overlay/screen controls | In progress |
 | F03 | General undo and redo | General session history and grouped gestures | Testing |
-| F04 | Full dashboard backup and restore | Layout JSON import/export | Needs input |
+| F04 | Full dashboard backup and restore | Layout JSON import/export; complete-dashboard archive work started | In progress |
 | F05 | Temperature, power and energy views | Sensor readings, conversion, floor overlays and visual bindings | Testing |
 | F06 | Security doors/windows and animated doors | Exact contacts, owned model outlines and explicit rigid hinge editor | In progress |
 | F07 | Camera coverage cones and live-feed popups | Native HA camera viewer, explicit approximate coverage and visual editor | Testing |
@@ -44,7 +46,7 @@ For each implementation, update its status, record the changed behavior, link it
 | F12 | Scene previews | Explicit light targets, current-light capture, editor and saved-bar controls verified; household checks remain | Testing |
 | F13 | Ambient idle rotation and night dimming | Optional delay/rotation and sun/quiet-hours picture dimming verified locally and by CI; household checks remain | Testing |
 | F14 | Camera-aware cut-away and glass/faded walls | Exact wall drafts, owned material copies and composed clipping pass full local/GitHub checks; actual-house checks remain | Testing |
-| F15 | Furniture packs and drag-and-drop placement | Furniture inside GLB models and layer visibility | Planned |
+| F15 | Furniture packs and drag-and-drop placement | Validated pack storage, client, placement/editor and renderer foundations; not connected in the delivered card | In progress |
 | F16 | Baked shadows for wall panels | Saved shadow/lighting policy, authored texture diagnostics and external AO guide | Testing |
 | F17 | Deeper HA floors/areas/entity integration | Shared metadata, precision, filtered choices and missing-link diagnostics | In progress |
 | F18 | Room selection and room control panels | Edit-mode room/model picking | Testing |
@@ -109,11 +111,11 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 
 **Already present:** layout JSON export/import, including views, bindings and model metadata. It does not include GLB bytes, every Lovelace card option or an entire HA dashboard.
 
-**Pending scope question:** Taylor's 3D settings/layout/model assets, the entire HA dashboard including other cards, or both. Work depending on this decision has not started.
+**Scope:** Taylor requested full dashboards. This covers the selected Home Assistant dashboard, including its other cards, plus the Taylor layouts and owned model/furniture assets it uses. The existing layout-only JSON remains labelled separately.
 
 **Complete when:** the agreed backup scope includes card settings, layout, views/presets, entity/area mappings, furniture and required model/assets. A restore preview shows what will change and which entities/areas/assets are missing. Restoring into a fresh setup reproduces the saved result, and the existing setup can be recovered if an import is rejected. Backup format/version and migration are documented.
 
-**Scope decision:** confirm whether “full dashboard” means the whole Taylor's 3D setup, an HA dashboard containing this card and other cards, or both. Do not quietly label a layout-only JSON file as a full backup.
+**Work started:** preserve the raw dashboard, exact layout IDs, original model bytes and licensed pack archives in a versioned package. Import will show a static preview and restore into an explicitly named new storage dashboard with new Taylor keys first. Home Assistant's save API has no shared transaction or revision lock; the existing dashboard will remain the recovery copy. External custom-card resources remain declared dependencies. Archive validation and actual Home Assistant/browser verification are still required; this is not delivered functionality yet.
 
 ### F05 — temperature, power and energy overlays
 
@@ -310,6 +312,8 @@ to the separately verified Phase 9. Actual-house checks remain. See the
 
 **Scope:** no signed shop, payment system or dependency on another project's commercial pack service is required. Preserve asset licences and attribution.
 
+**Foundation work:** immutable local pack storage, authenticated asset routes, a bounded library client, visual draft editor and a separate static furniture layer have been implemented in unshipped files. Integration setup and import permissions pass actual Home Assistant test-harness checks on the isolated validation branch, including restart/reload and adding the integration while HTTP is already running. The current main integration does not register those routes. Card wiring, native textured-asset decoding, drag placement, licence downloads, backups and complete regression remain before delivery.
+
 ### F16 — baked shadows
 
 **Want:** soft, inexpensive shadows that look good on the wall panel without relying on many realtime lights.
@@ -411,7 +415,7 @@ Navigation-only configuration changes preserve the selected viewing mode, tempor
 
 **Already present:** single floor/storey views, an All view and a side section. Simultaneous split and separated-layer views are new work.
 
-**Phase 11 implementation under verification:** Edit → Model has Normal, Side by side and
+**Phase 11 verified implementation:** Edit → Model has Normal, Side by side and
 Stacked layers with explicit floor ordering, up to four floors, measured footprint
 spacing and Save/Cancel/Undo. It uses the existing single house view and fixed light
 pool. This first interpretation of horizontal split spreads floor geometry together;
@@ -432,8 +436,12 @@ lint, build and bundle parity. Its dedicated browser run passed all 129 checks
 (64 source, 64 built card and the browser-error check). Tests cover actual native
 room/device clicks, source export, camera restoration, visual editing/history,
 narrow controls and unchanged idle rendering. Theme and furniture drafts are
-excluded from this checkpoint. Full exact-commit regression, GitHub CI and
-packaging are still being completed. The
+excluded from this checkpoint. Exact checkpoint `b10da26` passes the complete local
+regression and [GitHub CI](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37280500045):
+1,360 browser assertions, 48 Home Assistant Python tests, all JavaScript tests and
+build checks, with no browser retry. HACS validation passes. The manual installation
+zip contains all 11 exact pinned integration/licence files and matches GitHub's
+frontend byte for byte. HACS v0.1.0 still contains the older Phase 9 release. The
 [floor guide](docs/FLOOR-PRESENTATION-GUIDE.md) explains use and household validation.
 
 The first native run also exposed a real source-coordinate defect: an animated

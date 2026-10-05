@@ -7,10 +7,21 @@ const DEFAULTS = {
   occlusion: true, lights: 'auto', merge: true, sky_bodies: true,
   show_bubble_bar: true, bubble_bar_controls: BUBBLE_CONTROLS, mini_map: true, mini_map_size: 180,
   mini_map_position: 'top-right', device_tap_action: 'popup', control_panel: 'right',
+  layout_style: 'original', house_colour_scheme: 'ha',
 };
 
 export const SCHEMA = [
   { name: 'height', selector: { text: {} } },
+  {
+    type: 'expandable', name: '', title: 'House appearance', schema: [
+      { name: 'layout_style', selector: { select: { mode: 'dropdown', options: [
+        { value: 'original', label: 'Standard card' }, { value: 'house', label: 'House with navigation and room panels' },
+      ] } } },
+      { name: 'house_colour_scheme', selector: { select: { mode: 'dropdown', options: [
+        { value: 'ha', label: 'Home Assistant colours' }, { value: 'dark', label: 'Dark graphite' }, { value: 'light', label: 'Light' },
+      ] } } },
+    ],
+  },
   {
     type: 'expandable', name: '', title: 'Navigation and device controls', schema: [
       { name: 'show_bubble_bar', selector: { boolean: {} } },
@@ -72,6 +83,8 @@ export const SCHEMA = [
 
 const LABELS = {
   height: 'Card height',
+  layout_style: 'Card layout',
+  house_colour_scheme: 'House colours',
   view: 'Start view',
   floor: 'Start floor',
   wall_height: 'Cut-away wall height',
@@ -103,6 +116,8 @@ const LABELS = {
 
 const HELPERS = {
   height: 'CSS height, e.g. 520px or 60vh',
+  layout_style: 'House adds a header and navigation, right-hand room controls on wide cards and a bottom sheet on phones. Existing cards keep their standard layout until you choose House.',
+  house_colour_scheme: 'Applies to the House layout. Dark graphite uses amber lights and teal navigation. Use Settings → House in the card to choose the real weather, people and alarm sources.',
   wall_height: 'Drawn walls only; a model is cut at the top of the storey',
   occlusion: 'With a 3D model: markers hidden by a wall from the current angle are shown faint',
   merge: 'With a 3D model: static parts of a room / layer with the same material are drawn as one (fewer draw calls). Turn off to keep every part separate.',
@@ -145,6 +160,8 @@ export function cleanConfig(config) {
     if (k === 'mini_map_position' && !['top-right', 'top-left'].includes(v)) v = DEFAULTS.mini_map_position;
     if (k === 'device_tap_action' && !['popup', 'toggle'].includes(v)) v = DEFAULTS.device_tap_action;
     if (k === 'control_panel' && !['right', 'popup'].includes(v)) v = DEFAULTS.control_panel;
+    if (k === 'layout_style' && !['original', 'house'].includes(v)) v = DEFAULTS.layout_style;
+    if (k === 'house_colour_scheme' && !['ha', 'dark', 'light'].includes(v)) v = DEFAULTS.house_colour_scheme;
     if (['show_bubble_bar', 'mini_map'].includes(k) && typeof v !== 'boolean') v = DEFAULTS[k];
     if (k === 'bubble_bar_controls') {
       v = Array.isArray(v) ? [...new Set(v.filter((id) => BUBBLE_CONTROLS.includes(id)))] : BUBBLE_CONTROLS;

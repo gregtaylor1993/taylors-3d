@@ -25,6 +25,14 @@ the house, and a fresh tap can select a room or device. These effects use no dev
 
 ## Room and device controls
 
+In the card's visual settings, **House appearance** selects the photo-inspired
+House layout and Dark graphite, Light or Home Assistant colours. A wide card uses
+a left menu and right controls; a narrow card uses bottom navigation and a room
+sheet, reserving space for the house above it. **Settings → House** chooses the
+title and actual weather, people and alarm sources. See the
+[House guide](HOUSE-VIEW-GUIDE.md). Existing cards keep the standard layout until
+you select House.
+
 For a clearer view through a GLB house, open **Edit → Model → Wall presentation** and
 read the [wall guide](WALL-PRESENTATION-GUIDE.md). Select actual wall meshes and the
 side you want to fade. Glass is a lightweight transparent look; cut-away removes
@@ -46,9 +54,10 @@ lamps, Kelvin limits and wall-panel checks.
 Camera devices can also open a muted camera picture directly in this panel. See the
 [camera guide](CAMERAS-GUIDE.md) for grouped devices, coverage settings and troubleshooting.
 
-On wide screens the house shrinks to leave room for the panel and mini-map. On small screens
-the panel covers part of the house and scrolls; its close button and the bottom bar remain
-accessible. Close it with **×**, Escape or a tap outside. Choose a popup beside the device
+On wide screens the house shrinks to leave room for the panel and mini-map. Standard
+cards use a scrolling overlay on small screens; House cards reserve a bottom sheet
+and expand their height when needed. Close controls with **×**, Escape or a tap outside.
+Choose a popup beside the device
 instead under the card's visual editor → **Navigation and device controls** → **Room and
 device controls**.
 

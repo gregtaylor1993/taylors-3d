@@ -39,6 +39,10 @@ import { ScenePreviewBar } from './scene-preview-bar.js';
 import { AmbientIdleController } from './ambient-idle.js';
 import { wallKeepSelectors } from './wall-presentation.js';
 import { readFloorPresentation } from './floor-presentation.js';
+import { HouseShell } from './house-shell.js';
+import { HOUSE_NAVIGATION_ITEMS } from './house-navigation.js';
+import { buildHouseCategory } from './house-categories.js';
+import { houseBaseHeight } from './house-card-size.js';
 import { floorPresentationContext } from './floor-presentation-context.js';
 import { displayPlanPosition, displayFloorFootprint, displayLocatedRecords, displayCameraAnchors,
   translateFloorCamera } from './floor-presentation-adapters.js';
@@ -481,7 +485,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   static getStubConfig() {
-    return {};
+    return { layout_style: 'house', house_colour_scheme: 'dark' };
   }
 
   // sections view: span the whole section by default
@@ -500,7 +504,7 @@ class Taylors3dCard extends HTMLElement {
     if (previous) this._wallLifecycleGeneration++;
     this._config = { layout_key: 'default', height: '520px', group_by: 'device', wall_height: 1.0, view: '3d',
       show_bubble_bar: true, mini_map: true, mini_map_size: 180, mini_map_position: 'top-right', device_tap_action: 'popup',
-      control_panel: 'right', ...config };
+      control_panel: 'right', layout_style: 'original', house_colour_scheme: 'ha', ...config };
     this._syncScenePreviews();
     if (!previous || previous.mini_map !== this._config.mini_map) this._miniMapVisible = this._config.mini_map !== false;
     if (!previous || previous.view !== this._config.view) this._mode = this._config.view === 'top' ? 'top' : '3d';
@@ -542,7 +546,7 @@ class Taylors3dCard extends HTMLElement {
       this._loadModel();
       this._updateObjects(); // lights: auto | off
       this._configureMiniMap();
-      this._devicePopup.setPlacement(this._config.control_panel);
+      this._devicePopup.setPlacement(this._houseLayoutEnabled() ? 'right' : this._config.control_panel);
       this._syncToolbar();
       this._schedule();
     }
@@ -716,7 +720,12 @@ class Taylors3dCard extends HTMLElement {
   }
 
   set hass(hass) {
-    if (this._hass && (this._hass.connection !== hass?.connection || this._hass.user?.id !== hass?.user?.id)) {
+    if (this._hass && (this._hass.connection !== hass?.connection || this._hass.user?.id !== hass?.user?.id
+      || this._hass.auth !== hass?.auth)) {
+      // A native input draft belongs to the account/connection that opened it.
+      // Closing synchronously prevents its late change event acting as a new user.
+      this._devicePopup?.close({ restoreFocus: false });
+      this._popup?.close();
       this._suspendAmbient('Home Assistant session changed');
       this.finishWallSelectionPreparation({ reload: false });
       this._wallLifecycleGeneration++;
@@ -728,6 +737,11 @@ class Taylors3dCard extends HTMLElement {
       this._trackingInputKey = null;
     }
     this._hass = hass;
+    if (this._houseLayoutEnabled()) {
+      if (!this._houseSessionActive()) this._devicePopup?.close({ restoreFocus: false });
+      this._devicePopup?.update(hass);
+    }
+    this._syncHouseShell();
     if (this._wallPreparation && !this._wallPreparationCurrent(this._wallPreparation)) {
       // Observe permission loss before invalidating the frame: cleanup must still
       // remember that its temporary unmerged model needs the configured merge.
@@ -777,11 +791,15 @@ class Taylors3dCard extends HTMLElement {
     this._ro.observe(this._stage);
     this._ro.observe(this._scene);
     this._ro.observe(this._toolbar);
+    this._houseObserved = new Set();
+    this._syncHouseShell();
     this._schedule();
     this._syncAmbient();
   }
 
   disconnectedCallback() {
+    this._houseShell?.setData({ enabled: false });
+    this._houseObserved?.clear();
     this._suspendAmbient('disconnected');
     this.finishWallSelectionPreparation({ reload: false });
     this._wallLifecycleGeneration++;
@@ -951,11 +969,13 @@ class Taylors3dCard extends HTMLElement {
     this._devicePopup = new DevicePopup(this._stage, {
       onAction: (domain, service, data) => this._hass.callService(domain, service, data),
       onMoreInfo: (entityId) => this._moreInfo(entityId),
-      placement: this._config.control_panel,
+      placement: this._houseLayoutEnabled() ? 'right' : this._config.control_panel,
       onVisibilityChange: (open, placement) => {
         if (open) this._suspendAmbient('device controls opened');
         if (open) this._stopScenePreview('device controls opened');
         this._stage.classList.toggle('controls-open', open && placement === 'right');
+        if (!open) this._houseSelection = 'house';
+        this._syncHouseShell();
         requestAnimationFrame(() => this.isConnected && this._resize());
       },
     });
@@ -1633,6 +1653,7 @@ class Taylors3dCard extends HTMLElement {
     this._edit?._ambientIdleEditor?.reset();
     this._edit?._wallPresentationEditor?.reset();
     this._edit?._floorPresentationEditor?.reset();
+    this._edit?._houseSummaryEditor?.reset();
     this._cameraCoveragePreview = null;
     this._historyReplaying = true;
     try {
@@ -1653,11 +1674,72 @@ class Taylors3dCard extends HTMLElement {
     for (const [mid, el] of this._markerEls) el.classList.toggle('selected', mid === id);
   }
 
+  _houseLayoutEnabled() { return this._config?.layout_style === 'house'; }
+
+  _houseSessionActive() {
+    const user = this._hass?.user;
+    return this.isConnected === true && this._hass?.connection?.connected === true
+      && typeof user?.id === 'string' && !!user.id.trim()
+      && (!Object.hasOwn(user, 'is_active') || user.is_active === true);
+  }
+
+  houseSummaryEditorAvailable() {
+    return this._houseLayoutEnabled() && this._houseSessionActive() && this._hass.user.is_admin === true
+      && this._editing === true && this._edit?.tab === 'house' && !!this._layout && !this._loading;
+  }
+
+  _syncHouseShell() {
+    if (!this._stage) return;
+    const enabled = this._houseLayoutEnabled() && this.isConnected === true;
+    if (!enabled && !this._houseShell) return;
+    if (!this._houseShell) this._houseShell = new HouseShell(this, {
+      onSelect: (action) => this._selectHouseNavigation(action),
+      onNeedsResize: () => { if (this.isConnected && this._view) this._resize(); },
+    });
+    const placement = enabled ? 'right' : this._config.control_panel;
+    if (this._devicePopup && this._devicePopup.placement !== (placement === 'right' ? 'right' : 'popup'))
+      this._devicePopup.setPlacement(placement);
+    this._houseShell.setData({ enabled, scheme: this._config.house_colour_scheme || 'ha',
+      summaryRaw: this._layout?.house_summary ?? this._config.house_summary, selected: this._houseSelection || 'house', editing: !!this._editing,
+      navItems: HOUSE_NAVIGATION_ITEMS.map((item) => item.id === 'settings'
+        ? { ...item, disabled: this._hass?.user?.is_admin !== true || !this._layout || !!this._loading } : item),
+    });
+    if (!this._ro || !this._houseObserved) return;
+    const current = new Set(enabled ? [this._houseShell.header?.element, this._houseShell.navigation?.element, this._devicePopup?.el].filter(Boolean) : []);
+    for (const node of this._houseObserved) if (!current.has(node)) this._ro.unobserve(node);
+    for (const node of current) if (!this._houseObserved.has(node)) this._ro.observe(node);
+    this._houseObserved = current;
+  }
+
+  _selectHouseNavigation(action) {
+    if (!this._houseLayoutEnabled() || !this._houseSessionActive() || this._editing || this._loading || !action) return;
+    if (action.type === 'control' && action.id === '3d') {
+      this._devicePopup.close(); this._popup.close(); this._setMode('3d'); this._houseSelection = 'house';
+    } else if (action.type === 'category' && action.id === 'settings') {
+      if (this._hass.user.is_admin !== true || !this._layout) return;
+      this._toggleEdit();
+      this._edit.panel.querySelector('[data-act="tab"][data-id="house"]')?.click();
+    } else if (action.type === 'category') {
+      const category = buildHouseCategory({ hass: this._hass, layout: this._layout, id: action.id });
+      if (!category) return;
+      this._stopScenePreview('house category opened'); this._popup.close(); this._devicePopup.update(this._hass);
+      this._devicePopup.showCategory({ ...category,
+        resolve: (hass) => buildHouseCategory({ hass, layout: this._layout, id: category.id })
+          || { entityIds: [], emptyText: 'Connect to Home Assistant to read this category.' },
+      });
+      this._houseSelection = category.id;
+    } else return;
+    this._syncHouseShell();
+  }
+
   _resize() {
     const r = this._stage.getBoundingClientRect();
     if (!r.width || !r.height) return;
-    const barHeight = this._toolbar.hidden ? 0 : this._toolbar.getBoundingClientRect().height + 16;
-    this._stage.style.setProperty('--taylors3d-bar-height', `${barHeight}px`);
+    if (this._houseShell?.enabled) this._houseShell.measure({ baseHeight: houseBaseHeight(this._stage) });
+    else {
+      const barHeight = this._toolbar.hidden ? 0 : this._toolbar.getBoundingClientRect().height + 16;
+      this._stage.style.setProperty('--taylors3d-bar-height', `${barHeight}px`);
+    }
     const scene = this._scene.getBoundingClientRect();
     this._view.resize(scene.width, scene.height);
     if (this._miniMap && this._config.mini_map_position !== 'top-left') {
@@ -1679,6 +1761,7 @@ class Taylors3dCard extends HTMLElement {
   // Rebuild only what changed. Edits replace just the layout parts they touch, so identity
   // comparisons per part keep e.g. overlay slider changes from rebuilding the whole scene.
   _update() {
+    this._syncHouseShell();
     this._syncModelRendering();
     this._syncScenePreviews();
     const h = this._hass;
@@ -2905,7 +2988,9 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _buildMarkers() {
-    this._devicePopup.close(); // never leave controls pointing at an old registry snapshot
+    // Room/device membership belongs to its selected snapshot. House categories
+    // re-resolve current membership for every update and action instead.
+    if (!this._devicePopup.isCategoryOpen) this._devicePopup.close();
     const h = this._hass;
     // a device bound to a model object has no marker: the object is the control (glow sprite too).
     // With group_by: device the marker stands for the device's primary entity, so a bound primary
@@ -3349,6 +3434,7 @@ class Taylors3dCard extends HTMLElement {
         const btn = document.createElement('button');
         btn.className = 'chip' + (v.id === this._viewId && !this._floorOnly ? ' on' : '');
         btn.dataset.view = v.id;
+        btn.dataset.taylors3dTone = 'floor';
         btn.setAttribute('aria-pressed', String(v.id === this._viewId && !this._floorOnly));
         btn.textContent = v.label;
         this._chips.append(btn);
@@ -3385,6 +3471,7 @@ class Taylors3dCard extends HTMLElement {
     this._toolbar.hidden = this._config.show_bubble_bar === false && !this._editing;
     this._syncScenePreviews();
     this._syncMiniMap();
+    this._syncHouseShell();
     requestAnimationFrame(() => this.isConnected && this._resize());
     if (this._empty && this._editing) this._empty.hidden = true;
   }

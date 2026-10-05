@@ -13,6 +13,7 @@ See the [lighting guide](docs/LIGHTING-GUIDE.md) for Hue colour, warm/cool white
 See the [model shading guide](docs/MODEL-SHADING-GUIDE.md) for lighter display settings and preparing AO textures in Blender.
 See the [scene preview guide](docs/SCENE-PREVIEW-GUIDE.md) to try a lighting look before deliberately activating its Home Assistant scene.
 See the [idle mode guide](docs/AMBIENT-IDLE-GUIDE.md) for optional gentle rotation and picture dimming on a wall panel.
+See the [House layout guide](docs/HOUSE-VIEW-GUIDE.md) for the photo-inspired menus, actual status sources and responsive room panels.
 
 A Lovelace card that shows your home as a 3D floorplan with every device on it. Draw each room
 once and link it to a Home Assistant area. After that, every device assigned to the area appears
