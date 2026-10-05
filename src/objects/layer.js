@@ -222,9 +222,10 @@ export class ObjectLayer {
       // shadow maps: only lit shadow slots whose fixture or position changed (dark slots are never redrawn)
       const redraw = [];
       this.pool.points.slice(0, SHADOWS).forEach((l, i) => {
-        const key = this._shadowKey(l);
+        const key = this.view.shadowsEnabled === false ? null : this._shadowKey(l);
         if (key && key !== this._shadowKeys[i]) redraw.push(l);
         this._shadowKeys[i] = key;
+        if (!key) l.shadow.needsUpdate = false;
       });
       if (redraw.length) { this.stats.shadowRequests++; this.view.requestShadowUpdate(redraw); }
       if (before !== this._slotSig()) changed = true;
@@ -247,12 +248,21 @@ export class ObjectLayer {
   // The shadow casters changed (model, visibility, cut, section): the lit shadow slots to redraw.
   // Dark slots forget their key, so they are redrawn once they light up.
   shadowsStale() {
+    if (this.view.shadowsEnabled === false) { this.clearShadowRequests(); return []; }
     const out = [];
     this.pool.points.slice(0, SHADOWS).forEach((l, i) => {
-      if (this._shadowKeys[i] && this.lights.visible) out.push(l);
-      else this._shadowKeys[i] = null;
+      // Re-enabling shadows seeds the current assignment once, including lamps
+      // that moved or became lit while maps were disabled.
+      const key = this.lights.visible ? this._shadowKey(l) : null;
+      this._shadowKeys[i] = key;
+      if (key) out.push(l);
     });
     return out;
+  }
+
+  clearShadowRequests() {
+    this._shadowKeys.fill(null);
+    for (const light of this.pool.points.slice(0, SHADOWS)) light.shadow.needsUpdate = false;
   }
 
   _assign({ real, shadows }) {
@@ -369,7 +379,7 @@ export class ObjectLayer {
           light.target.updateMatrixWorld();
         }
         light.updateMatrixWorld();
-        if (slot.shadow && light.intensity > 0 && !before.equals(light.position)) movedShadows.add(light);
+        if (this.view.shadowsEnabled !== false && slot.shadow && light.intensity > 0 && !before.equals(light.position)) movedShadows.add(light);
       }
     }
     // Keep assignment shadow keys current so the next identical HA update stays idle.

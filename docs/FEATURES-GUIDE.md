@@ -9,6 +9,10 @@ For people/activity, parked vehicles and measured vacuum positions, use **Edit �
 read [the tracking guide](TRACKING-GUIDE.md). It explains which readings can locate a person or
 vacuum, how recent sightings expire and how to preserve or repair a missing source.
 
+For lighter model rendering on a wall panel, open **Edit → Model → Model shading**.
+The [model shading guide](MODEL-SHADING-GUIDE.md) explains the shadow/lamp choices,
+what the material report means, and how to prepare ambient occlusion textures in Blender.
+
 ## Room and device controls
 
 Tap a room's floor to see its devices and readings on the right. Tap a device to see its own

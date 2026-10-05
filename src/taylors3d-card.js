@@ -33,6 +33,7 @@ import { entityMetadata } from './entity-metadata.js';
 import { buildTrackedEntities, TrackedEntitiesLayer } from './tracked-entities.js';
 import { readSunState, readHaLocation, readWeather, WeatherLayer } from './weather.js';
 import { SecurityLayer } from './security.js';
+import { readModelRendering } from './model-rendering.js';
 
 const VERSION = '0.1.0';
 const NONE = Object.freeze({}); // stable stand-in for a missing layout.objects / groups (binding cache key)
@@ -476,6 +477,7 @@ class Taylors3dCard extends HTMLElement {
 
   // model: from YAML (model: url) if set, else the one uploaded to the integration (layout.model)
   _loadModel(reload = false) {
+    this._syncModelRendering();
     const c = this._config;
     let opts = null;
     if (c.model) {
@@ -782,6 +784,7 @@ class Taylors3dCard extends HTMLElement {
       this._syncToolbar();
     });
     this._view = new FloorplanView(this._scene);
+    this._syncModelRendering();
     this._ensureWeatherLayer();
     this._statusOverlays = new StatusOverlays(this._view.scene, { onInvalidate: () => { this._view.dirty = true; } });
     this._cameraCoverage = new CameraCoverageLayer(this._view.scene, { onInvalidate: () => { this._view.dirty = true; } });
@@ -1348,6 +1351,7 @@ class Taylors3dCard extends HTMLElement {
     this._markerRenderKey = null;
     this._edit?._cameraEditor?.reset();
     this._edit?._trackingEditor?.reset();
+    this._edit?._modelRenderingEditor?.reset();
     this._cameraCoveragePreview = null;
     this._historyReplaying = true;
     try {
@@ -1394,6 +1398,7 @@ class Taylors3dCard extends HTMLElement {
   // Rebuild only what changed. Edits replace just the layout parts they touch, so identity
   // comparisons per part keep e.g. overlay slider changes from rebuilding the whole scene.
   _update() {
+    this._syncModelRendering();
     const h = this._hass;
     const b = this._built;
     const l = this._layout;
@@ -2100,11 +2105,19 @@ class Taylors3dCard extends HTMLElement {
     return changed;
   }
 
-  // Lamps and the light pool for the current states and view (cheap when nothing changed).
+  // Shared saved presentation takes precedence over the card's fallback settings.
+  _syncModelRendering() {
+    const policy = readModelRendering(this._layout?.model_rendering ?? this._config?.model_rendering);
+    this._view?.setModelRendering?.(policy);
+    return policy;
+  }
+
   _updateObjects() {
     const layer = this._objects;
     if (!layer || !layer.model || !this._hass || !this._config) return;
-    layer.update(this._hass.states, { visibleLevel: this._levelShown(), lightsOn: this._config.lights !== 'off' });
+    const policy = this._syncModelRendering();
+    layer.update(this._hass.states, { visibleLevel: this._levelShown(),
+      lightsOn: this._config.lights !== 'off' && policy.lamps !== 'off' });
   }
 
   _levelShown() {

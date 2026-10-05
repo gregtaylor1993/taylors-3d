@@ -13,6 +13,7 @@ import { buildManifest, threeAdapter } from './manifest.js';
 import { sectionLevels, unionBox, pivotCamera, rayPlaneY, orthoZoom, topZoom, nodeIndex, parseSelector, matches, viewTree, escapeName } from './views.js';
 import { mergeGroups, namedGroups, mergedName } from './merge.js';
 import { moonLight, moonLitRight, domeRadius, SUN_MIN_Y, SUN_DISC_M, MOON_DISC_M } from './sky.js';
+import { readModelRendering } from './model-rendering.js';
 import {
   castsShadow, shadowInfo, isCoplanarOverlay, depthRange, depthChanged, isOccluded, sunDirection, ghostMaterial, pickable,
 } from './render-rules.js';
@@ -286,6 +287,7 @@ export class FloorplanView {
     this.objectLayer = null; // ObjectLayer (registers itself); reset when the model goes
     this.onObjectsInvalidate = null; // called when model placement or visibility changed
     this.model = null; // { id, root, manifest }
+    this._modelRendering = readModelRendering(undefined);
     this.mergeStats = null; // { enabled, before, after: { meshes, triangles, calls }, groups, merged } of the loaded model
     this.modelClip = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
     this.sectionClip = null; // side section: global clipping plane (card world) or null
@@ -936,13 +938,51 @@ export class FloorplanView {
     if (label) label.scale.setScalar(1.4 / d.radius); // ~1.4 m in the world
   }
 
+  get shadowsEnabled() { return this._modelRendering?.shadows !== 'off'; }
+
+  // Root owns lamp visibility. Shadow mode is central so no caller can restart maps
+  // while they are disabled. Equal/default policy never dirties an idle renderer.
+  setModelRendering(value) {
+    const policy = readModelRendering(value), previous = this._modelRendering || readModelRendering(undefined);
+    this._modelRendering = policy;
+    const shadowsChanged = previous.shadows !== policy.shadows;
+    const changed = shadowsChanged || previous.lamps !== policy.lamps;
+    if (!shadowsChanged) return changed;
+    const enabledChanged = this._applyShadowRendering();
+    if (enabledChanged) {
+      const materials = new Set();
+      this.scene.traverse((node) => {
+        for (const material of Array.isArray(node.material) ? node.material : [node.material]) {
+          if (material && !materials.has(material)) { materials.add(material); material.needsUpdate = true; }
+        }
+      });
+      this.dirty = true;
+    }
+    if (this.model && this.shadowsEnabled) this._shadowDirty();
+    return changed;
+  }
+
+  _applyShadowRendering() {
+    const enabled = !!this.model && this.shadowsEnabled, shadowMap = this.renderer.shadowMap;
+    const changed = shadowMap.enabled !== enabled;
+    shadowMap.enabled = enabled;
+    if (!enabled) {
+      shadowMap.needsUpdate = false;
+      this._sunStale = true;
+      // Include authored lights too: no pending map is carried across the off period.
+      this.scene.traverse((node) => { if (node.isLight && node.shadow) node.shadow.needsUpdate = false; });
+      this.objectLayer?.clearShadowRequests?.();
+    }
+    return changed;
+  }
+
   // Renderer, light and shadow settings for model / no model and day / night.
   _applyLook() {
     const r = this.renderer, day = this.model ? this.daylight : true, sun = this.sun, hemi = this.hemi;
     if (this.model) {
       r.toneMapping = THREE.ACESFilmicToneMapping;
       r.toneMappingExposure = 1.25;
-      r.shadowMap.enabled = true;
+      this._applyShadowRendering();
       r.shadowMap.autoUpdate = false; // re-rendered on demand (needsUpdate), not every frame
       this._shadowDirty();
       r.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -956,7 +996,7 @@ export class FloorplanView {
     } else {
       r.toneMapping = THREE.NoToneMapping;
       r.toneMappingExposure = 1;
-      r.shadowMap.enabled = false;
+      this._applyShadowRendering();
       r.setClearColor(0x000000, 0);
       hemi.color.setHex(0xffffff);
       hemi.groundColor.setHex(0x8a8a8a);
@@ -1014,7 +1054,7 @@ export class FloorplanView {
     cam.far = radius * 5;
     cam.updateProjectionMatrix();
     sun.target.updateMatrixWorld();
-    if (invalidate) { this._sunShadow(); this.stats.shadow++; }
+    if (invalidate && this.shadowsEnabled) { this._sunShadow(); this.stats.shadow++; }
     this.dirty = true;
   }
 
@@ -1709,6 +1749,7 @@ export class FloorplanView {
   // The shadow casters changed (model, visibility, cut, section): the sun's map (while it is up) and
   // every lit pool shadow map. Dark lights are redrawn when they light up.
   _shadowDirty() {
+    if (!this.shadowsEnabled) return;
     this._sunShadow();
     if (this.objectLayer) this._flagShadows(this.objectLayer.shadowsStale());
     this.stats.shadow++;
@@ -1716,6 +1757,7 @@ export class FloorplanView {
 
   // Sun map: redraw now when the sun is up, else once it rises (setSky).
   _sunShadow() {
+    if (!this.shadowsEnabled) return;
     if (this.sun.intensity > 0) {
       this._sunStale = false;
       this._flagShadows([this.sun]);
@@ -1725,7 +1767,7 @@ export class FloorplanView {
   }
 
   _flagShadows(lights) {
-    if (!lights || !lights.length) return;
+    if (!this.shadowsEnabled || !lights || !lights.length) return;
     for (const l of lights) l.shadow.needsUpdate = true;
     this.renderer.shadowMap.needsUpdate = true;
     this.stats.shadowLights += lights.length;
@@ -1737,6 +1779,7 @@ export class FloorplanView {
 
   // lights: the pool lights whose shadow maps must be redrawn (lit, moved or reassigned).
   requestShadowUpdate(lights) {
+    if (!this.shadowsEnabled) return;
     this._flagShadows(lights);
     this.stats.shadow++;
     this.dirty = true;

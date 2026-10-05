@@ -25,6 +25,7 @@ position and map overlay.
 - `storage.js` — LayoutStore: companion integration WS -> `frontend/set_user_data` -> localStorage.
 - `device-popup.js` — room/device panels; explicit quick controls and HA All controls fallback.
 - `light-state.js` — strict finite current light appearance and independently reported modern capabilities. Use HA-derived RGB; never guess XY gamut or Kelvin bounds. Fixed legacy/non-colour display fallback is explicit. Model lamps, floor glows and panel readings share this reader. Controls revalidate current membership/source/capabilities/services/connection; input alone sends nothing.
+- `model-rendering.js` / `model-rendering-editor.js` — saved visual-only model shadow/lamp policy; shared layout precedes card config. Default behavior is unchanged. Shadow-off blocks both sun/pool requests through load/movement/theme/sky changes; re-enable seeds current maps once. Preserve actual light controls and authored materials. Read-only material/AO/unlit/UV counts cannot prove a bake. Save/Cancel/Undo follow existing layout history; focused drafts survive HA updates.
 - `minimap.js` — north-up SVG mini-map sharing room outlines and live marker/model-object positions.
 - `navigation.js` — bubble control ordering, room picking and camera focus math.
 - `history.js` — bounded session snapshots; root `_commit` records editable layout, EditMode groups gestures.

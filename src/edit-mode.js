@@ -20,6 +20,7 @@ import { CameraEditor } from './camera-editor.js';
 import { TrackingEditor } from './tracking-editor.js';
 import { WeatherEditor } from './weather-editor.js';
 import { SecurityEditor } from './security-editor.js';
+import { ModelRenderingEditor } from './model-rendering-editor.js';
 import { entityChoices, registryIssues } from './entity-metadata.js';
 
 const DENSE_TRIS = 150000;
@@ -56,6 +57,7 @@ export class EditMode {
     this._trackingEditor = new TrackingEditor(card, () => this.render());
     this._weatherEditor = new WeatherEditor(card, () => this.render());
     this._securityEditor = new SecurityEditor(card, () => this.render());
+    this._modelRenderingEditor = new ModelRenderingEditor(card, () => this.render());
     this.tab = 'rooms';
     this.selectedRoom = null;
     this.selectedMarker = null;
@@ -146,6 +148,7 @@ export class EditMode {
     this._trackingEditor.cancel();
     this._weatherEditor.reset();
     this._securityEditor.reset();
+    this._modelRenderingEditor.reset();
     activeEditors.delete(this);
     window.removeEventListener('keydown', this._onKey);
     window.removeEventListener('pointerup', this._onSliderRelease);
@@ -162,6 +165,7 @@ export class EditMode {
     this._trackingEditor.dispose();
     this._weatherEditor.dispose();
     this._securityEditor.dispose();
+    this._modelRenderingEditor.dispose();
   }
 
   attach() {
@@ -215,6 +219,10 @@ export class EditMode {
       this._securityEditor.updatePreviews(this.panel);
       return;
     }
+    if (this.tab === 'model' && this.panel.contains(active) && active?.dataset?.field?.startsWith('model-rendering-')) {
+      this._modelRenderingEditor.updatePreviews(this.panel);
+      return;
+    }
     if (this._sliding) this._renderHeld = true;
     else this.render();
   }
@@ -263,6 +271,7 @@ export class EditMode {
     this.doorMode = false; this.colorPick = false; this.overlayMove = false; this.pivoting = false;
     this.selectedRoom = null; this.selectedMarker = null; this.vwPick = null; this.vwSel = null; this.modelPick = null;
     this.uploading = null; this._panelNameDraft = null; this._overlayEditor.reset(); this._cameraEditor.reset(); this._trackingEditor.reset(); this._weatherEditor.reset(); this._securityEditor.reset();
+    this._modelRenderingEditor.reset();
     this._closeMenu();
     this.view?.setOverlay?.({}); this.view?.highlightModelNode?.(null);
     this.card._applyMarkerSelection?.(null);
@@ -295,6 +304,7 @@ export class EditMode {
     this._trackingEditor.reset();
     this._weatherEditor.reset();
     this._securityEditor.reset();
+    this._modelRenderingEditor.reset();
     this.card[method]();
     this.updateHistoryState();
     return true;
@@ -711,6 +721,7 @@ export class EditMode {
 
   // live values in the Mower tab, without re-rendering the panel
   onStates() {
+    if (this.tab === 'model') { this._modelRenderingEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'security') { this._securityEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'tracking') { this._trackingEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'environment') { this._weatherEditor.updatePreviews(this.panel); return; }
@@ -1084,6 +1095,7 @@ export class EditMode {
     if (this.tab === 'tracking') this._trackingEditor.updatePreviews(this.panel);
     if (this.tab === 'environment') this._weatherEditor.updatePreviews(this.panel);
     if (this.tab === 'security') this._securityEditor.updatePreviews(this.panel);
+    if (this.tab === 'model') this._modelRenderingEditor.updatePreviews(this.panel);
     const newBody = this.panel.querySelector('.tab-body');
     if (newBody && scroll) newBody.scrollTop = scroll;
     if (focusKey) {
@@ -1985,20 +1997,22 @@ export class EditMode {
 
   _modelTab() {
     const c = this.card._config;
+    // Display settings work independently of the model upload/storage route.
+    const rendering = this._modelRenderingEditor.render();
     if (c.model) {
-      return `<p class="note warn">This card shows <b>${esc(c.model)}</b> from its YAML (<code>model:</code>).
+      return rendering + `<p class="note warn">This card shows <b>${esc(c.model)}</b> from its YAML (<code>model:</code>).
         Remove <code>model</code> and the <code>model_*</code> options from the card YAML to upload and align the model here.</p>`
         + this._modelBindingsHtml();
     }
     if (this.card._store.backend !== 'shared') {
-      return `<p class="note warn">Uploading a model needs the Taylor's 3D integration (Settings → Devices &amp; services → Add integration).
+      return rendering + `<p class="note warn">Uploading a model needs the Taylor's 3D integration (Settings → Devices &amp; services → Add integration).
         Without it, put a .glb in /config/www and set <code>model: /local/house.glb</code> in the card YAML.</p>`;
     }
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(c.layout_key)) {
-      return `<p class="note warn">layout_key "${esc(c.layout_key)}" can only contain letters, digits, - and _ for model uploads.</p>`;
+      return rendering + `<p class="note warn">layout_key "${esc(c.layout_key)}" can only contain letters, digits, - and _ for model uploads.</p>`;
     }
     const m = this.layout.model;
-    let out = `<p class="hint">A 3D model of the house (.glb) shown under the plan. Parts tagged as levels, rooms and zones
+    let out = rendering + `<p class="hint">A 3D model of the house (.glb) shown under the plan. Parts tagged as levels, rooms and zones
       (<code>fp</code> tags, see <a href="https://github.com/gregtaylor1993/taylors-3d/blob/main/docs/model-builder-guide.md" target="_blank" rel="noopener">docs/model-builder-guide.md</a>)
       are shown per floor and become rooms; a tagged model shows whole levels (lower floors stay, upper ones are hidden); only an untagged model is cut at the top of the selected storey. It is stored in Home Assistant and only shown to logged-in users.</p>
       <div class="row"><label class="button ${this.uploading ? 'disabled' : 'primary'}">${this.uploading ? 'Uploading ' + esc(this.uploading) + '…' : (m ? 'Replace model' : 'Upload .glb')}
@@ -2137,6 +2151,7 @@ export class EditMode {
     if (this._trackingEditor.onClick(btn.dataset.act, btn)) return;
     if (this._weatherEditor.onClick(btn.dataset.act, btn)) return;
     if (this._securityEditor.onClick(btn.dataset.act, btn)) return;
+    if (this._modelRenderingEditor.onClick(btn.dataset.act, btn)) return;
     const sel = this.room(this.selectedRoom);
     this.message = null;
     // Views tab actions commit; the rebuild after the commit renders the panel once
@@ -2159,6 +2174,7 @@ export class EditMode {
           if (this.tab === 'tracking') this._trackingEditor.cancel();
           if (this.tab === 'environment') this._weatherEditor.reset();
           if (this.tab === 'security') this._securityEditor.reset();
+          if (this.tab === 'model') this._modelRenderingEditor.reset();
           this.picking = null;
           this.pivoting = false;
           this.modelPick = null;
@@ -2300,6 +2316,7 @@ export class EditMode {
     if (this._trackingEditor.onChange(f, el)) return;
     if (this._weatherEditor.onChange(f, el)) return;
     if (this._securityEditor.onChange(f, el)) return;
+    if (this._modelRenderingEditor.onChange(f, el)) return;
     const sel = this.room(this.selectedRoom);
     if (f && f.startsWith('vw-')) this._viewsChange(f, el);
     else if (f === 'room-area' && sel) this.commit(E.upsertRoom(this.layout, { ...sel, area_id: el.value }));
@@ -2416,6 +2433,7 @@ export class EditMode {
     if (this._trackingEditor.onInput(f, el)) return;
     if (this._weatherEditor.onInput(f, el)) return;
     if (this._securityEditor.onInput(f, el)) return;
+    if (this._modelRenderingEditor.onInput(f, el)) return;
     if (f?.startsWith('cov-') && this._cameraEditor.onChange(f, el)) return;
     if (f === 'screen-name') { this._panelNameDraft = el.value; return; }
     if (f === 'vw-sec-pos') {

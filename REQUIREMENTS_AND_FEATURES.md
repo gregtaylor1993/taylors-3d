@@ -233,12 +233,18 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 
 **Already present:** realtime shadows and authored model textures/materials. No in-card shadow-baking workflow exists.
 
-**Phase 7 work started:** add saved visual Normal, No realtime shadows and Authored
-shading options in Edit → Model. The new policy must suppress both sun and lamp
-shadow-map work, preserve the model's real AO/textures/unlit materials, and retain live
-light readings and controls. Baking will be documented in an external modelling tool
-for this delivery. Material diagnostics report what the GLB contains; they must not
-claim a texture proves baked lighting. This draft is excluded from Phase 6's package.
+**Phase 7 implementation:** Edit → Model saves Normal, No realtime shadows and
+Authored shading (lamps off) through the existing layout/history route. The central
+policy blocks sun and lamp shadow work while off, including model movement, light
+changes, reloads and theme/sky changes. Re-enable requests current maps once.
+Actual light states/controls and authored materials stay intact. The report reads
+actual AO/unlit/light-map/UV properties without claiming they prove a complete bake.
+All 1,992 local JavaScript tests, lint/build/bundle checks and 69 dedicated
+source/bundle browser assertions pass. Complete regression and GitHub validation
+are pending. The current installation zip remains the verified Phase 6 build.
+[The model shading guide](docs/MODEL-SHADING-GUIDE.md) explains external Blender
+authoring, fixed baked-shadow limitations and model backups. Actual house/panel
+checks remain; the card does not create baked textures or rewrite a GLB.
 
 **Complete when:** a documented baked-shadow/ambient-occlusion model workflow renders correctly; the user can select a low-power presentation that preserves useful depth while reducing realtime shadows. Explain that baked shading is fixed and cannot move with a changing light or furniture item. Define whether baking happens in a modelling tool or is eventually offered in-app before implementation.
 
@@ -408,7 +414,7 @@ A feature is Done only after its agreed behavior works, it persists where approp
 | 2026-10-05 | Phase 4 | Explicit presence/activity, parked vehicles, measured/status vacuum symbols, Tracking editor, source panels and mini-map bindings implemented. All 1,214 JS and 48 HA Python tests, lint/build/bundle checks, complete local/GitHub browser suites and HACS validation pass. Exact-commit manual package matches the GitHub frontend. Household checks and visual vacuum calibration remain. | `90c626a` |
 | 2026-10-05 | Phase 5 | Visual source/plan calibration, separate freshness controls, exact contacts/rigid hinge motion and bounded outdoor weather implemented. All 1,704 JS and 48 HA Python tests, lint/build/bundle checks, complete local/GitHub browser suites and HACS validation pass. All 659 browser assertions pass, including 71 calibration, 30 security and 31 weather checks. The model suite passes without retry. Exact-commit installation zip matches GitHub's frontend; actual household checks remain. | `ca64019` |
 | 2026-10-05 | Phase 6 | Validated light appearances, deliberate RGB/Kelvin controls and current-output lighting selection implemented. All 1,904 JS and 48 HA Python tests, lint/build/bundle checks, complete local/GitHub browser regressions and HACS validation pass. All 773 GitHub browser assertions pass, including 113 lighting checks and the 31-check passive expiry-observation fixture. Exact-commit manual package matches GitHub's frontend. Actual HA/Hue/model/panel checks remain. | `a6599cb` |
-| 2026-10-05 | Phase 7 started | F16 saved model-shading choices, full sun/lamp shadow suppression, actual material/UV evidence and an external AO-authoring guide are in development. Dedicated textured GLB/browser checks are being prepared. This draft is excluded from Phase 6's installation zip. | Uncommitted draft |
+| 2026-10-05 | Phase 7 | F16 saved model-shading choices, full sun/lamp shadow suppression, actual material/UV evidence and external AO-authoring guide implemented. All 1,992 JS tests, lint/build/bundle matching and 69 dedicated browser assertions pass. Complete regression/GitHub validation and packaging remain. Actual house/panel checks remain. | Pending checkpoint |
 
 ### Phase 1: Taylor's Home Assistant check
 

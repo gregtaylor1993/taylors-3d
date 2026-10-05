@@ -10,6 +10,7 @@ See the [camera guide](docs/CAMERAS-GUIDE.md) for camera pictures and approximat
 See the [tracking guide](docs/TRACKING-GUIDE.md) for room activity, parked vehicles and measured vacuum positions.
 See the [security and weather guide](docs/SECURITY-AND-WEATHER-GUIDE.md) for contacts, explicit door hinges and outdoor effects.
 See the [lighting guide](docs/LIGHTING-GUIDE.md) for Hue colour, warm/cool white and the realtime light budget.
+See the [model shading guide](docs/MODEL-SHADING-GUIDE.md) for lighter display settings and preparing AO textures in Blender.
 
 A Lovelace card that shows your home as a 3D floorplan with every device on it. Draw each room
 once and link it to a Home Assistant area. After that, every device assigned to the area appears
@@ -47,6 +48,9 @@ position over its map.
   and explicitly configured rigid door motion. Unknown readings remain uncertain
 - Edit → Environment chooses current HA weather for bounded outdoor rain/snow/cloud effects.
   Complete indoor outlines protect the house; static/low quality supports wall panels
+- Edit → Model saves Normal, No realtime shadows or Authored shading (lamps off).
+  Existing model materials stay intact; the material report checks actual textures and UVs.
+  These display choices leave real light states and controls available
 - Edit mode for admins: draw rooms, doors, floors, pin and hide devices, import/export
 - One layout shared by every user and device (stored by the companion integration)
 - Robot mower: live position, trail, map image or camera overlay, point calibration
