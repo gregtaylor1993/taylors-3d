@@ -5,6 +5,10 @@ on one panel. This lets several panels show the same house while an automation s
 one of them. New features are tested with the mock Home Assistant preview; the feature log
 keeps testing on Taylor's real installation visible.
 
+For people/activity, parked vehicles and measured vacuum positions, use **Edit → Tracking** and
+read [the tracking guide](TRACKING-GUIDE.md). It explains which readings can locate a person or
+vacuum, how recent sightings expire and how to preserve or repair a missing source.
+
 ## Room and device controls
 
 Tap a room's floor to see its devices and readings on the right. Tap a device to see its own

@@ -238,6 +238,83 @@ describe('formatEntityValue', () => {
 });
 
 describe('registryIssues', () => {
+  it('checks effective tracking source, identity, room source and position source entities with exact paths', () => {
+    const layout = {
+      presence_bindings: [{ entity: 'sensor.deleted_room', identity_entity: 'person.deleted', room_source: { entity: 'sensor.deleted_location' } }],
+      vehicle_bindings: [{ entity: 'sensor.free', identity_entity: 'sensor.no_state' }],
+      vacuum_bindings: [{ entity: 'vacuum.deleted', position_source: { entity: 'sensor.deleted_xy' } }],
+    };
+    const result = registryIssues(household(), layout);
+    expect(result.map((issue) => [issue.code, issue.path])).toEqual([
+      ['missing_entity', 'layout.presence_bindings.0.entity'],
+      ['missing_entity', 'layout.presence_bindings.0.identity_entity'],
+      ['missing_entity', 'layout.presence_bindings.0.room_source.entity'],
+      ['entity_no_state', 'layout.vehicle_bindings.0.identity_entity'],
+      ['missing_entity', 'layout.vacuum_bindings.0.entity'],
+      ['missing_entity', 'layout.vacuum_bindings.0.position_source.entity'],
+    ]);
+  });
+  it('honors saved tracking arrays including empty overrides and nullish fallback for each feature independently', () => {
+    const config = { presence_bindings: [{ entity: 'person.deleted' }], vehicle_bindings: [{ entity: 'sensor.deleted' }], vacuum_bindings: [{ entity: 'vacuum.deleted' }] };
+    expect(registryIssues(household(), {}, config).map((issue) => issue.path)).toEqual(['config.presence_bindings.0.entity', 'config.vehicle_bindings.0.entity', 'config.vacuum_bindings.0.entity']);
+    expect(registryIssues(household(), { presence_bindings: [], vehicle_bindings: [], vacuum_bindings: [] }, config)).toEqual([]);
+    expect(registryIssues(household(), { presence_bindings: null, vehicle_bindings: [], vacuum_bindings: [] }, config)).toMatchObject([{ path: 'config.presence_bindings.0.entity' }]);
+  });
+  it('checks explicit tracking floor references and accepts actual resolved/layout-only floors', () => {
+    const layout = { floors: [{ id: 'garden' }], vacuum_bindings: [{ entity: 'sensor.free', floorId: 'deleted_status_floor',
+      position: { x: 1, y: 2, floorId: 'deleted_position_floor' }, position_source: { entity: 'sensor.free', floorId: 'deleted_source_floor' } }],
+    vehicle_bindings: [{ entity: 'sensor.free', position: { floorId: 'garden' } }] };
+    expect(registryIssues(household(), layout).map((issue) => issue.path)).toEqual([
+      'layout.vacuum_bindings.0.floorId', 'layout.vacuum_bindings.0.position.floorId', 'layout.vacuum_bindings.0.position_source.floorId',
+    ]);
+    const loaded = { floors: [{ id: 'deleted_status_floor' }, { id: 'deleted_position_floor' }, { id: 'deleted_source_floor' }, { id: 'garden' }] };
+    expect(registryIssues(household(), layout, {}, loaded)).toEqual([]);
+  });
+  it('checks mapped room IDs including model rooms and ambiguous imported mapping arrays against loaded resolved geometry', () => {
+    const layout = { presence_bindings: [{ entity: 'sensor.free', roomId: 'deleted_static_room', room_source: { entity: 'sensor.free',
+      room_map: { 'Living room': 'model:lounge', Bedroom: ['model:bedroom', 'deleted_mapped_room'] } } }] };
+    const loaded = { rooms: [{ room: { id: 'model:lounge' }, floorId: 'ground' }, { id: 'model:bedroom' }], anchors: [] };
+    expect(registryIssues(household(), layout, {}, loaded).map((issue) => [issue.code, issue.path])).toEqual([
+      ['missing_room', 'layout.presence_bindings.0.roomId'], ['missing_room', 'layout.presence_bindings.0.room_source.room_map.Bedroom.1'],
+    ]);
+    expect(registryIssues(household(), layout)).toEqual([]);
+  });
+  it('checks exact marker/object position keys without inferring an anchor from an entity or similar display name', () => {
+    const layout = { vehicle_bindings: [{ entity: 'sensor.free', position_key: 'object:deleted-car' }, { entity: 'sensor.free', position_key: 'device:plug' }],
+      vacuum_bindings: [{ entity: 'sensor.free', position_key: 'object:dock' }] };
+    const loaded = { anchors: [{ id: 'object:replacement-car', label: 'Deleted car' }, { id: 'object:dock', shown: false }, { id: 'device:plug:camera.front' }] };
+    const result = registryIssues(household(), layout, {}, loaded);
+    expect(result.map((issue) => [issue.kind, issue.id, issue.path])).toEqual([
+      ['anchor', 'object:deleted-car', 'layout.vehicle_bindings.0.position_key'], ['anchor', 'device:plug', 'layout.vehicle_bindings.1.position_key'],
+    ]);
+    expect(result.every((issue) => !('replacement' in issue))).toBe(true);
+    expect(registryIssues(household(), layout)).toEqual([]);
+  });
+  it('does not infer missing geometry/floors from absent, malformed or explicitly unloaded context', () => {
+    const layout = { presence_bindings: [{ entity: 'sensor.free', roomId: 'model:lounge', position_key: 'object:mount', position: { floorId: 'model-floor' } }] };
+    const hass = { states: { 'sensor.free': state('sensor.free', 'ready') } };
+    for (const context of [undefined, null, {}, { rooms: null, anchors: null }, { rooms: [], anchors: [], floors: [], ready: false }]) expect(registryIssues(hass, layout, {}, context)).toEqual([]);
+    expect(registryIssues(hass, layout, {}, { rooms: [], anchors: [], floors: [] }).map((issue) => issue.code)).toEqual(['missing_floor', 'missing_room', 'missing_anchor']);
+  });
+  it('waits for missing HA states while still checking supplied loaded geometry', () => {
+    const layout = { vacuum_bindings: [{ entity: 'vacuum.loading', identity_entity: 'sensor.loading', roomId: 'removed' }] };
+    expect(registryIssues({}, layout)).toEqual([]);
+    expect(registryIssues({}, layout, {}, { rooms: [] })).toMatchObject([{ code: 'missing_room', id: 'removed' }]);
+  });
+  it('keeps persisted tracking references untouched and clears errors only when the exact saved IDs return', () => {
+    const hass = household(), layout = { presence_bindings: [{ entity: 'sensor.deleted', roomId: 'model:deleted', position_key: 'object:deleted' }] }, before = JSON.stringify(layout);
+    hass.callWS = vi.fn(); hass.callService = vi.fn();
+    const context = { rooms: [], anchors: [] };
+    expect(registryIssues(hass, layout, {}, context)).toHaveLength(3);
+    hass.states['sensor.deleted'] = state('sensor.deleted', 'ready'); context.rooms.push({ room: { id: 'model:deleted' } }); context.anchors.push({ id: 'object:deleted' });
+    expect(registryIssues(hass, layout, {}, context)).toEqual([]); expect(JSON.stringify(layout)).toBe(before);
+    expect(hass.callWS).not.toHaveBeenCalled(); expect(hass.callService).not.toHaveBeenCalled();
+  });
+  it('ignores malformed tracking lists and unrelated annotation text rather than guessing references', () => {
+    const layout = { presence_bindings: 'broken', vehicle_bindings: [null, false, { note: 'sensor.deleted', entity: null }],
+      vacuum_bindings: [{ label: 'vacuum.deleted', room_source: 'broken', position_source: false, position_key: null }] };
+    expect(registryIssues(household(), layout, {}, { rooms: [], anchors: [] })).toEqual([]);
+  });
   it('diagnoses saved camera entities and specific marker keys, honoring a layout override', () => {
     const config = { camera_coverage: { 'camera.deleted': { enabled: true } } };
     expect(registryIssues(household(), {}, config)).toMatchObject([{ id: 'camera.deleted', path: 'config.camera_coverage.camera.deleted' }]);

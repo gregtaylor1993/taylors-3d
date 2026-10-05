@@ -241,3 +241,91 @@ describe('MiniMap controls', () => {
     expect(onFocus).not.toHaveBeenCalled(); expect(stage.children).toHaveLength(0);
   });
 });
+
+describe('tracked observation symbols', () => {
+  const tracked = (id = 'vacuum:robot', extra = {}) => ({ id, entityId: 'vacuum.robot', name: 'Robot: Cleaning · reported position',
+    icon: 'mdi:robot-vacuum', color: '#57b990', active: true, status: 'ready', positionStatus: 'ready',
+    position: { x: 1, y: 2, z: .05, floorId: 'ground' }, ...extra });
+
+  it('renders explicit observation icons and their evidence labels without interpreting HA state', () => {
+    const { map } = mount();
+    map.update({ ...base(), states: { 'sensor.last_vehicle': { state: '2026-10-05T12:00:00Z' } }, trackedMarkers: [
+      tracked(), tracked('vehicle:drive', { entityId: 'sensor.last_vehicle', name: 'Vehicle seen recently', icon: 'mdi:car' }),
+      tracked('presence:person', { entityId: 'person.taylor', name: 'Taylor: Kitchen (room observation)', icon: 'mdi:account' }),
+      tracked('activity:motion', { entityId: 'binary_sensor.motion', name: 'Kitchen: Room activity', icon: 'mdi:motion-sensor' }),
+    ] });
+    expect(map.scene.markers).toHaveLength(4);
+    expect(map.el.querySelectorAll('.map-marker.tracked')).toHaveLength(4);
+    for (const marker of map.markerLayer.children) {
+      expect(marker.querySelector('.symbol').getAttribute('d')).toBeTruthy();
+      expect(marker.querySelector('.dot').getAttribute('r')).toBe('7');
+      expect(marker.getAttribute('tabindex')).toBe('0');
+    }
+    const car = map.el.querySelector('[data-marker="vehicle:drive"]');
+    expect(car.getAttribute('aria-label')).toContain('Vehicle seen recently');
+    expect(car.getAttribute('aria-label')).not.toContain('2026-10-05');
+    expect(car.getAttribute('aria-label')).not.toContain('parked');
+    expect(map.el.querySelector('canvas')).toBeNull();
+  });
+
+  it('replaces exact ordinary source dots while preserving grouped controls and deliberate separate observations', () => {
+    const data = { ...base(), trackedMarkers: [tracked(), tracked('vacuum:other', { position: { x: 3, y: 1, floorId: 'ground' } })],
+      positions: new Map([
+        ['entity:vacuum.robot', { x: 0, y: 0, floorId: 'ground' }], ['object:robot', { x: 0, y: 0, floorId: 'ground' }],
+        ['device:robot', { x: 2, y: 2, floorId: 'ground' }], ['lamp', { x: 3, y: 1, floorId: 'ground' }],
+      ]), markers: [
+        { id: 'entity:vacuum.robot', entityId: 'vacuum.robot', entities: [{ eid: 'vacuum.robot' }] },
+        { id: 'object:robot', entityId: 'vacuum.robot' },
+        { id: 'device:robot', entityId: 'vacuum.robot', entities: [{ eid: 'vacuum.robot' }, { eid: 'sensor.robot_battery' }] },
+        { id: 'lamp', entityId: 'light.lamp' },
+      ] };
+    const scene = miniMapScene(data);
+    expect(scene.markers.map((m) => m.id)).toEqual(['device:robot', 'lamp', 'vacuum:robot', 'vacuum:other']);
+    expect(data.positions.size).toBe(4); expect(data.markers).toHaveLength(4);
+    // Once an observation disappears, the original marker reappears without any input mutation.
+    expect(miniMapScene({ ...data, trackedMarkers: [] }).markers).toHaveLength(4);
+  });
+
+  it('discards unplaced, hidden, off-floor, invalid and ambiguous-ID observations before fitting', () => {
+    const scene = miniMapScene({ ...base(), visibleFloors: new Set(['ground']), trackedMarkers: [tracked(),
+      tracked('missing', { position: null }), tracked('hidden', { shown: false }),
+      tracked('hidden-position', { position: { x: 80, y: 80, floorId: 'ground', shown: false } }),
+      tracked('other-floor', { position: { x: 80, y: 80, floorId: 'first' } }),
+      tracked('bad', { position: { x: NaN, y: 2, floorId: 'ground' } }),
+      tracked('huge', { position: { x: 1e7, y: 2, floorId: 'ground' } }),
+      tracked('duplicate'), tracked('duplicate'), tracked('no-source', { entityId: null }),
+    ] });
+    expect(scene.markers.map((m) => m.id)).toEqual(['vacuum:robot']);
+    expect(scene.transform.bounds).toEqual({ minX: 0, minY: 0, maxX: 4, maxY: 3 });
+    expect(miniMapScene({ ...base(), rooms: [{ ...room(), shown: false }], trackedMarkers: [tracked()] }).markers).toEqual([]);
+  });
+
+  it('keeps actual source/floor selection in tap and keyboard callbacks without sending any service', () => {
+    const order = [], onFocus = vi.fn(() => order.push('focus')), onMarker = vi.fn(() => order.push('marker')), callService = vi.fn();
+    const { map } = mount({ onFocus, onMarker });
+    map.update({ ...base(), rooms: [room(), room('bedroom', 'first')], floors: [
+      { id: 'ground', name: 'Ground floor', elevation: 0 }, { id: 'first', name: 'First floor', elevation: 3 }], visibleFloors: 'all', callService,
+      trackedMarkers: [tracked(), tracked('vacuum:upstairs', { entityId: 'vacuum.upstairs', position: { x: 2.3, y: 1.7, floorId: 'first' } })] });
+    map.select.value = 'first'; map.select.dispatchEvent(new Event('change', { bubbles: true }));
+    const symbol = map.el.querySelector('[data-marker="vacuum:upstairs"]');
+    expect(map.el.querySelector('[data-marker="vacuum:robot"]')).toBeNull();
+    symbol.querySelector('.symbol').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    symbol.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    expect(onFocus).toHaveBeenLastCalledWith({ x: 2.3, y: 1.7, floorId: 'first', markerId: 'vacuum:upstairs' });
+    expect(onMarker).toHaveBeenLastCalledWith('vacuum:upstairs', expect.objectContaining({ entityId: 'vacuum.upstairs', tracked: true, floorId: 'first' }));
+    expect(order).toEqual(['focus', 'marker', 'focus', 'marker']); expect(callService).not.toHaveBeenCalled();
+  });
+
+  it('preserves a tracked keyboard target across real position/status updates and clears invalid styles safely', () => {
+    const { map } = mount(); map.update({ ...base(), trackedMarkers: [tracked()] });
+    const marker = map.el.querySelector('[data-marker="vacuum:robot"]'); marker.focus();
+    const originalPath = marker.querySelector('.symbol');
+    map.update({ ...base(), trackedMarkers: [tracked(undefined, { name: '<script>Robot</script>: Cleaning; position stale', positionStatus: 'stale', color: 'url(javascript:bad)', position: { x: 2.5, y: 1, floorId: 'ground' } })] });
+    expect(document.activeElement).toBe(marker); expect(marker.querySelector('.symbol')).toBe(originalPath);
+    expect(marker.classList.contains('unavailable')).toBe(true);
+    expect(marker.getAttribute('aria-label')).toContain('position stale');
+    expect(marker.style.getPropertyValue('--taylors3d-map-marker-color')).toBe('');
+    expect(marker.getAttribute('transform')).not.toContain('NaN'); expect(map.el.querySelector('script')).toBeNull();
+    map.update({ ...base(), trackedMarkers: [] }); expect(document.activeElement).toBe(map.ground);
+  });
+});

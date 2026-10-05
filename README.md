@@ -7,6 +7,7 @@ Original project by Ingus Stals / istals. This independent copy is maintained by
 See [Requirements and features](REQUIREMENTS_AND_FEATURES.md) for Taylor's development ideas, proposed build order and progress log.
 See the [plain-language controls guide](docs/FEATURES-GUIDE.md) for camera automations, Undo/Redo and room overlays.
 See the [camera guide](docs/CAMERAS-GUIDE.md) for camera pictures and approximate coverage.
+See the [tracking guide](docs/TRACKING-GUIDE.md) for room activity, parked vehicles and measured vacuum positions.
 
 A Lovelace card that shows your home as a 3D floorplan with every device on it. Draw each room
 once and link it to a Home Assistant area. After that, every device assigned to the area appears
@@ -31,6 +32,10 @@ position over its map.
   approximate coverage with an explicit heading, viewing angle and range
 - Device names, hidden/disabled choices, areas and sensor precision follow Home Assistant's
   metadata. Edit → Data reports missing saved links; model links keep their IDs for deliberate repair
+- Edit → Tracking connects explicit room observations, driveway vehicle sources and vacuum
+  status/coordinates to their locations. Tracked symbols appear in 3D and on the mini-map;
+  tapping opens their actual controls. Motion stays anonymous, recent sightings expire,
+  and a cleaning state alone does not invent a vacuum route
 - Edit mode for admins: draw rooms, doors, floors, pin and hide devices, import/export
 - One layout shared by every user and device (stored by the companion integration)
 - Robot mower: live position, trail, map image or camera overlay, point calibration
@@ -146,7 +151,7 @@ The options below can be set in the visual editor or in YAML.
 ## Set up the plan
 
 Click **Edit** on the card (admins only). The panel has tabs Rooms, Devices, Objects (with a
-model that has objects), Mower, Views, Model and Data.
+model that has objects), Mower, Views, Overlays, Cameras, Tracking, Model and Data.
 
 ![Edit mode](docs/images/edit-rooms.png)
 

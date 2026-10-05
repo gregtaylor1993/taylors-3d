@@ -34,6 +34,10 @@ position and map overlay.
 - `camera-feed.js` — native muted HA picture-entity card; removes the actual player element on close/unavailability/disconnect. Generation-guards late async helpers and capabilities. Opening never calls a service.
 - `camera-coverage.js` — opt-in approximate static camera sectors in the existing scene, explicit heading/FOV/range in plan metres; nonpickable helpers, stable data does not invalidate idle rendering.
 - `camera-editor.js` — Edit → Cameras drafts, preview/Save/Cancel/Clear, exact mount selection and missing-selection preservation. Undo, context changes and leaving the tab clear preview.
+- `tracked-source.js` — strict measured coordinate/calibration and timestamp/detection readers. Current HA occupancy is distinct from fixed-expiry events; malformed/restored readings do not become live evidence.
+- `tracked-entities.js` — explicit room observations, parked/sighted vehicles and per-vacuum measured/static positions. Owned geometry and labels reuse the existing scene; no fabricated identity or route. Optional interpolation joins measured samples only. Semantic unchanged data does not invalidate idle rendering.
+- `tracking-editor.js` — Edit → Tracking drafts and deliberate missing-link repair. Additive presence/vehicle/vacuum arrays save through root `_commit`; existing calibrated sources remain preserved until a visual calibration editor is available.
+- Root tracking owns one nearest absolute expiry timer, exact static `trackingAnchors()` keys, source-scoped event memory and shared scene/mini-map entity panel routing. Disconnect/tab hiding clear timers; resume reevaluates actual absolute source time. Evaluate both alert and tracking animation updates before combining their render request.
 
 Review these, fix bugs, add unit tests (vitest) for placement + mower math.
 

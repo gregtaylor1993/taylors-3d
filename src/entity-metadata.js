@@ -173,10 +173,13 @@ export function formatEntityValue(hass = {}, entityId, options = {}) {
 
 /** Read-only saved-reference diagnostics {code,kind,id,path,message}. No repairs/rename guesses.
  * Checks rooms/pins/hidden markers, model area/floor bindings, objects/groups, mower, views and overlays.
+ * Tracking room/anchor IDs are checked only against an explicitly supplied loaded resolved context:
+ * {rooms: card._roomList, anchors: card.trackingAnchors(), floors?: card._floors, ready?: boolean}.
  * Layout-only floors are valid; registries not supplied yet are not treated as empty/deleted.
  */
-export function registryIssues(hass = {}, layout = {}, config = {}) {
+export function registryIssues(hass = {}, layout = {}, config = {}, resolved = {}) {
   hass = record(hass); layout = record(layout); config = record(config);
+  resolved = record(resolved);
   const issues = [], seen = new Set();
   const floors = new Set([...Object.keys(record(hass.floors)), ...list(layout.floors).map((floor) => floor?.id).filter(Boolean)]);
   if (!floors.size) floors.add('ground'); // Same initial fallback as mergeFloors.
@@ -253,6 +256,39 @@ export function registryIssues(hass = {}, layout = {}, config = {}) {
   for (const id of Object.keys(record(layout.camera_coverage ?? config.camera_coverage))) {
     const entity = /^camera\.[a-z0-9_]+$/.test(id) ? id : /:(camera\.[a-z0-9_]+)$/.exec(id)?.[1];
     if (entity) check('entity', entity, `${coverageSource}.camera_coverage.${id}`);
+  }
+  // Missing/unloaded context is not an empty collection. A model room or object
+  // may simply be waiting for its GLB; never infer deletion or a renamed ID.
+  const ready = resolved.ready !== false;
+  const roomIds = ready && Array.isArray(resolved.rooms) ? new Set(resolved.rooms.map((entry) => entry?.room?.id || entry?.id).filter(text)) : null;
+  const anchorIds = ready && Array.isArray(resolved.anchors) ? new Set(resolved.anchors.map((anchor) => anchor?.id).filter(text)) : null;
+  const trackingFloors = ready && Array.isArray(resolved.floors) ? new Set(resolved.floors.map((floor) => floor?.id).filter(text))
+    : ready && (hass.floors || Array.isArray(layout.floors)) ? floors : null;
+  const exact = (kind, id, path, known) => {
+    if (!text(id) || !known || known.has(id)) return;
+    const code = `missing_${kind}`, key = `${code}:${path}:${id}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    issues.push({ code, kind, id, path, message: `Saved ${kind} ${id} is missing. Relink or clear this choice; its saved layout is preserved.` });
+  };
+  for (const field of ['presence_bindings', 'vehicle_bindings', 'vacuum_bindings']) {
+    const source = layout[field] != null ? 'layout' : 'config';
+    list(layout[field] ?? config[field]).forEach((binding, index) => {
+      if (!binding || typeof binding !== 'object') return;
+      const path = `${source}.${field}.${index}`;
+      check('entity', binding.entity, `${path}.entity`);
+      check('entity', binding.identity_entity, `${path}.identity_entity`);
+      for (const key of ['room_source', 'position_source']) check('entity', binding[key]?.entity, `${path}.${key}.entity`);
+      for (const [key, value] of [['', binding], ['.position', binding.position], ['.position_source', binding.position_source]]) {
+        for (const floorKey of ['floorId', 'floor_id']) exact('floor', value?.[floorKey], `${path}${key}.${floorKey}`, trackingFloors);
+      }
+      exact('room', binding.roomId, `${path}.roomId`, roomIds);
+      for (const [reported, roomId] of Object.entries(record(binding.room_source?.room_map))) {
+        if (Array.isArray(roomId)) roomId.forEach((id, i) => exact('room', id, `${path}.room_source.room_map.${reported}.${i}`, roomIds));
+        else exact('room', roomId, `${path}.room_source.room_map.${reported}`, roomIds);
+      }
+      exact('anchor', binding.position_key, `${path}.position_key`, anchorIds);
+    });
   }
   return issues;
 }

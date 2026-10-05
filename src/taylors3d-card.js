@@ -30,6 +30,7 @@ import { PresetEventController } from './preset-events.js';
 import { StatusOverlays, buildRoomOverlays, buildAlerts } from './status-overlays.js';
 import { CameraCoverageLayer } from './camera-coverage.js';
 import { entityMetadata } from './entity-metadata.js';
+import { buildTrackedEntities, TrackedEntitiesLayer } from './tracked-entities.js';
 
 const VERSION = '0.1.0';
 const NONE = Object.freeze({}); // stable stand-in for a missing layout.objects / groups (binding cache key)
@@ -97,6 +98,7 @@ const STYLE = `
     pointer-events: none; }
   .status-legend[hidden] { display: none; }
   .status-legend .scale { height: 7px; border-radius: 4px; margin: 6px 0; }
+  .taylors3d-tracked-label { display: inline-flex; align-items: center; gap: 4px; }
 
   .fp-room-label { font-size: 11px; letter-spacing: .02em; color: var(--secondary-text-color, #727272);
     white-space: nowrap; pointer-events: none; opacity: .9; }
@@ -164,8 +166,9 @@ const STYLE = `
     .body.editing .stage { flex: none; width: 100%; }
     .editing .panel { width: auto; max-height: 420px; border-left: none; border-top: 1px solid var(--divider-color, rgba(0,0,0,.12)); }
   }
-  .tabs { display: flex; border-bottom: 1px solid var(--divider-color, rgba(0,0,0,.12)); }
-  .panel .tabs button { flex: 1; border-radius: 0; font: inherit; padding: 10px 4px; background: none; border: none; cursor: pointer;
+  .tabs { display: flex; flex-wrap: wrap; flex: none; border-bottom: 1px solid var(--divider-color, rgba(0,0,0,.12)); }
+  .panel .tabs button { flex: 1 0 64px; min-width: 64px; min-height: 44px; box-sizing: border-box; white-space: nowrap;
+    border-radius: 0; font: inherit; padding: 10px 4px; background: none; border: none; cursor: pointer;
     color: var(--secondary-text-color); border-bottom: 2px solid transparent; }
   .panel .tabs button.on { color: var(--primary-color); border-bottom-color: var(--primary-color); }
   .tab-body { flex: 1; overflow: auto; padding: 4px 12px 12px; }
@@ -368,6 +371,16 @@ class Taylors3dCard extends HTMLElement {
     this._bindKey = null;
     this._miniMapVisible = true;
     this._history = new EditHistory();
+    this._trackingMemory = { presence: {}, vehicles: {}, vacuums: {} };
+    this._trackingSourceKeys = new Map();
+    this._trackingData = { records: [], diagnostics: [], miniMap: [], nextExpiry: null };
+    this._trackingTimer = null;
+    this._trackingDeadline = null;
+    this._trackingGeneration = 0;
+    this._onTrackingVisibility = () => {
+      if (document.hidden) this._clearTrackingTimer();
+      else if (this.isConnected) { this._syncTracking(true); this._syncMiniMap(); }
+    };
     this._panelName = readPanelName();
     this._presetEvents = new PresetEventController({
       getTarget: () => ({ layout_key: this._config?.layout_key, panel: this._panelName || this._config?.automation_panel,
@@ -414,6 +427,7 @@ class Taylors3dCard extends HTMLElement {
       this._alertLatches = {};
       this._statusRefs = null;
       this._cameraCoveragePreview = null;
+      this._resetTracking();
       this._layoutLoaded(); // release any obsolete model request waiting for the old key
       this._layoutReady = new Promise((resolve) => { this._layoutLoaded = resolve; });
       this._layout = null;
@@ -598,6 +612,12 @@ class Taylors3dCard extends HTMLElement {
   }
 
   set hass(hass) {
+    if (this._hass?.connection && this._hass.connection !== hass?.connection) {
+      // Reconnecting to HA is not a new observation. Keep each unchanged source's
+      // accepted event/deadline, but replace cached readings and the old timer.
+      this._clearTrackingTimer();
+      this._trackingInputKey = null;
+    }
     this._hass = hass;
     if (this.isConnected) this._presetEvents.setHass(hass);
     if (this._view && this._view.model && this._skyMode === 'auto') this._applySky(false);
@@ -617,6 +637,8 @@ class Taylors3dCard extends HTMLElement {
     this._panelName = readPanelName();
     window.addEventListener('taylors3d-panel-change', this._onPanelName);
     window.addEventListener('storage', this._onPanelName);
+    document.addEventListener('visibilitychange', this._onTrackingVisibility);
+    this._trackingInputKey = null;
     this._presetEvents.setHass(this._hass);
     clearInterval(this._skyTimer);
     this._skyTimer = setInterval(() => this._applySky(false), MOON_EVERY_MS); // the moon moves without hass updates
@@ -630,6 +652,9 @@ class Taylors3dCard extends HTMLElement {
   disconnectedCallback() {
     window.removeEventListener('taylors3d-panel-change', this._onPanelName);
     window.removeEventListener('storage', this._onPanelName);
+    document.removeEventListener('visibilitychange', this._onTrackingVisibility);
+    this._clearTrackingTimer();
+    this._trackingLayer?.setVisible(false);
     this._presetEvents.disconnect();
     if (this._view) this._view.stop();
     this._endGesture();
@@ -645,6 +670,7 @@ class Taylors3dCard extends HTMLElement {
 
   async _load() {
     this._edit?.cancelHistoryGestures?.();
+    this._resetTracking();
     const store = this._store;
     this._loading = true;
     try {
@@ -686,6 +712,7 @@ class Taylors3dCard extends HTMLElement {
         </div>
       </ha-card>`;
     this._stage = root.querySelector('.stage');
+    this._stage.tabIndex = -1; // Return keyboard focus when a tracked label disappears.
     this._scene = root.querySelector('.scene');
     this._toolbar = root.querySelector('.toolbar');
     this._stage.style.height = this._config.height;
@@ -724,8 +751,13 @@ class Taylors3dCard extends HTMLElement {
     this._view = new FloorplanView(this._scene);
     this._statusOverlays = new StatusOverlays(this._view.scene, { onInvalidate: () => { this._view.dirty = true; } });
     this._cameraCoverage = new CameraCoverageLayer(this._view.scene, { onInvalidate: () => { this._view.dirty = true; } });
+    this._trackingLayer?.dispose();
+    this._trackingLayer = new TrackedEntitiesLayer(this._view.scene, {
+      onInvalidate: () => { this._view.dirty = true; }, onSelect: (id) => this._showTrackedEntity(id),
+      returnFocus: () => this._stage,
+    });
     this._reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
-    this._view.onFrame = (now) => this._statusOverlays.update(now, { reducedMotion: !!this._reducedMotion?.matches });
+    this._view.onFrame = (now) => this._animateFeatures(now);
     this._objects = new ObjectLayer(this._view);
     this._view.onObjectsInvalidate = () => this._updateObjects(); // view, section or placement changed
     this._popup = new ObjectPopup(this._stage, {
@@ -749,6 +781,7 @@ class Taylors3dCard extends HTMLElement {
     });
     this._configureMiniMap();
     this._view.onRender = () => {
+      this._trackingLayer?.arrangeScreenLabels(this._scene.getBoundingClientRect());
       this._popup.position();
       this._miniMap.updateCamera({ camera: this._view.getCamera(), topCamera: this._view.getTopCamera(), mode: this._mode });
     };
@@ -872,6 +905,157 @@ class Taylors3dCard extends HTMLElement {
     this._cameraCoverage.setVisible(!this._editing || this._edit?.tab === 'cameras');
   }
 
+  // Only original GLB/registry placements are anchors. Tracking symbols never
+  // become inputs to other tracking symbols, and IDs match the saved picker keys.
+  trackingAnchors() {
+    if (!this._view) return [];
+    const anchors = [], floors = this._floors || [];
+    const validFloor = (id) => floors.some((floor) => floor.id === id);
+    for (const anchor of this._objects?.anchors() || []) {
+      const object = this._objects.objectAt(anchor.id);
+      if (!object || object.binding?.hidden || this._mb?.levels?.[object.obj.level]?.stale) continue;
+      const entity = object.binding?.entity;
+      const metadata = entity ? entityMetadata(this._hass, entity) : null;
+      if (metadata?.hidden || metadata?.disabled) continue;
+      const mapped = this._levels?.levelFloor?.[object.obj.level];
+      const floorId = mapped || floorAtHeight(floors.map((floor) => ({ ...floor, elevation: this._view.floorElevation(floor.id) })), anchor.world.y);
+      if (!validFloor(floorId)) continue;
+      const elevation = this._view.floorElevation(floorId);
+      const shown = nodeShown(object.obj.node) && !this._view._cutAway?.(anchor.world);
+      anchors.push({ id: `object:${anchor.id}`, label: object.obj.label || metadata?.name || anchor.id,
+        position: { x: anchor.world.x, y: -anchor.world.z, z: anchor.world.y - elevation, floorId, elevation, shown }, shown });
+    }
+    for (const marker of this._markers || []) {
+      const position = this._positions?.get(marker.id);
+      if (!position || !validFloor(position.floorId) || this._layout?.hidden?.includes(marker.id)) continue;
+      const metadata = entityMetadata(this._hass, marker.entityId);
+      if (metadata.hidden || metadata.disabled) continue;
+      const elevation = this._view.floorElevation(position.floorId);
+      const shown = this._view._markerStates?.get(marker.id)?.shown !== false
+        && this._view.markerObjects?.get(marker.id)?.obj?.visible !== false
+        && !this._view._cutAway?.({ x: position.x, y: elevation + (position.z ?? 0), z: -position.y });
+      anchors.push({ id: marker.id, label: marker.name || metadata.name,
+        position: { ...position, elevation, shown }, shown });
+    }
+    return anchors;
+  }
+
+  _animateFeatures(now) {
+    const options = { reducedMotion: !!this._reducedMotion?.matches };
+    const alerts = this._statusOverlays?.update(now, options) || false;
+    const tracking = this._trackingLayer?.update(now, options) || false;
+    return alerts || tracking; // Evaluate both animations even when the first requests a frame.
+  }
+
+  _clearTrackingTimer() {
+    clearTimeout(this._trackingTimer);
+    this._trackingTimer = null;
+    this._trackingDeadline = null;
+    this._trackingGeneration++;
+  }
+
+  _resetTracking() {
+    this._clearTrackingTimer();
+    this._trackingInputKey = null;
+    this._trackingSourceKeys = new Map();
+    this._trackingMemory = { presence: {}, vehicles: {}, vacuums: {} };
+    this._trackingData = { records: [], diagnostics: [], miniMap: [], nextExpiry: null };
+    this._trackingLayer?.setData({ records: [] });
+  }
+
+  _setTrackingTimer(deadline) {
+    if (!this.isConnected || document.hidden || !Number.isFinite(deadline) || deadline <= this._now()) {
+      if (this._trackingTimer !== null) this._clearTrackingTimer();
+      return;
+    }
+    if (this._trackingTimer !== null && this._trackingDeadline === deadline) return;
+    this._clearTrackingTimer();
+    const generation = this._trackingGeneration;
+    this._trackingDeadline = deadline;
+    this._trackingTimer = setTimeout(() => {
+      if (generation !== this._trackingGeneration || !this.isConnected) return;
+      this._trackingTimer = null;
+      this._trackingDeadline = null;
+      this._syncTracking(true);
+      this._syncMiniMap();
+    }, Math.min(2147483647, Math.max(1, deadline - this._now())));
+  }
+
+  _syncTracking(force = false) {
+    if (!this._trackingLayer || !this._layout || !this._hass || !this._view || this._loading) return;
+    const fields = ['presence_bindings', 'vehicle_bindings', 'vacuum_bindings'];
+    const config = Object.fromEntries(fields.map((key) => [key, this._layout[key] ?? this._config?.[key] ?? []]));
+    const visibleRooms = new Set(this._navigationRooms().map((entry) => entry.room.id));
+    const rooms = (this._roomList || []).map((entry) => ({ ...entry, shown: visibleRooms.has(entry.room.id) && entry.shown !== false }));
+    const floors = (this._floors || []).map((floor) => ({ ...floor, elevation: this._view.floorElevation(floor.id) }));
+    const positions = new Map();
+    for (const anchor of this.trackingAnchors()) positions.set(anchor.id, positions.has(anchor.id) ? null : anchor.position);
+    const visibleFloors = this._navigationFloors();
+    const entities = new Set();
+    for (const bindings of Object.values(config)) for (const binding of Array.isArray(bindings) ? bindings : []) {
+      for (const entity of [binding?.entity, binding?.identity_entity, binding?.room_source?.entity, binding?.position_source?.entity]) {
+        if (typeof entity === 'string') entities.add(entity);
+      }
+    }
+    const observations = [...entities].sort().map((entity) => {
+      const metadata = entityMetadata(this._hass, entity);
+      return [entity, metadata.state, metadata.name, metadata.deviceClass, metadata.hidden, metadata.disabled, metadata.category, metadata.registered];
+    });
+    const clip = this._view.sectionClip;
+    const inputKey = JSON.stringify([config, observations, rooms, floors, [...positions], visibleFloors,
+      clip && [clip.normal.x, clip.normal.y, clip.normal.z, clip.constant]]);
+    const now = this._now();
+    if (force || inputKey !== this._trackingInputKey || this._trackingData.nextExpiry !== null && this._trackingData.nextExpiry <= now) {
+      // Event memory follows the exact source, not its label, placement or TTL. A
+      // repeated observation cannot be extended by changing the display settings.
+      const sourceKeys = new Map(), memory = {};
+      for (const binding of Array.isArray(config.vehicle_bindings) ? config.vehicle_bindings : []) {
+        if (!binding || typeof binding.id !== 'string') continue;
+        const key = JSON.stringify([binding.entity, binding.kind, binding.timestamp_mode, binding.timestamp_attr,
+          binding.timestamp_format, binding.event_types, binding.event_type_attr, binding.event_id_attr]);
+        sourceKeys.set(binding.id, key);
+        if (this._trackingSourceKeys.get(binding.id) === key) memory[binding.id] = this._trackingMemory.vehicles[binding.id];
+      }
+      this._trackingSourceKeys = sourceKeys;
+      const data = buildTrackedEntities({ hass: this._hass, rooms, floors, positions, visibleFloors, now,
+        memory: { ...this._trackingMemory, vehicles: memory }, ...config });
+      for (const record of data.records) if (record.shown && record.location) {
+        const p = record.location;
+        if (this._view._cutAway?.({ x: p.x, y: p.elevation + p.z, z: -p.y })) record.shown = false;
+      }
+      const byId = new Map(data.records.map((record) => [record.id, record]));
+      data.miniMap = data.miniMap.filter((marker) => byId.get(marker.id)?.shown).map((marker) => {
+        const record = byId.get(marker.id);
+        return { ...marker, color: record.color, kind: record.kind, positionStatus: record.positionStatus };
+      });
+      this._trackingMemory = { ...data.memory, vehicles: { ...memory, ...data.memory.vehicles } };
+      this._trackingData = data;
+      this._trackingInputKey = inputKey;
+    }
+    this._trackingLayer.setData({ records: this._trackingData.records, now: performance.now(),
+      reducedMotion: !!this._reducedMotion?.matches, selectable: !this._editing });
+    this._trackingLayer.setVisible(this.isConnected && (!this._editing || this._edit?.tab === 'tracking'));
+    this._setTrackingTimer(this._trackingData.nextExpiry);
+  }
+
+  _showTrackedEntity(id) {
+    const record = this._trackingData.records.find((candidate) => candidate.id === id);
+    if (this._editing || !record?.shown || !record.location || !this._devicePopup || !this._hass) return false;
+    const entity = record.kind === 'presence' && record.identity ? record.identity : record.entity;
+    const metadata = entityMetadata(this._hass, entity);
+    if (!metadata.hasState || metadata.hidden || metadata.disabled || metadata.category) return false;
+    const entities = [...new Set([entity, record.entity])].filter((eid) => {
+      const item = entityMetadata(this._hass, eid);
+      return item.hasState && !item.hidden && !item.disabled && !item.category;
+    }).map((eid) => ({ eid }));
+    this._popup?.close();
+    this._devicePopup.update(this._hass);
+    const p = record.location;
+    this._devicePopup.showMarker({ id, entityId: entity, name: record.label, entities },
+      this._view.screenPoint(p.x, p.y, p.z, p.floorId));
+    return true;
+  }
+
   setPanelName(value) {
     const name = String(value || '').trim();
     if (name.length > 128) throw new Error('Panel name must be at most 128 characters');
@@ -963,6 +1147,7 @@ class Taylors3dCard extends HTMLElement {
     if (!snapshot) return;
     this._markerRenderKey = null;
     this._edit?._cameraEditor?.reset();
+    this._edit?._trackingEditor?.reset();
     this._cameraCoveragePreview = null;
     this._historyReplaying = true;
     try {
@@ -2116,6 +2301,7 @@ class Taylors3dCard extends HTMLElement {
       if (this._miniMap) this._miniMap.dispose();
       this._miniMap = new MiniMap(this._stage, {
         size, corner, returnFocus: () => this._miniMapBtn, onFocus: (point) => this._focusPlan(point),
+        onMarker: (id, point) => { if (point.tracked) this._showTrackedEntity(id); },
         onVisibilityChange: (visible) => { this._miniMapVisible = visible; this._syncToolbar(); },
       });
       this._miniMapKey = key;
@@ -2124,6 +2310,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _syncMiniMap() {
+    this._syncTracking();
     if (!this._miniMap || !this._view) return;
     this._syncStatus();
     this._syncCameraCoverage();
@@ -2144,6 +2331,7 @@ class Taylors3dCard extends HTMLElement {
     this._miniMap.setVisible(this._miniMapVisible);
     this._miniMap.update({ rooms: this._navigationRooms(), floors: this._floors || [], visibleFloors: this._navigationFloors(),
       positions, markers, markerStates: this._view._markerStates, states: this._hass && this._hass.states,
+      trackedMarkers: this._trackingData.miniMap,
       camera: this._view.getCamera(), topCamera: this._view.getTopCamera(), mode: this._mode, editing: this._editing,
       selectedRoomId: this._selectedRoomId });
   }

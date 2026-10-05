@@ -9,6 +9,14 @@ const point = (p) => Array.isArray(p) && p.length >= 2 && finite(p[0]) && finite
 const round = (v) => Math.round(v * 1000) / 1000;
 const items = (v) => v instanceof Map ? [...v.entries()] : v && typeof v === 'object' ? Object.entries(v) : [];
 const valueAt = (v, k) => v instanceof Map ? v.get(k) : v && v[k];
+const safeColour = (v) => typeof v === 'string' && /^#[\da-f]{6}$/i.test(v);
+const unavailable = new Set(['unknown', 'unavailable', 'missing', 'stale', 'invalid', 'ambiguous', 'unplaced']);
+const SYMBOLS = {
+  'mdi:account': 'M 0 -2 A 2 2 0 1 0 0 -6 A 2 2 0 1 0 0 -2 M -3 4 V 2 A 3 3 0 0 1 3 2 V 4 Z',
+  'mdi:motion-sensor': 'M -4 0 A 4 4 0 0 1 4 0 M -2 0 A 2 2 0 0 1 2 0 M 0 0 V 4 M -2 4 H 2',
+  'mdi:car': 'M -4 3 V -1 L -2 -4 H 2 L 4 -1 V 3 Z M -4 -1 H 4 M -2 3 V 4 M 2 3 V 4',
+  'mdi:robot-vacuum': 'M 0 -4 A 4 4 0 1 0 0 4 A 4 4 0 1 0 0 -4 M -2 -1 H 2 M 0 4 V 6 M -1 5 H 1',
+};
 
 // Preserve equal scale on both axes. Plan north (+y) is screen up (-y).
 export function miniMapTransform(points, { width = WIDTH, height = HEIGHT, padding = 14 } = {}) {
@@ -48,7 +56,7 @@ export function miniMapCamera({ camera, topCamera, mode } = {}) {
 // Each mini-map displays one floor; the selector disambiguates overlapping storeys in All views.
 export function miniMapScene(data = {}, { floorId } = {}) {
   const visible = data.visibleFloors ?? 'all';
-  const visibleIds = visible === 'all' ? null : new Set(Array.isArray(visible) ? visible : [visible]);
+  const visibleIds = visible === 'all' ? null : new Set(visible instanceof Set || Array.isArray(visible) ? visible : [visible]);
   const rooms = [];
   for (const entry of Array.isArray(data.rooms) ? data.rooms : []) {
     const room = entry && (entry.room || entry);
@@ -56,7 +64,7 @@ export function miniMapScene(data = {}, { floorId } = {}) {
     const polygon = room.polygon || room.outline;
     if (!Array.isArray(polygon) || polygon.length < 3 || !polygon.every(point) || !finite(signedArea(polygon)) || Math.abs(signedArea(polygon)) < 1e-9) continue;
     const id = entry.floorId || room.floor_id || room.floorId || 'ground';
-    if (entry.shown === false || (visibleIds && !visibleIds.has(id))) continue;
+    if (entry.shown === false || entry.visible === false || room.hidden === true || room.shown === false || (visibleIds && !visibleIds.has(id))) continue;
     rooms.push({ id: room.id, floorId: id, name: entry.name || room.name || room.label || room.id,
       areaId: room.area_id || null, polygon: polygon.map((p) => p.slice(0, 2)), outdoor: !!room.outdoor,
       selected: room.id === data.selectedRoomId, center: centroid(polygon) });
@@ -70,16 +78,37 @@ export function miniMapScene(data = {}, { floorId } = {}) {
   const shownRooms = rooms.filter((r) => r.floorId === chosen);
   const markerById = new Map((Array.isArray(data.markers) ? data.markers : []).filter(Boolean).map((m) => [m.id, m]));
   const markers = [];
+  // Builders already resolve evidence, expiry and identity. The map never guesses from motion
+  // or cleaning state; it shows only their explicitly placed, visible observation records.
+  const candidates = Array.isArray(data.trackedMarkers) ? data.trackedMarkers : [];
+  const counts = new Map();
+  for (const m of candidates) if (typeof m?.id === 'string') counts.set(m.id, (counts.get(m.id) || 0) + 1);
+  const tracked = candidates.filter((m) => m && typeof m.id === 'string' && m.id && counts.get(m.id) === 1
+    && typeof m.entityId === 'string' && m.entityId.includes('.') && m.shown !== false && m.position?.shown !== false
+    && finite(m.position?.x) && finite(m.position?.y) && Math.abs(m.position.x) <= 1e6 && Math.abs(m.position.y) <= 1e6
+    && m.position.floorId === chosen);
+  const trackedIds = new Set(tracked.map((m) => m.id));
+  const trackedEntities = new Set(tracked.map((m) => m.entityId));
   for (const [id, pos] of items(data.positions)) {
     if (!pos || !finite(pos.x) || !finite(pos.y) || pos.floorId !== chosen || pos.shown === false) continue;
     const visibility = valueAt(data.markerStates, id);
     if (visibility?.shown === false) continue;
     const marker = markerById.get(id) || {};
+    // An exact source dot is replaced by its dedicated symbol. A grouped device containing
+    // other entities remains available, and separate explicit tracking bindings remain separate.
+    const related = [marker.entityId, marker.secondaryId, ...(Array.isArray(marker.entities) ? marker.entities.map((e) => typeof e === 'string' ? e : e?.eid) : [])].filter(Boolean);
+    if (trackedIds.has(id) || trackedEntities.has(marker.entityId) && related.every((entity) => entity === marker.entityId)) continue;
     const state = marker.entityId && data.states ? data.states[marker.entityId] : null;
-    markers.push({ id, x: pos.x, y: pos.y, floorId: chosen, name: marker.name || id,
+    markers.push({ id, entityId: marker.entityId || null, x: pos.x, y: pos.y, floorId: chosen, name: marker.name || id,
       active: marker.active ?? isActive(state), unavailable: state?.state === 'unknown' || state?.state === 'unavailable',
       state: state?.state || '', faded: !!visibility?.faded });
   }
+  for (const marker of tracked) markers.push({ id: marker.id, entityId: marker.entityId, x: marker.position.x, y: marker.position.y,
+    floorId: chosen, name: marker.name || marker.label || marker.id, active: marker.active === true,
+    unavailable: unavailable.has(marker.status) || unavailable.has(marker.positionStatus), state: '',
+    status: typeof marker.status === 'string' ? marker.status : '', positionStatus: typeof marker.positionStatus === 'string' ? marker.positionStatus : '',
+    tracked: true, icon: Object.hasOwn(SYMBOLS, marker.icon) ? marker.icon : null,
+    color: safeColour(marker.color) ? marker.color : null, faded: false });
   const transform = miniMapTransform([...shownRooms.flatMap((r) => r.polygon), ...markers.map((m) => [m.x, m.y])]);
   return { rooms: shownRooms, markers, floors, floorId: chosen, transform, camera: miniMapCamera(data) };
 }
@@ -107,6 +136,13 @@ const STYLE = `
 .taylors3d-minimap .map-marker.active .dot { fill:var(--state-light-active-color,var(--primary-color,#03a9f4)); }
 .taylors3d-minimap .map-marker.unavailable .dot { fill:var(--disabled-text-color,#aaa); }
 .taylors3d-minimap .map-marker.faded { opacity:.45; }
+.taylors3d-minimap .map-marker .symbol { visibility:hidden; }
+.taylors3d-minimap .map-marker.tracked .dot { fill:var(--ha-card-background,var(--card-background-color,#fff));
+  stroke:var(--taylors3d-map-marker-color,var(--primary-color,#03a9f4)); }
+.taylors3d-minimap .map-marker.tracked .symbol { visibility:visible; fill:none;
+  stroke:var(--taylors3d-map-marker-color,var(--primary-color,#03a9f4)); stroke-width:1.2; stroke-linecap:round; stroke-linejoin:round; pointer-events:none; }
+.taylors3d-minimap .map-marker.tracked.unavailable .dot,.taylors3d-minimap .map-marker.tracked.unavailable .symbol {
+  stroke:var(--disabled-text-color,#aaa); }
 .taylors3d-minimap .map-hit { fill:transparent; }
 .taylors3d-minimap .map-camera { pointer-events:none; color:var(--primary-color,#03a9f4); }
 .taylors3d-minimap .map-camera circle { fill:var(--card-background-color,#fff); stroke:currentColor; stroke-width:1.7; }
@@ -230,13 +266,17 @@ export class MiniMap {
     if (markersKey !== this._markersKey) {
       keyedSvg(this.markerLayer, this.scene.markers, 'data-marker', () => {
         const g = svgElement(this.el.ownerDocument, 'g');
-        g.append(svgElement(this.el.ownerDocument, 'circle', { r: 9, class: 'map-hit' }), svgElement(this.el.ownerDocument, 'circle', { r: 3, class: 'dot' }));
+        g.append(svgElement(this.el.ownerDocument, 'circle', { r: 9, class: 'map-hit' }), svgElement(this.el.ownerDocument, 'circle', { r: 3, class: 'dot' }), svgElement(this.el.ownerDocument, 'path', { class: 'symbol', 'aria-hidden': 'true' }));
         return g;
       }, (g, m) => {
         const [x, y] = transform.toSvg([m.x, m.y]);
-        svgAttributes(g, { class: `map-marker${m.active ? ' active' : ''}${m.unavailable ? ' unavailable' : ''}${m.faded ? ' faded' : ''}`,
+        svgAttributes(g, { class: `map-marker${m.tracked ? ' tracked' : ''}${m.active ? ' active' : ''}${m.unavailable ? ' unavailable' : ''}${m.faded ? ' faded' : ''}`,
           transform: `translate(${round(x)} ${round(y)})`, 'data-marker': m.id, role: 'button', tabindex: 0,
-          'aria-label': `Focus ${m.name}${m.state ? `, ${m.state}` : ''}` });
+          'aria-label': `Focus ${m.name}${m.state ? `, ${m.state}` : ''}${m.tracked && m.status ? `; ${m.status}` : ''}${m.positionStatus ? `; position ${m.positionStatus.replaceAll('_', ' ')}` : ''}` });
+        svgAttributes(g.querySelector('.dot'), { r: m.tracked ? 7 : 3 });
+        svgAttributes(g.querySelector('.symbol'), { d: m.icon ? SYMBOLS[m.icon] : '' });
+        if (m.color) g.style.setProperty('--taylors3d-map-marker-color', m.color);
+        else g.style.removeProperty('--taylors3d-map-marker-color');
       });
       this._markersKey = markersKey;
     }
@@ -281,7 +321,7 @@ export class MiniMap {
     if (marker) focus.markerId = marker.id;
     this.callbacks.onFocus?.(focus);
     if (room) this.callbacks.onRoom?.(room.id, focus);
-    if (marker) this.callbacks.onMarker?.(marker.id, focus);
+    if (marker) this.callbacks.onMarker?.(marker.id, { ...focus, entityId: marker.entityId, name: marker.name, icon: marker.icon || null, tracked: marker.tracked === true });
   }
 
   _syncVisibility() { this.el.hidden = !this.visible || !!this._data?.editing || !this.scene?.rooms.length; }

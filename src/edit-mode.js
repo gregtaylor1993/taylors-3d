@@ -17,6 +17,7 @@ import { actionTarget } from './objects/popup.js';
 import { historyShortcut, isNativeEditing } from './history.js';
 import { OverlayEditor } from './overlay-editor.js';
 import { CameraEditor } from './camera-editor.js';
+import { TrackingEditor } from './tracking-editor.js';
 import { entityChoices, registryIssues } from './entity-metadata.js';
 
 const DENSE_TRIS = 150000;
@@ -50,6 +51,7 @@ export class EditMode {
     this._generation = 0;
     this._overlayEditor = new OverlayEditor(card, () => this.render());
     this._cameraEditor = new CameraEditor(card, () => this.render());
+    this._trackingEditor = new TrackingEditor(card, () => this.render());
     this.tab = 'rooms';
     this.selectedRoom = null;
     this.selectedMarker = null;
@@ -137,6 +139,7 @@ export class EditMode {
   // card detached while editing / attached again: window listeners off / on (state kept)
   detach() {
     this._cameraEditor.cancel();
+    this._trackingEditor.cancel();
     activeEditors.delete(this);
     window.removeEventListener('keydown', this._onKey);
     window.removeEventListener('pointerup', this._onSliderRelease);
@@ -144,6 +147,13 @@ export class EditMode {
     this._endSlider();
     this._endWindowDrag();
     this._closeMenu();
+  }
+
+  // Permanent editor replacement only. Detach/reattach keeps the editor usable.
+  dispose() {
+    this.detach();
+    this._cameraEditor.dispose();
+    this._trackingEditor.dispose();
   }
 
   attach() {
@@ -183,6 +193,10 @@ export class EditMode {
     const active = this.panel.getRootNode().activeElement;
     if (this.tab === 'cameras' && this.panel.contains(active) && active?.dataset?.field?.startsWith('cov-')) {
       this._cameraEditor.updatePreviews(this.panel);
+      return;
+    }
+    if (this.tab === 'tracking' && this.panel.contains(active) && active?.dataset?.field?.startsWith('trk-')) {
+      this._trackingEditor.updatePreviews(this.panel);
       return;
     }
     if (this._sliding) this._renderHeld = true;
@@ -232,7 +246,7 @@ export class EditMode {
     this.drawing = null; this.picking = null; this.calibrating = null;
     this.doorMode = false; this.colorPick = false; this.overlayMove = false; this.pivoting = false;
     this.selectedRoom = null; this.selectedMarker = null; this.vwPick = null; this.vwSel = null; this.modelPick = null;
-    this.uploading = null; this._panelNameDraft = null; this._overlayEditor.reset(); this._cameraEditor.reset();
+    this.uploading = null; this._panelNameDraft = null; this._overlayEditor.reset(); this._cameraEditor.reset(); this._trackingEditor.reset();
     this._closeMenu();
     this.view?.setOverlay?.({}); this.view?.highlightModelNode?.(null);
     this.card._applyMarkerSelection?.(null);
@@ -262,6 +276,7 @@ export class EditMode {
     if (!history?.[action === 'undo' ? 'canUndo' : 'canRedo'] || typeof this.card[method] !== 'function') return false;
     this.message = null;
     this.confirmDelete = false;
+    this._trackingEditor.reset();
     this.card[method]();
     this.updateHistoryState();
     return true;
@@ -629,6 +644,7 @@ export class EditMode {
 
   // live values in the Mower tab, without re-rendering the panel
   onStates() {
+    if (this.tab === 'tracking') { this._trackingEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'cameras') { this._cameraEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'overlays') { this._overlayEditor.updatePreviews(this.panel); return; }
     if (this.tab !== 'mower') return;
@@ -959,12 +975,13 @@ export class EditMode {
     this._renderedTab = this.tab;
     const hasObjects = this._hasObjects();
     if (this.tab === 'objects' && !hasObjects) this.tab = 'devices';
-    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ...(hasObjects ? [['objects', 'Objects']] : []), ['overlays', 'Overlays'], ['cameras', 'Cameras'], ['mower', 'Mower'], ['views', 'Views'], ['model', 'Model'], ['data', 'Data']];
+    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ...(hasObjects ? [['objects', 'Objects']] : []), ['overlays', 'Overlays'], ['cameras', 'Cameras'], ['tracking', 'Tracking'], ['mower', 'Mower'], ['views', 'Views'], ['model', 'Model'], ['data', 'Data']];
     const body = {
       rooms: () => this._roomsTab(), devices: () => this._devicesTab(), objects: () => this._objectsTab(), mower: () => this._mowerTab(), views: () => this._viewsTab(),
       model: () => this._modelTab(), data: () => this._dataTab(),
       overlays: () => this._overlayEditor.render(),
       cameras: () => this._cameraEditor.render(),
+      tracking: () => this._trackingEditor.render(),
     }[this.tab]();
     const msg = this.message ? `<div class="msg ${this.message.error ? 'error' : this.message.warn ? 'warn' : ''}">${esc(this.message.text)}</div>` : '';
     this.panel.innerHTML = `
@@ -977,6 +994,7 @@ export class EditMode {
       <div class="tab-body">${msg}${body}</div>
       <div class="foot"><span class="save-state">${this._saveText()}</span><span>${esc(this._backendLabel())}</span></div>`;
     this.updateHistoryState();
+    if (this.tab === 'tracking') this._trackingEditor.updatePreviews(this.panel);
     const newBody = this.panel.querySelector('.tab-body');
     if (newBody && scroll) newBody.scrollTop = scroll;
     if (focusKey) {
@@ -1999,9 +2017,14 @@ export class EditMode {
       user: ['warn', "Per user: stored in your HA user data. Other users will not see this layout. Install the Taylor's 3D integration to share it."],
       browser: ['warn', "This browser only: other browsers and devices will not see this layout. Install the Taylor's 3D integration to share it."],
     }[b] || ['warn', 'Storage not loaded yet.'];
-    const issues = registryIssues(this.hass, this.layout, this.card._config);
+    const modelConfigured = !!(this.card._config.model || this.layout.model?.version);
+    const resolvedReady = !this.card._loading && (!modelConfigured || !!this.view.model);
+    const issues = registryIssues(this.hass, this.layout, this.card._config, {
+      ready: resolvedReady, rooms: this.card._roomList, floors: this.card._floors,
+      anchors: resolvedReady && Array.isArray(this.card._roomList) ? this.card.trackingAnchors?.() : undefined,
+    });
     const report = `<div class="sub">Saved Home Assistant links</div>${issues.length
-      ? `<p class="note warn">${issues.length} saved link(s) need attention. The layout and these choices are kept so you can repair them.</p><ul class="plain">${issues.map((issue) => `<li>${esc(issue.message)}<br><code>${esc(issue.path)}</code></li>`).join('')}</ul><p class="hint">Use Rooms or Model for area/floor links, Objects for model devices, Cameras for coverage, Overlays for sensors and Views for named-view floors. Choose the replacement deliberately, or clear the link.</p>`
+      ? `<p class="note warn">${issues.length} saved link(s) need attention. The layout and these choices are kept so you can repair them.</p><ul class="plain">${issues.map((issue) => `<li>${esc(issue.message)}<br><code>${esc(issue.path)}</code></li>`).join('')}</ul><p class="hint">Use Rooms or Model for area/floor links, Objects for model devices, Cameras for coverage, Overlays for sensors, Tracking for presence/vehicle/vacuum sources and positions, and Views for named-view floors. Choose the replacement deliberately, or clear the link.</p>`
       : '<p class="hint">No missing saved links were found in the available Home Assistant data.</p>'}`;
     return `<div class="sub">Storage</div><p class="note ${info[0]}">${esc(info[1])}</p>${report}
       <div class="sub">Export / import</div>
@@ -2016,6 +2039,7 @@ export class EditMode {
     const id = btn.dataset.id;
     if (this._overlayEditor.onClick(btn.dataset.act, btn)) return;
     if (this._cameraEditor.onClick(btn.dataset.act, btn)) return;
+    if (this._trackingEditor.onClick(btn.dataset.act, btn)) return;
     const sel = this.room(this.selectedRoom);
     this.message = null;
     // Views tab actions commit; the rebuild after the commit renders the panel once
@@ -2035,6 +2059,7 @@ export class EditMode {
       case 'tab':
         if (id !== this.tab) {
           if (this.tab === 'cameras') this._cameraEditor.cancel();
+          if (this.tab === 'tracking') this._trackingEditor.cancel();
           this.picking = null;
           this.pivoting = false;
           this.modelPick = null;
@@ -2045,6 +2070,7 @@ export class EditMode {
         if (id !== 'objects') this.objSel = null;
         this.tab = id;
         this.card._syncCameraCoverage?.();
+        this.card._syncTracking?.();
         this._syncStageClasses();
         break;
       case 'obj-expand':
@@ -2170,6 +2196,7 @@ export class EditMode {
     const f = el.dataset.field;
     if (this._overlayEditor.onChange(f, el)) return;
     if (this._cameraEditor.onChange(f, el)) return;
+    if (this._trackingEditor.onChange(f, el)) return;
     const sel = this.room(this.selectedRoom);
     if (f && f.startsWith('vw-')) this._viewsChange(f, el);
     else if (f === 'room-area' && sel) this.commit(E.upsertRoom(this.layout, { ...sel, area_id: el.value }));
@@ -2283,6 +2310,7 @@ export class EditMode {
     const el = e.target;
     if (el.type === 'range') this._beginSlider();
     const f = el.dataset.field;
+    if (this._trackingEditor.onInput(f, el)) return;
     if (f?.startsWith('cov-') && this._cameraEditor.onChange(f, el)) return;
     if (f === 'screen-name') { this._panelNameDraft = el.value; return; }
     if (f === 'vw-sec-pos') {

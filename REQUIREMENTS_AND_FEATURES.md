@@ -147,7 +147,7 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 
 **Want:** show people or devices as dots in rooms, using phone tracking or Hue motion sensors.
 
-**Already present:** motion/occupancy/presence sensor markers. People and device trackers are not currently a room-location layer.
+**Current implementation:** an explicit room-observation layer, anonymous motion/occupancy, optional verified person/device identity, matching/conflicting-observation handling, missing-source diagnostics, 3D/mini-map symbols and the Tracking editor are being verified. Home/away does not create a room location. Actual household sources remain unverified.
 
 **Complete when:** supported room-presence sources can be mapped to rooms; dots/occupancy update and expire appropriately; home/away and room presence are distinguishable; unavailable or conflicting inputs have a sensible result. Identity is shown only when the data identifies a person/device. Motion can show activity/occupancy without claiming which person triggered it.
 
@@ -273,7 +273,7 @@ Navigation-only configuration changes preserve the selected viewing mode, tempor
 
 ### F21 — 2D mini-map
 
-**First delivery:** lightweight north-up SVG room outlines, a floor selector, live device/model-object dots and camera focus/direction. Taps focus the main camera. The visual editor saves visibility, size and top corner; close/map buttons temporarily hide/show it. Editing hides it. Live updates preserve keyboard focus. Future alert/presence features will add their own map indicators.
+**First delivery:** lightweight north-up SVG room outlines, a floor selector, live device/model-object dots and camera focus/direction. Taps focus the main camera. The visual editor saves visibility, size and top corner; close/map buttons temporarily hide/show it. Editing hides it. Live updates preserve keyboard focus. Tracking now adds distinct room-observation, vehicle and vacuum symbols with their actual source controls. Alert indicators remain further work.
 
 **Want:** a small 2D overview alongside the 3D house.
 
@@ -285,17 +285,17 @@ Navigation-only configuration changes preserve the selected viewing mode, tempor
 
 **Want:** show cars while they are parked on the drive, using camera vehicle detections. Taylor confirmed this meaning on 4 October 2026.
 
-**Already present:** EV charger state objects, but no vehicle detection or parked-car display.
+**Current implementation:** maintained vehicle occupancy/counts and fixed-expiry timestamped sightings can be bound to explicit driveway locations. The Tracking editor requires a vehicle-specific source; real motion data does not identify a parked car. Exact optional identity matching and scene/mini-map symbols are being verified against simulated HA readings. Actual driveway detection remains unverified.
 
 **Complete when:** an available HA detection entity/event is mapped to a driveway zone and parked-car model position; arrival makes it appear and departure/expiry clears it. Stale or unavailable detections do not leave a car present forever. If the goal is named household cars, identify a suitable presence/identity source rather than assuming generic vehicle detection identifies the owner.
 
-**Needs:** the actual camera/detection integration, driveway zone, number/positions of displayed cars and the clearing rule. Named household-car identity is optional future scope. The card will consume supplied detection data; a raw camera feed is not already a vehicle detector.
+**Needs:** the actual camera/detection integration, driveway zone, number/positions of displayed cars and the clearing rule. Optional named vehicle identity matching is implemented, but its actual identity source still needs household validation. The card consumes supplied detection data; a raw camera feed is not already a vehicle detector.
 
 ### F23 — robot vacuum movement
 
 **Want:** robot vacuum models move around the appropriate floor while cleaning.
 
-**Already present:** vacuum icons/states and mower GPS/XY/map-image tracking with calibration. Vacuum live-location support is not implemented.
+**Current implementation:** separate vacuum actors use actual status plus an explicit fixed anchor, exact room observation or validated measured coordinates. The Tracking editor supports direct plan-metre X/Y sources; imported calibrated sources remain preserved. Source/evidence handling, floor/section visibility and controls are being verified. A visual calibration workflow for arbitrary vacuum map coordinates and actual household testing remain unfinished.
 
 **Complete when:** a vacuum with location/map data can be bound, calibrated to house coordinates, shown on the correct floor and updated while cleaning; docking, idle and unavailable states are clear. Multiple vacuums are distinguishable. Without actual coordinates, a stationary status marker is available; decorative movement, if chosen, is labelled simulated rather than presented as live location.
 
@@ -449,6 +449,16 @@ Physical-camera views, explicit approximate coverage and the Cameras visual edit
 6. With a harmless test layout, remove an assigned HA area/floor and inspect Edit → Data / Model. The exact old ID must remain labelled missing; choose a replacement or unassign it. Restoring the exact old ID recovers the link. Keep a backup of the real layout.
 
 F07 remains Testing for these household checks. F17 remains In progress as each later feature adopts the common helper. Presence, parked vehicles and measured vacuum positioning are the next independent implementation; they are not included in this camera checkpoint.
+
+### Phase 4: room observations, driveway vehicles and vacuums
+
+The Tracking editor, explicit observation adapters, per-actor geometry, mini-map symbols and source-specific control panels are connected. [The tracking guide](docs/TRACKING-GUIDE.md) explains sources, locations and the meaning of each observation. This work is separate from the verified Phase 3 manual package until its final checks pass.
+
+**Checks in progress:** all 1,214 JavaScript tests in 51 files and lint pass. Browser checks pass for visual Save/Undo/Redo, focused drafts, every editor tab at 320px, measured versus fixed vacuum positioning, source arrival/departure, fixed sighting expiry without updates, replay protection and disconnect/reconnect cleanup. Real clicks now open the exact vehicle/vacuum source controls: bounded screen-label spacing fixes both ordinary-marker and nearby-actor overlap without moving the actual house positions. Light/dark tracking text contrast passes. Explicit regression tests cover restored evidence, diagnostic sources, malformed freshness, missing modes, cancelled interpolation, immutable event deadlines, independent vacuum status/coordinate freshness and registry device-class changes. The complete final 3D regression run and online CI are still pending.
+
+**Performance evidence:** in the final built tracking fixture, ten unrelated updates keep frames at 10, shadow passes at 8 and shadow-light work at 13. The same parked actor/geometry remains, with zero tracking timers or HA service calls. Overlay-off and unchanged-temperature regressions also cause zero extra frames/shadows. The complete final model run and online verification remain before certifying this checkpoint.
+
+**Remaining work:** finish final browser/source verification; provide a visual calibration workflow before arbitrary vacuum map coordinates can be configured entirely in the card; validate real presence/detection/coordinate sources, model positions and the wall panel. F08/F22/F23 remain In progress during this work.
 
 The earlier local full-model regression run was stopped after its initial rendering/visibility/terrain/section/sky/merge checks passed, because its loaded script still expected the old default tap behavior. Those assertions now explicitly select Quick toggle. That local run remained partial; the final GitHub CI subsequently completed and passed the entire model suite.
 
