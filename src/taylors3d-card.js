@@ -37,6 +37,7 @@ import { readModelRendering } from './model-rendering.js';
 import { ScenePreviewController } from './scene-preview.js';
 import { ScenePreviewBar } from './scene-preview-bar.js';
 import { AmbientIdleController } from './ambient-idle.js';
+import { wallKeepSelectors } from './wall-presentation.js';
 
 const VERSION = '0.1.0';
 const NONE = Object.freeze({}); // stable stand-in for a missing layout.objects / groups (binding cache key)
@@ -417,7 +418,12 @@ class Taylors3dCard extends HTMLElement {
       },
       onDim: (reading) => this._applyAmbientDim(reading.brightness),
     });
-    this._onAmbientInput = (event) => this._ambientActivity(event);
+    this._wallInteractionSerial = 0;
+    this._wallLifecycleGeneration = 0;
+    this._onAmbientInput = (event) => {
+      if (['pointerdown', 'wheel', 'keydown'].includes(event.type)) this._wallInteractionSerial++;
+      this._ambientActivity(event);
+    };
     this._onAmbientRelease = (event) => {
       const held = event.type === 'keyup' ? this._ambientKeys : this._ambientPointers;
       const id = event.type === 'keyup' ? event.code || event.key : event.pointerId;
@@ -431,8 +437,9 @@ class Taylors3dCard extends HTMLElement {
       this._suspendAmbient('window focus lost');
     };
     this._onAmbientFocus = () => { this._ambientWindowActive = true; this._syncAmbient(); };
-    this._onAmbientPreference = () => this._syncAmbient();
+    this._onAmbientPreference = () => { this._syncAmbient(); this._syncWallPresentation(); };
     this._onAmbientCameraInteraction = (phase) => {
+      if (phase === 'start') this._wallInteractionSerial++;
       this._ambientControlsGesture = phase === 'start';
       this._ambientActivity();
     };
@@ -485,6 +492,8 @@ class Taylors3dCard extends HTMLElement {
   setConfig(config) {
     const previous = this._config;
     if (previous) this._suspendAmbient('card settings changed');
+    if (previous) this.finishWallSelectionPreparation({ reload: false });
+    if (previous) this._wallLifecycleGeneration++;
     this._config = { layout_key: 'default', height: '520px', group_by: 'device', wall_height: 1.0, view: '3d',
       show_bubble_bar: true, mini_map: true, mini_map_size: 180, mini_map_position: 'top-right', device_tap_action: 'popup',
       control_panel: 'right', ...config };
@@ -539,6 +548,7 @@ class Taylors3dCard extends HTMLElement {
 
   // model: from YAML (model: url) if set, else the one uploaded to the integration (layout.model)
   _loadModel(reload = false) {
+    if (!this._wallPreparation) this._wallRestoreMergePending = false;
     this._syncModelRendering();
     const c = this._config;
     let opts = null;
@@ -565,7 +575,7 @@ class Taylors3dCard extends HTMLElement {
       }
     }
     if (opts) {
-      opts.merge = c.merge !== false;
+      opts.merge = c.merge !== false && !this._wallPreparation;
       // node: rules in the layout must be known before merging: wait for it when it has not loaded yet
       opts.keep = () => (this._layout ? this._mergeKeepSelectors() : this._layoutReady.then(() => this._mergeKeepSelectors()));
       opts.onMerged = () => this._modelMerged();
@@ -578,7 +588,9 @@ class Taylors3dCard extends HTMLElement {
       this._suspendAmbient('model loading');
       this._stopScenePreview('model loading');
     }
-    this._view.setModel(opts).then((err) => {
+    const requestedView = this._view;
+    return requestedView.setModel(opts).then((err) => {
+      if (this._view !== requestedView) return err;
       if (this._view.model !== prevModel) this._stopScenePreview('model changed');
       if (this._view.model !== prevModel && this._section) this._dropSection();
       if (this._view.model !== prevModel) { this._endGesture(); this._popup.close(); this._devicePopup.close(); }
@@ -599,6 +611,8 @@ class Taylors3dCard extends HTMLElement {
       this._syncToolbar();
       this._schedule(); // the manifest arrived: rebuild
       if (this._editing) this._edit.onModelLoaded(this._view.model !== prevModel);
+      this._syncWallPresentation();
+      return err;
     });
   }
 
@@ -622,11 +636,13 @@ class Taylors3dCard extends HTMLElement {
   // later-loaded layout may target merged parts): load the model once more, merging around them.
   _checkMergeKeep() {
     const vw = this._view, ms = vw.mergeStats;
-    if (!vw.model || !ms || !ms.enabled || !ms.merged || !this._index || this._mergeReloadFor === vw.model.id) return;
+    if (!vw.model || !ms || !ms.enabled || !ms.merged || !this._index) return;
     const known = new Set(ms.keep);
     const fresh = this._mergeKeepSelectors().filter((x) => x.startsWith('node:') && !known.has(x));
     if (!fresh.length || !unmatchedSelectors(this._index, fresh.map((x) => ({ hide: x }))).length) return;
-    this._mergeReloadFor = vw.model.id;
+    const signature = JSON.stringify([vw.model.id, [...new Set(fresh)].sort()]);
+    if (this._mergeReloadFor === signature) return;
+    this._mergeReloadFor = signature;
     this._loadModel(true);
   }
 
@@ -644,7 +660,8 @@ class Taylors3dCard extends HTMLElement {
     };
     add(this._layout && this._layout.views);
     add(this._config.views);
-    return out;
+    out.push(...wallKeepSelectors(this._layout?.wall_presentation ?? this._config?.wall_presentation));
+    return [...new Set(out)];
   }
 
   _modelAlign() {
@@ -697,6 +714,8 @@ class Taylors3dCard extends HTMLElement {
   set hass(hass) {
     if (this._hass && (this._hass.connection !== hass?.connection || this._hass.user?.id !== hass?.user?.id)) {
       this._suspendAmbient('Home Assistant session changed');
+      this.finishWallSelectionPreparation({ reload: false });
+      this._wallLifecycleGeneration++;
     }
     if (this._hass?.connection && this._hass.connection !== hass?.connection) {
       // Reconnecting to HA is not a new observation. Keep each unchanged source's
@@ -705,6 +724,13 @@ class Taylors3dCard extends HTMLElement {
       this._trackingInputKey = null;
     }
     this._hass = hass;
+    if (this._wallPreparation && !this._wallPreparationCurrent(this._wallPreparation)) {
+      // Observe permission loss before invalidating the frame: cleanup must still
+      // remember that its temporary unmerged model needs the configured merge.
+      this.finishWallSelectionPreparation({ reload: false });
+      this._wallLifecycleGeneration++;
+    }
+    if (this._wallRestoreMergePending && this.isConnected && this._view && this._wallSessionActive()) this._loadModel();
     this._syncScenePreviews();
     this._syncAmbient();
     if (this.isConnected) this._presetEvents.setHass(hass);
@@ -725,6 +751,7 @@ class Taylors3dCard extends HTMLElement {
     if (!this._view) this._render();
     else if (this._editing) this._edit.attach();
     this._view.start();
+    if (this._wallRestoreMergePending && this._wallSessionActive()) this._loadModel();
     this._panelName = readPanelName();
     window.addEventListener('taylors3d-panel-change', this._onPanelName);
     window.addEventListener('storage', this._onPanelName);
@@ -752,6 +779,9 @@ class Taylors3dCard extends HTMLElement {
 
   disconnectedCallback() {
     this._suspendAmbient('disconnected');
+    this.finishWallSelectionPreparation({ reload: false });
+    this._wallLifecycleGeneration++;
+    this._syncWallPresentation();
     this._ambientPointers.clear(); this._ambientKeys.clear();
     this._ambientControlsGesture = false;
     window.removeEventListener('pointerup', this._onAmbientRelease, true);
@@ -810,6 +840,9 @@ class Taylors3dCard extends HTMLElement {
 
   _render() {
     this._suspendAmbient('renderer replaced');
+    this.finishWallSelectionPreparation({ reload: false });
+    this._wallRestoreMergePending = false; // The replacement View loads the configured merge mode.
+    this._view?.setWallPresentation?.(undefined, { enabled: false });
     this._unwatchAmbientPreference();
     this._unbindAmbientInput();
     this._scenePreviewBar?.dispose();
@@ -991,6 +1024,7 @@ class Taylors3dCard extends HTMLElement {
     this._suspendAmbient('layout edit');
     if (!this._history.current && this._layout) this.resetHistory();
     this._layout = layout;
+    this.finishWallSelectionPreparation(); // Reload around the newly saved exact wall paths.
     if (!this._historyReplaying) this._recordHistory('Layout edit');
     const seq = (this._saveSeq = (this._saveSeq || 0) + 1);
     this._edit?.setSaveState('saving');
@@ -1007,6 +1041,102 @@ class Taylors3dCard extends HTMLElement {
   }
 
   commitFeatureLayout(patch) { this._commit({ ...this._layout, ...patch }); }
+
+  _wallSourceKey() {
+    return JSON.stringify([this._config?.layout_key, this._config?.model || this._layout?.model?.version || null,
+      this._modelAlign()]);
+  }
+
+  _wallPreparationModelCurrent(preparation) {
+    return !!(preparation && preparation.view === this._view && preparation.source === this._wallSourceKey()
+      && preparation.generation === this._wallLifecycleGeneration);
+  }
+
+  _wallPreparationFrameCurrent(preparation) {
+    return this._wallPreparationModelCurrent(preparation)
+      && preparation.connection === this._hass?.connection && preparation.userId === this._hass?.user?.id;
+  }
+
+  _wallSessionActive() {
+    const user = this._hass?.user;
+    return !!(user && typeof user.id === 'string' && user.id.trim()
+      && (!Object.hasOwn(user, 'is_active') || user.is_active === true) && this._hass?.connection?.connected === true);
+  }
+
+  _wallPreparationCurrent(preparation) {
+    return this._wallPreparationFrameCurrent(preparation) && this._wallSessionActive() && this._hass?.user?.is_admin === true;
+  }
+
+  _wallSelectionCamera() {
+    const view = this._view;
+    const position = view?.camera?.position?.toArray(), target = view?.controls?.target?.toArray();
+    return position?.length === 3 && target?.length === 3 && [...position, ...target].every(Number.isFinite)
+      ? { position, target } : null;
+  }
+
+  _restoreWallSelectionCamera(preparation) {
+    if (this.isConnected && preparation.camera && this._wallPreparationFrameCurrent(preparation) && this._wallSessionActive()
+      && preparation.viewId === this._viewId && preparation.mode === this._mode
+      && preparation.interaction === this._wallInteractionSerial) this._view.setCamera(preparation.camera);
+  }
+
+  /** Deliberate editor-only read/reload. Configured merging and saved layout stay
+   * untouched; exact original mesh paths can then be chosen and retained on Save.
+   */
+  async prepareWallSelection() {
+    const editor = this._edit?._wallPresentationEditor;
+    if (!this.isConnected || !this._editing || this._edit?.tab !== 'model'
+      || this._hass?.user?.is_admin !== true || !this._wallSessionActive() || !this._layout || !this._view?.model
+      || this._loading || this._mode !== '3d' || editor?.dirty || this._edit?._modelRenderingEditor?.dirty || editor?.pendingSurfacePick) {
+      throw new Error('Open Edit → Model as an administrator in 3D, then cancel unfinished changes before preparing exact wall meshes.');
+    }
+    const current = this._view.wallPresentationCandidates?.();
+    if (current?.prepared) return { prepared: true, report: current };
+    if (this._wallPreparation) throw new Error('Wall meshes are already being prepared. Wait for the model to finish loading.');
+    this._suspendAmbient('wall selection preparation');
+    this._stopScenePreview('wall selection preparation');
+    this._view.stopCameraMotion();
+    const preparation = { view: this._view, source: this._wallSourceKey(),
+      generation: this._wallLifecycleGeneration,
+      connection: this._hass.connection, userId: this._hass.user.id,
+      camera: this._wallSelectionCamera(), viewId: this._viewId, mode: this._mode,
+      interaction: this._wallInteractionSerial };
+    this._wallPreparation = preparation;
+    this._wallRestoreMergePending = false;
+    try {
+      const error = await this._loadModel(true);
+      if (this._wallPreparation !== preparation || !this._wallPreparationCurrent(preparation)
+        || !this.isConnected || !this._editing || this._edit?.tab !== 'model'
+        || this._hass?.user?.is_admin !== true || this._hass?.connection?.connected !== true) {
+        throw new Error('The model or editing session changed during preparation. Try again with the current model.');
+      }
+      const report = this._view.wallPresentationCandidates?.();
+      if (error || !report?.prepared) throw new Error(error || 'The model could not provide separate original wall meshes.');
+      this._restoreWallSelectionCamera(preparation);
+      return { prepared: true, report };
+    } catch (error) {
+      if (this._wallPreparation === preparation) this.finishWallSelectionPreparation();
+      throw error;
+    }
+  }
+
+  finishWallSelectionPreparation({ reload = true } = {}) {
+    const preparation = this._wallPreparation;
+    if (!preparation) return false;
+    this._wallPreparation = null;
+    // Cleanup belongs to this model, even if the authenticated identity vanished.
+    // Camera restoration and accepting a pick still require the exact session.
+    const current = this._wallPreparationModelCurrent(preparation);
+    this._wallRestoreMergePending = !!(current && this._config?.merge !== false);
+    if (!reload || !current || !this.isConnected || !this._view || !this._wallSessionActive()) return true;
+    const restoration = { ...preparation, camera: this._wallSelectionCamera(), viewId: this._viewId,
+      mode: this._mode, interaction: this._wallInteractionSerial };
+    this._loadModel().then(() => this._restoreWallSelectionCamera(restoration)).catch((error) => {
+      if (!this._wallPreparationFrameCurrent(restoration) || !this._wallSessionActive()) return;
+      this._modelError = String(error?.message || error); this._showNotice();
+    });
+    return true;
+  }
 
   // Coverage uses actual placed cameras. Bound model anchors take precedence over a
   // grouped device marker; a duplicate model binding remains an explicit choice.
@@ -1170,6 +1300,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _syncWeatherVisibility() {
+    this._syncWallPresentation();
     if (!this.isConnected || document.hidden || this._weatherInView === false || this._loading) this._stopScenePreview('view unavailable');
     this._scenePreviewBar?.update();
     this._weatherLayer?.setVisible(!!(this.isConnected && !document.hidden && this._weatherInView !== false
@@ -1472,6 +1603,7 @@ class Taylors3dCard extends HTMLElement {
   _restoreHistory(snapshot) {
     if (!snapshot) return;
     this._suspendAmbient('history changed');
+    this.finishWallSelectionPreparation({ reload: false });
     this._stopScenePreview('history changed');
     this._markerRenderKey = null;
     this._edit?._cameraEditor?.reset();
@@ -1479,6 +1611,7 @@ class Taylors3dCard extends HTMLElement {
     this._edit?._modelRenderingEditor?.reset();
     this._edit?._scenePreviewEditor?.reset();
     this._edit?._ambientIdleEditor?.reset();
+    this._edit?._wallPresentationEditor?.reset();
     this._cameraCoveragePreview = null;
     this._historyReplaying = true;
     try {
@@ -1590,6 +1723,7 @@ class Taylors3dCard extends HTMLElement {
     this._syncMiniMap();
     this._syncStatus();
     this._syncAmbient();
+    this._syncWallPresentation();
     if ((markers || viewRefreshed) && this._editing) this._edit.afterUpdate();
     else if (this._editing) this._edit.onStates();
   }
@@ -2435,6 +2569,22 @@ class Taylors3dCard extends HTMLElement {
     return policy;
   }
 
+  wallMaterialWriters() {
+    return new Set([...(this._objects?.parts?.values() || [])].map((part) => part.part?.glow).filter((node) => node?.isMesh));
+  }
+
+  _syncWallPresentation() {
+    const view = this._view;
+    if (!view?.setWallPresentation) return;
+    const index = this._built?.viewManifest === view.model?.manifest ? this._index : undefined;
+    view.setWallPresentation(this._layout?.wall_presentation ?? this._config?.wall_presentation, {
+      index, floors: this._floors || [], materialWriters: this.wallMaterialWriters(),
+      enabled: !!(this.isConnected && !document.hidden && this._weatherInView !== false
+        && this._layout && this._config && view.model && !this._loading && !this._editing && this._mode === '3d'),
+      reducedMotion: !!this._reducedMotion?.matches,
+    });
+  }
+
   _updateObjects() {
     const layer = this._objects;
     if (!layer || !layer.model || !this._hass || !this._config) return;
@@ -2480,6 +2630,7 @@ class Taylors3dCard extends HTMLElement {
   // Tap = moved < 5 px; hold 500 ms (not moved) = hold action. Orbit still starts from the canvas.
   _objectDown(e, canvas) {
     if (this._ambientWakeEvents.has(e)) return;
+    if (this._editing && this._edit?._wallSurfacePick?.()) return;
     if (this._gesture) { this._endGesture(); return; } // a second finger: pinch / orbit, no tap
     const path = e.composedPath();
     if (this._popup.closedBy === e || this._devicePopup.closedBy === e) { // a dismissing tap never activates a device

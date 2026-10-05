@@ -25,6 +25,11 @@ the house, and a fresh tap can select a room or device. These effects use no dev
 
 ## Room and device controls
 
+For a clearer view through a GLB house, open **Edit → Model → Wall presentation** and
+read the [wall guide](WALL-PRESENTATION-GUIDE.md). Select actual wall meshes and the
+side you want to fade. Glass is a lightweight transparent look; cut-away removes
+the upper section at a chosen height above that wall's floor. Changes apply on Save.
+
 Tap a room's floor to see its devices and readings on the right. Tap a device to see its own
 controls. Opening the panel only reads device states. **Turn on**, **Turn off** or changing
 brightness sends a command to the actual device. **All controls** opens Home Assistant's own

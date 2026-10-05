@@ -59,6 +59,9 @@ position over its map.
 - Edit → Idle sets an optional idle delay, gentle rotation and picture brightness.
   Actual sun readings or quiet hours in Home Assistant's time zone can dim the drawing;
   touch, menus, editing, alerts and camera flights take priority
+- Edit → Model → Wall presentation saves exact wall selections with normal, faded,
+  glass-like or cut-away appearance. Camera-side walls can expose the interior;
+  authored materials and manual Section remain available. See the [wall guide](docs/WALL-PRESENTATION-GUIDE.md)
 - Edit mode for admins: draw rooms, doors, floors, pin and hide devices, import/export
 - One layout shared by every user and device (stored by the companion integration)
 - Robot mower: live position, trail, map image or camera overlay, point calibration

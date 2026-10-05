@@ -14,6 +14,8 @@ import { sectionLevels, unionBox, pivotCamera, rayPlaneY, orthoZoom, topZoom, no
 import { mergeGroups, namedGroups, mergedName } from './merge.js';
 import { moonLight, moonLitRight, domeRadius, SUN_MIN_Y, SUN_DISC_M, MOON_DISC_M } from './sky.js';
 import { readModelRendering } from './model-rendering.js';
+import { WallPresentationLayer } from './wall-presentation-rendering.js';
+import { wallTargetReport } from './wall-presentation.js';
 import {
   castsShadow, shadowInfo, isCoplanarOverlay, depthRange, depthChanged, isOccluded, sunDirection, ghostMaterial, pickable,
 } from './render-rules.js';
@@ -326,6 +328,7 @@ export class FloorplanView {
     this.dirty = true;
     this._raf = null;
     this._ambientCamera = null; // private exact pose/controls baseline, owned by an idle-session token
+    this._wallPresentation = null; // lazy, opt-in material owner; no default renderer writes
     this._zoomTo = 'center'; // zoom pivot: 'center' (controls target) or 'cursor'
     this.pivotMarker = null; // edit mode: small cross at the rotation centre
     this._onWheel = () => { this.dirty = true; };
@@ -353,6 +356,7 @@ export class FloorplanView {
     }
     c.addEventListener('change', () => {
       this.dirty = true;
+      this._wallCameraDirty = true;
       if (this._ambientCamera) return; // passive orbit never schedules occlusion work each frame
       this._camMovedAt = performance.now();
       this._scheduleOcclusion();
@@ -507,7 +511,7 @@ export class FloorplanView {
       if (this.model) {
         // ghosted: blended but depth writes kept, so overlapping parts do not vanish; glass untouched
         this.model.root.traverse((o) => {
-          if (!o.isMesh) return;
+          if (!o.isMesh || this._wallPresentation?.ownsMesh(o)) return;
           for (const mat of Array.isArray(o.material) ? o.material : [o.material]) {
             const g = ghostMaterial(mat.userData, opacity);
             if (!g) continue;
@@ -516,6 +520,7 @@ export class FloorplanView {
           }
         });
         this.model.opacity = opacity;
+        this._refreshWallPresentation(); // compose the current global ghost over owned wall materials
         this._occBoxes = null; // placement changed
         this._bounds = this._sceneBounds();
       }
@@ -656,6 +661,7 @@ export class FloorplanView {
 
   // Caches that hold model meshes, after a merge on a placed model.
   _afterMerge() {
+    this._wallIndexModel = null; this._wallIndex = null;
     this._occBoxes = null;
     this._applyFloorVisibility(); // floor-only mode covers the merged meshes too
     this._bounds = this._sceneBounds();
@@ -699,6 +705,102 @@ export class FloorplanView {
     return this.model ? this.model.manifest : null;
   }
 
+  setWallPresentation(raw, { index, floors, materialWriters, enabled = true, reducedMotion = false } = {}) {
+    this._wallRaw = raw;
+    this._wallOptions = { index, floors, materialWriters, enabled, reducedMotion };
+    this._refreshWallPresentation();
+    return this.wallPresentationReport();
+  }
+
+  _refreshWallPresentation() {
+    if (!this._wallPresentation && this._wallRaw === undefined) return;
+    this._wallPresentation ||= new WallPresentationLayer();
+    const options = this._wallOptions || {};
+    this._wallPresentation.setData({ raw: this._wallRaw, index: options.index || this._wallNodeIndex(), floors: options.floors || this.floors,
+      modelRoot: this.model?.root || null, modelOpacity: this.model?.opacity ?? 1, section: this.sectionClip,
+      materialWriters: options.materialWriters, eligible: options.enabled !== false && !!this.model && this.mode === '3d' && !this._disposed,
+      reducedMotion: !!options.reducedMotion, freezeCameraSide: !!this._ambientCamera });
+    this._wallCameraDirty = true;
+    this.updateWallPresentation(performance.now());
+  }
+
+  updateWallPresentation(now) {
+    const layer = this._wallPresentation;
+    if (!layer || !this._wallCameraDirty && !layer.moving) return false;
+    this._wallCameraDirty = false;
+    layer.context.freezeCameraSide = !!this._ambientCamera;
+    this._wallCameraPosition ||= new THREE.Vector3(); this._wallCameraArray ||= [0, 0, 0];
+    this.camera.getWorldPosition(this._wallCameraPosition).toArray(this._wallCameraArray);
+    const result = layer.update(now, this._wallCameraArray);
+    if (result.semanticChanged) {
+      this._wallOcclusionRevision = (this._wallOcclusionRevision || 0) + 1;
+      this._scheduleOcclusion(); // only crossing a presentation boundary, never each opacity step
+    }
+    if (result.shadowChanged) {
+      this._wallShadowRevision = (this._wallShadowRevision || 0) + 1;
+      this._shadowDirty(); this._shadowSig = this._modelSig();
+    }
+    if (result.changed) this.dirty = true;
+    return result.changed;
+  }
+
+  _wallNodeIndex() {
+    const model = this.model;
+    if (!model) return null;
+    if (this._wallIndexModel !== model) {
+      this._wallIndexModel = model; this._wallIndex = nodeIndex(threeAdapter(model.root), model.manifest);
+    }
+    return this._wallIndex;
+  }
+
+  wallPresentationReport() {
+    return this._wallPresentation?.report() || wallTargetReport(this._wallRaw, {
+      index: this._wallNodeIndex(), floors: this.floors || [], modelRoot: this.model?.root || null,
+    });
+  }
+
+  wallPresentationCandidates() {
+    const index = this._wallNodeIndex(), modelRoot = this.model?.root || null;
+    const prepared = !!modelRoot && (!this.mergeStats?.enabled || !this.mergeStats.merged);
+    const rows = [], paths = new Map(), reports = new Map();
+    // Resolve each exact path once. A large unmerged model must not scan its
+    // complete index once for every mesh in the editor's candidate list.
+    for (const entry of index?.nodes || []) {
+      if (!paths.has(entry.path)) paths.set(entry.path, []);
+      paths.get(entry.path).push(entry);
+    }
+    for (const entry of index?.nodes || []) {
+      if (!entry.node?.isMesh) continue;
+      const selector = `node:${entry.path}`;
+      if (!reports.has(entry.path)) reports.set(entry.path, wallTargetReport({ scope: 'all_selected', walls: [{ id: 'candidate', selector }] }, {
+        index: { nodes: paths.get(entry.path) }, modelRoot, materialWriters: this._wallOptions?.materialWriters,
+      }).rows[0]);
+      const result = reports.get(entry.path);
+      rows.push({ selector, label: entry.name || entry.path, node: entry.node, selectable: !!result?.ready,
+        reason: result?.diagnostics.map((diagnostic) => diagnostic.message).join(' ') || '' });
+    }
+    return { rows, prepared, diagnostics: modelRoot ? [] : [{ code: 'missing_model', message: 'Load a model before choosing exact wall meshes.' }] };
+  }
+
+  // Deliberate editor capture bypasses the adaptive effect so a hidden wall can
+  // be repaired. Current floor/Section and actual rigid triangle still govern.
+  captureWallSurfacePick(clientX, clientY) {
+    const candidates = this.wallPresentationCandidates();
+    if (!candidates.prepared) return null;
+    const hit = this._modelHit(clientX, clientY, { wallSelection: true });
+    const candidate = hit && candidates.rows.find((row) => row.node === hit.object && row.selectable);
+    if (!candidate || !hit.face) return null;
+    const mesh = hit.object; mesh.updateWorldMatrix(true, false);
+    if (!Number.isFinite(mesh.matrixWorld.determinant()) || mesh.matrixWorld.determinant() === 0) return null;
+    const point = mesh.worldToLocal(hit.point.clone()), normal = hit.face.normal.clone().normalize();
+    const worldNormal = normal.clone().applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld)).normalize();
+    const towardCamera = this.camera.getWorldPosition(new THREE.Vector3()).sub(hit.point);
+    if (worldNormal.dot(towardCamera) < 0) normal.negate();
+    if (![...point.toArray(), ...normal.toArray()].every(Number.isFinite) || normal.lengthSq() === 0) return null;
+    return { selector: candidate.selector, label: candidate.label, modelRoot: this.model.root,
+      face: { space: 'node-local', point: point.toArray(), normal: normal.toArray() } };
+  }
+
   // level id -> { show, floor } from the card's bindings
   setModelLevels(assign) {
     this.modelLevels = assign || {};
@@ -733,25 +835,43 @@ export class FloorplanView {
   }
 
   // First visible model intersection under a screen point (raycaster left set to that ray).
-  _modelHit(clientX, clientY) {
+  _modelHit(clientX, clientY, { wallSelection = false } = {}) {
     if (!this.model) return null;
     const r = this.renderer.domElement.getBoundingClientRect();
     if (!r.width || !r.height) return null;
     const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.camera);
     const shown = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
-    const candidate = (o) => {
+    const candidate = (hit) => {
+      const o = hit.object;
       // the material as authored (glass), not as ghosted by the opacity slider
-      const m = (Array.isArray(o.material) ? o.material[0] : o.material) || { userData: {} };
+      const m = (Array.isArray(o.material) ? o.material[hit.face?.materialIndex ?? 0] : o.material) || { userData: {} };
       const ud = m.userData || {};
-      return pickable({
+      return wallSelection ? !!o.isMesh && !o.userData.helper : pickable({
         isMesh: o.isMesh, helper: !!o.userData.helper,
         transparent: ud.wasTransparent ?? !!m.transparent, opacity: ud.baseOpacity ?? m.opacity ?? 1,
       });
     };
     const hit = this.raycaster.intersectObject(this.model.root, true)
-      .find((h) => candidate(h.object) && shown(h.object) && h.point.y <= this.modelClip.constant + 1e-6 && !this._cutAway(h.point));
+      .find((h) => candidate(h) && shown(h.object) && h.point.y <= this.modelClip.constant + 1e-6 && !this._cutAway(h.point)
+        && this._modelIntersectionShown(h, { ignoreWallPresentation: wallSelection }));
     return hit || null;
+  }
+
+  _modelIntersectionShown(hit, { occlusion = false, ignoreWallPresentation = false } = {}) {
+    const mesh = hit.object, materialIndex = hit.face?.materialIndex ?? 0;
+    if (!ignoreWallPresentation && this._wallPresentation?.pointHidden(mesh, hit.point, materialIndex)) return false;
+    const material = ignoreWallPresentation && this._wallPresentation ? this._wallPresentation.baselineMaterial(mesh, materialIndex)
+      : Array.isArray(mesh.material) ? mesh.material[materialIndex] : mesh.material;
+    if (!material) return false;
+    if (occlusion) {
+      const data = material.userData || {};
+      if ((data.wasTransparent ?? material.transparent) || (data.baseOpacity ?? material.opacity ?? 1) < .6 || material.transmission > 0) return false;
+    }
+    const planes = material.clippingPlanes;
+    if (!Array.isArray(planes) || !planes.length) return true;
+    const cut = (plane) => plane?.distanceToPoint?.(hit.point) < -1e-6;
+    return !(material.clipIntersection ? planes.every(cut) : planes.some(cut));
   }
 
   highlightModelNode(node) {
@@ -773,6 +893,9 @@ export class FloorplanView {
 
   _disposeModel() {
     if (this._ambientCamera) this.endAmbientCamera({ ...this._ambientCamera, restore: false });
+    this._wallPresentation?.dispose(); this._wallPresentation = null;
+    this._wallIndexModel = null; this._wallIndex = null;
+    this._wallShadowRevision = 0; this._wallOcclusionRevision = 0;
     this._modelId = null;
     this._modelVisibility = null;
     this._motionKeys = new WeakMap();
@@ -1436,6 +1559,7 @@ export class FloorplanView {
       this.renderer.clippingPlanes = [];
     }
     this._sectionMaterials();
+    this._refreshWallPresentation();
     this._placeSkyBodies();
     this._applyFloorVisibility(); // the section is part of the shadow / occlusion signatures
     this.dirty = true;
@@ -1446,7 +1570,7 @@ export class FloorplanView {
     if (!this.model) return;
     const on = !!this.sectionClip;
     this.model.root.traverse((o) => {
-      if (!o.isMesh) return;
+      if (!o.isMesh || this._wallPresentation?.ownsMesh(o)) return;
       for (const mat of Array.isArray(o.material) ? o.material : [o.material]) {
         if (on && mat.userData.sectionSide === undefined) {
           mat.userData.sectionSide = mat.side;
@@ -1751,7 +1875,7 @@ export class FloorplanView {
       if (this.model) this._shadowDirty();
       this._objectsInvalid(); // lamps on hidden levels give their pool lights to visible ones
     }
-    const occ = model + '|' + this.mode + '|' + this._shownMarkersSig();
+    const occ = model + '|' + this.mode + '|' + this._shownMarkersSig() + '|' + (this._wallOcclusionRevision || 0);
     if (occ !== this._occSig) {
       this._occSig = occ;
       this._scheduleOcclusion(0);
@@ -1776,7 +1900,8 @@ export class FloorplanView {
     const vis = mv ? mv.index.nodes.map((n) => (n.node.visible ? 1 : 0)).join('')
       : this.model.manifest.levels.map((l) => (l.node.visible ? 1 : 0)).join('');
     const s = this.sectionClip;
-    return [this.model.id, vis, this.modelClip.constant, s ? [...s.normal.toArray(), s.constant].map((v) => v.toFixed(4)).join() : '', this._modelMotionRevision || 0].join('|');
+    return [this.model.id, vis, this.modelClip.constant, s ? [...s.normal.toArray(), s.constant].map((v) => v.toFixed(4)).join() : '',
+      this._modelMotionRevision || 0, this._wallShadowRevision || 0].join('|');
   }
 
   // Capture after model placement/merge, without changing authored local transforms.
@@ -1813,6 +1938,7 @@ export class FloorplanView {
       for (const node of changed) node.traverse((descendant) => { if (!descendant.userData.helper) this._motionKeys.set(descendant, descendant.matrixWorld.elements.slice()); });
       this._modelMotionRevision = (this._modelMotionRevision || 0) + 1;
       this._occBoxes = null;
+      this._wallCameraDirty = true;
       this._bounds = this._sceneBounds();
       const refreshed = this.objectLayer?.refreshAnchors(new Set(changed), { requestShadows: false, markDirty: false });
       if (refreshed) { result.objectIds = refreshed.objectIds; result.roots = refreshed.roots; result.anchors = refreshed.anchors; }
@@ -1820,7 +1946,7 @@ export class FloorplanView {
       this._fitShadow({ invalidate: false });
       this._shadowDirty(); // one caster request; includes the moved assigned-light positions
       this._shadowSig = this._modelSig();
-      this._occSig = this._shadowSig + '|' + this.mode + '|' + this._shownMarkersSig();
+      this._occSig = this._shadowSig + '|' + this.mode + '|' + this._shownMarkersSig() + '|' + (this._wallOcclusionRevision || 0);
       this._updateDepth(); this.markDirty(); result.changed = true;
     }
     if (this._modelMotionMoving) {
@@ -1901,6 +2027,7 @@ export class FloorplanView {
     if (mode === 'top') { this._cancelOcclusion(); this._clearOcclusion(); } // no occlusion in top view
     this._makeControls();
     this.fit();
+    this._refreshWallPresentation();
     if (mode === '3d') this._scheduleOcclusion(0);
   }
 
@@ -2078,7 +2205,7 @@ export class FloorplanView {
     this.modelGroup.updateMatrixWorld(true);
     const out = [];
     this.model.root.traverse((o) => {
-      if (!o.isMesh || o.userData.seeThrough || o.userData.helper) return;
+      if (!o.isMesh || !Array.isArray(o.material) && o.userData.seeThrough || o.userData.helper) return;
       const box = new THREE.Box3().setFromObject(o);
       if (!box.isEmpty()) out.push({ mesh: o, box });
     });
@@ -2107,7 +2234,7 @@ export class FloorplanView {
         const at = rc.ray.intersectBox(box, tmp);
         if (!at || origin.distanceTo(at) > rc.far) continue;
       }
-      const h = rc.intersectObject(mesh, false).find((x) => x.point.y <= cut + 1e-6 && !this._cutAway(x.point));
+      const h = rc.intersectObject(mesh, false).find((x) => x.point.y <= cut + 1e-6 && !this._cutAway(x.point) && this._modelIntersectionShown(x, { occlusion: true }));
       if (h && isOccluded(h.distance, dist)) return true;
     }
     return false;
@@ -2165,7 +2292,7 @@ export class FloorplanView {
             const at = rc.ray.intersectBox(box, tmp);
             if (!at || origin.distanceTo(at) > rc.far) continue; // box pre-filter
           }
-          const h = rc.intersectObject(mesh, false).find((x) => x.point.y <= cut + 1e-6 && !this._cutAway(x.point));
+          const h = rc.intersectObject(mesh, false).find((x) => x.point.y <= cut + 1e-6 && !this._cutAway(x.point) && this._modelIntersectionShown(x, { occlusion: true }));
           if (h) { hitD = h.distance; break; }
         }
         c.obj.element.classList.toggle('fp-occluded', isOccluded(hitD, dist));
@@ -2210,7 +2337,9 @@ export class FloorplanView {
   }
 
   resize(w, h) {
-    if (!w || !h) return;
+    if (typeof w !== 'number' || typeof h !== 'number' || !Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return;
+    // The constructor's 1×1 size is a placeholder; apply even that first viewport.
+    if (this._sizeApplied && this.size.w === w && this.size.h === h) return;
     this.size = { w, h };
     this.renderer.setSize(w, h);
     this.labelRenderer.setSize(w, h);
@@ -2218,6 +2347,7 @@ export class FloorplanView {
     this.persp.aspect = w / (h + TOOLBAR_PX);
     this.persp.setViewOffset(w, h + TOOLBAR_PX, 0, 0, w, h);
     this._updateOrtho();
+    this._sizeApplied = true;
     this.dirty = true;
   }
 
@@ -2228,6 +2358,7 @@ export class FloorplanView {
       if (this._tween) this._stepTween(performance.now());
       if (!this._ambientCamera && this.controls.update()) this.dirty = true; // ambient owns its one explicit-delta update
       if (this.onFrame?.(performance.now())) this.dirty = true;
+      if (this.updateWallPresentation(performance.now())) this.dirty = true;
       if (this.pivotMarker && !this.pivotMarker.position.equals(this.controls.target)) {
         this.pivotMarker.position.copy(this.controls.target);
         this.dirty = true;
@@ -2253,6 +2384,10 @@ export class FloorplanView {
 
   stop() {
     if (this._ambientCamera) this.endAmbientCamera(this._ambientCamera);
+    if (this._wallPresentation) {
+      this._wallPresentation.setData({ ...this._wallPresentation.context, eligible: false });
+      this._wallCameraDirty = true; this.updateWallPresentation(performance.now());
+    }
     if (this._raf) cancelAnimationFrame(this._raf);
     this._raf = null;
     this._modelMotionMoving = false;
@@ -2266,11 +2401,14 @@ export class FloorplanView {
   }
 
   _clearGroup(group) {
+    const materials = new Set(), geometries = new Set();
     group.traverse((o) => {
       if (o.isCSS2DObject && o.element && o.element.parentNode) o.element.parentNode.removeChild(o.element);
-      if (o.geometry) o.geometry.dispose();
-      if (o.material) o.material.dispose();
+      if (o.geometry) geometries.add(o.geometry);
+      for (const material of Array.isArray(o.material) ? o.material : [o.material]) if (material?.dispose) materials.add(material);
     });
+    for (const geometry of geometries) geometry.dispose();
+    for (const material of materials) material.dispose();
     group.clear();
   }
 

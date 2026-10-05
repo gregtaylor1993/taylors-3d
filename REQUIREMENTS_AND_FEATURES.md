@@ -38,8 +38,8 @@ For each implementation, update its status, record the changed behavior, link it
 | F10 | Actual sun plus rain, clouds and snow | Strict sun/location evidence and opt-in bounded outdoor weather | Testing |
 | F11 | Hue colour/brightness lighting the rooms | Validated light readings, inline colour/white controls and a bounded pool | Testing |
 | F12 | Scene previews | Explicit light targets, current-light capture, editor and saved-bar controls verified; household checks remain | Testing |
-| F13 | Ambient idle rotation and night dimming | Optional delay/rotation and sun/quiet-hours picture dimming pass dedicated native checks; full regression remains | In progress |
-| F14 | Camera-aware cut-away and glass/faded walls | Side Section, opacity and authored glass | Planned |
+| F13 | Ambient idle rotation and night dimming | Optional delay/rotation and sun/quiet-hours picture dimming verified locally and by CI; household checks remain | Testing |
+| F14 | Camera-aware cut-away and glass/faded walls | Exact wall drafts, owned material copies and composed clipping pass dedicated browser checks; complete checkpoint and household checks remain | Testing |
 | F15 | Furniture packs and drag-and-drop placement | Furniture inside GLB models and layer visibility | Planned |
 | F16 | Baked shadows for wall panels | Saved shadow/lighting policy, authored texture diagnostics and external AO guide | Testing |
 | F17 | Deeper HA floors/areas/entity integration | Shared metadata, precision, filtered choices and missing-link diagnostics | In progress |
@@ -224,7 +224,7 @@ scenes, entity permissions, materials and wall-panel checks remain.
 
 **Already present:** automatic scene darkening, but no idle rotation.
 
-**Phase 9 implementation (verification running):** Edit → Idle saves opt-in delay,
+**Phase 9 implementation (verified checkpoint):** Edit → Idle saves opt-in delay,
 rotation speed and picture brightness with Save/Cancel/Undo. The existing animation
 loop owns rotation and exact camera restoration. A wake tap cannot select a device at
 its old rotated position. Device/room panels, editing, previews, actual alerts, camera
@@ -235,10 +235,21 @@ and preserves its previous filter, without a renderer or HA action. All 2,508
 JavaScript tests in 85 files, full lint/build/bundle matching and 105 dedicated
 native source/bundle assertions pass. Actual rendering, exact wake restoration,
 hidden-label work, current readings, priority guards, dim-only CSS, native policy
-history, focused fields and 320px controls are checked. Complete local/GitHub
-regressions and the exact-commit package remain.
-[Idle mode guide](docs/AMBIENT-IDLE-GUIDE.md). Unfinished Phase 9 work is outside the
-uploaded Phase 8 checkpoint and the current verified manual package.
+history, focused fields and 320px controls are checked. Final checkpoint `93ab558`
+passes complete [GitHub CI](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37270718366):
+all 1,090 browser assertions and 48 Home Assistant Python tests, without model
+retry. [HACS validation](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37270718303)
+passes. The identical production frontend passes the complete local 1,090-check
+run, and the final test-only correction passes the dedicated 105-check run.
+The earlier 99/105 CI failure is retained: fixture CSS setup had not started a
+fresh passive stability observation. The correction preserves every zero-frame
+assertion and timeout, and does not change production code. Its diagnostic does
+not claim to prove the origin of the old extra frame.
+Current `taylors3d.zip` and backup `taylors3d-phase9.zip` contain exact checkpoint
+`93ab558`, matching GitHub's frontend byte for byte. Zip SHA256:
+`0C7EE048CC21FB0B128CB339C03084A97418F12E1A704CD1D949ABCCE05612F1`.
+[Idle mode guide](docs/AMBIENT-IDLE-GUIDE.md). Later wall/furniture/split-floor work
+is excluded. Actual house and wall-panel checks remain.
 
 **Complete when:** idle delay, speed, night dimming and quiet hours are configurable; touch, editing or an alert stops idle motion immediately; the camera returns predictably to its normal state. Reduced-motion and low-power settings can disable rotation. Dimming the card is supported without claiming to change the physical tablet backlight.
 
@@ -249,6 +260,31 @@ uploaded Phase 8 checkpoint and the current verified manual package.
 **Want:** expose the inside of the realistic GLB by cutting/fading walls nearest the camera, rather than hiding an entire floor.
 
 **Already present:** a vertical Side Section clipping plane, storey clipping for some models, global opacity and authored glass materials. Automatic camera-side wall fading is new work.
+
+**Phase 10 implementation (dedicated browser checks passed):** Edit → Model has wall
+drafts for normal, fade, glass-like alpha and cut-away presentation. A deliberate
+clean administrator action temporarily loads original separate mesh pieces;
+clicking a real wall records its exact path and viewed node-local face. Choose
+its actual floor, opacity and height above that floor. Save is one layout/history
+edit, and restores configured merging around the saved exact paths. Cancel does
+not save. Permission/source/model changes cancel old picks and block stale drafts.
+Wall-owned material copies preserve authored textures, shared originals and
+current global opacity/Section/floor clipping. Picking and occlusion use current
+visible faces. Ambient orbit does not change camera-side decisions; reduced
+motion applies static changes immediately. The editor does not infer wall tags
+or a physical glass/refraction effect. Unit checks pass for these components;
+all 2,784 JavaScript tests in 92 files, lint, build and source/bundle matching pass.
+Repeated equal viewport sizing now avoids renderer/CSS/projection work while
+genuine changes and first sizing still apply; 29 regression checks cover this.
+All 141 dedicated native assertions pass (70 source, 70 bundle and a zero-errors
+check), with no browser errors or Home Assistant service calls. They cover actual
+pixels, camera-side hysteresis, picking, Section/floor clipping, shared textures,
+material restoration, permission changes, Save/Undo/Redo and 320px controls.
+Two earlier failed runs are retained. Their input fixtures were corrected to
+click the actual device anchor and wake inside the card; production code and
+strict expectations did not change. Full checkpoint regression, GitHub/HACS
+and actual-house checks remain. See the
+[wall guide](docs/WALL-PRESENTATION-GUIDE.md).
 
 **Complete when:** the user can choose normal, cut-away and faded/glass-wall presentation; suitable tagged walls fade/cut according to the camera without losing useful floors or interior objects. Picking and device popups still select the visible target. Fade state resets when disabled; authored transparent glass still behaves correctly. Keep a manual section fallback for models without usable wall separation.
 
