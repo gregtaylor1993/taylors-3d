@@ -33,6 +33,7 @@ from .const import (
     STORAGE_KEY,
     STORAGE_VERSION,
 )
+from .furniture import async_register_furniture
 from .model import ModelView
 from .services import async_register_services
 
@@ -83,6 +84,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     websocket_api.async_register_command(hass, ws_get_layout)
     websocket_api.async_register_command(hass, ws_set_layout)
     hass.http.register_view(ModelView(hass))
+    await async_register_furniture(hass)
 
     await _async_register_card(hass)
     return True
