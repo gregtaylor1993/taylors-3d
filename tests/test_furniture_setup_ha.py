@@ -21,8 +21,8 @@ from .test_furniture_pack import bundle, glb
 
 URL = FURNITURE_URL
 SHA = "0" * 64
-ROUTE_NAMES = {
-    "api:taylors3d:furniture", "api:taylors3d:furniture:asset", "api:taylors3d:furniture:pack",
+ROUTE_PATHS = {
+    URL, f"{URL}/assets/{{digest}}.glb", f"{URL}/packs/{{pack_id}}.zip",
 }
 
 
@@ -48,8 +48,12 @@ async def setup_integration(hass, source="yaml"):
 
 def furniture_routes(hass):
     """The real router's resources, rather than a register_view call double."""
-    return {name: resource for name, resource in hass.http.app.router.named_resources().items()
-            if name.startswith("api:taylors3d:furniture")}
+    # HA's actual HomeAssistantView.register adds unnamed aiohttp routes. View
+    # `name` is not an aiohttp resource name; inspect the actual canonical paths.
+    resources = [resource for resource in hass.http.app.router.resources()
+                 if resource.canonical.startswith(URL)]
+    assert len(resources) == len(ROUTE_PATHS), "Furniture mounted duplicate or unexpected resources"
+    return {resource.canonical: resource for resource in resources}
 
 
 @pytest.mark.parametrize("source", ["yaml", "user"])
@@ -62,9 +66,10 @@ async def test_setup_mounts_furniture_via_actual_yaml_or_user_entry(hass, hass_c
     assert await response.json() == {"version": 1, "packs": []}
     assert response.headers["Cache-Control"] == "private, no-store"
     assert DATA_FURNITURE in hass.data
-    assert set(furniture_routes(hass)) == ROUTE_NAMES
+    assert set(furniture_routes(hass)) == ROUTE_PATHS
     assert hass.data[DATA_FURNITURE].root == tmp_path / "taylors3d/furniture"
-    assert not any("floorplan3d" in name for name in hass.http.app.router.named_resources())
+    assert not any(resource.canonical.startswith("/api/floorplan3d")
+                   for resource in hass.http.app.router.resources())
     assert (await client.get("/api/floorplan3d/furniture")).status == 404
     assert (await client.get(f"/api/floorplan3d/furniture/assets/{SHA}.glb")).status == 404
 
@@ -87,7 +92,7 @@ async def test_setup_after_running_http_does_not_freeze_router_before_config_ent
     response = await client.get(URL)
     assert response.status == 200, await response.text()
     assert (await response.json())["packs"] == []
-    assert set(furniture_routes(hass)) == ROUTE_NAMES
+    assert set(furniture_routes(hass)) == ROUTE_PATHS
 
 
 async def test_entry_reload_preserves_published_library_and_exact_router_resources(hass, hass_client, tmp_path):
@@ -98,7 +103,7 @@ async def test_entry_reload_preserves_published_library_and_exact_router_resourc
     assert response.status == 200, await response.text()
     original = await response.json()
     library, layout_store, resources = hass.data[DATA_FURNITURE], hass.data[DOMAIN], furniture_routes(hass)
-    assert set(resources) == ROUTE_NAMES
+    assert set(resources) == ROUTE_PATHS
     for _ in range(2):
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
@@ -106,7 +111,7 @@ async def test_entry_reload_preserves_published_library_and_exact_router_resourc
         assert hass.data[DATA_FURNITURE] is library
         assert hass.data[DOMAIN] is layout_store
         current = furniture_routes(hass)
-        assert set(current) == ROUTE_NAMES
+        assert set(current) == ROUTE_PATHS
         assert all(current[name] is resource for name, resource in resources.items())
         response = await client.get(URL)
         assert response.status == 200
@@ -166,4 +171,3 @@ async def test_actual_setup_admin_import_nonadmin_read_and_independent_house_lay
         assert await response.read() == expected
     await ws.send_json_auto_id({"type": "taylors3d/layout/get", "key": "house"})
     assert (await ws.receive_json())["result"] == {"layout": layout}
-
