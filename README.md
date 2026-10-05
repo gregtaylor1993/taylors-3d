@@ -5,6 +5,7 @@ NOTICE: Based on floorplan3d-card by istals (MIT)
 Original project by Ingus Stals / istals. This independent copy is maintained by Taylor.
 
 See [Requirements and features](REQUIREMENTS_AND_FEATURES.md) for Taylor's development ideas, proposed build order and progress log.
+See the [plain-language controls guide](docs/FEATURES-GUIDE.md) for camera automations, Undo/Redo and room overlays.
 
 A Lovelace card that shows your home as a 3D floorplan with every device on it. Draw each room
 once and link it to a Home Assistant area. After that, every device assigned to the area appears
@@ -69,7 +70,16 @@ Open the dashboard card's **Edit → Show visual editor → Navigation and devic
 choose the bubble buttons, reorder them, change the mini-map, or select **Quick toggle** for
 the original device-tap behavior. Layout editing inside the card remains available to admins.
 
-The first navigation delivery is tested with the mock HA preview. Testing with Taylor's actual
+Room and device controls now open on the right by default. On wide screens the house and
+mini-map have their own space beside the panel. The visual editor can choose a popup instead.
+
+![Right-hand controls beside the house and mini-map](docs/images/panel-wide.png)
+
+**Edit → Views** names this browser for camera automations. **Edit → Overlays** assigns
+temperature/power/energy sensors and smoke/leak/unlocked-door alerts to rooms. The edit panel
+also has Undo/Redo for layout changes. Read the controls guide above for setup and limits.
+
+The navigation delivery is tested with the mock HA preview. Testing with Taylor's actual
 house model, Home Assistant and wall panel is tracked in [the feature log](REQUIREMENTS_AND_FEATURES.md).
 
 ## Install

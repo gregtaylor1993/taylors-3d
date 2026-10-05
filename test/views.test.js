@@ -147,6 +147,13 @@ describe('view sources', () => {
     const v = resolveViews({ manifest: null, haFloors: [{ id: 'f1', name: 'F1' }, { id: 'f2', name: 'F2' }], layoutViews: {}, yamlViews: {}, savedLevels: {} });
     expect(v.map((x) => [x.id, x.label, x.source, x.floors])).toEqual([['f1', 'F1', 'floors', ['f1']], ['f2', 'F2', 'floors', ['f2']], ['all', 'All', 'floors', null]]);
   });
+  it('preserves a preset camera mode and lets explicit card configuration override it', () => {
+    const args = { manifest: null, haFloors: [{ id: 'ground', name: 'Ground' }],
+      layoutViews: { ground: { camera_mode: 'top' } }, yamlViews: {}, savedLevels: {} };
+    expect(resolveViews(args)[0].camera_mode).toBe('top');
+    expect(resolveViews({ ...args, yamlViews: { ground: { camera_mode: '3d' } } })[0].camera_mode).toBe('3d');
+    expect(resolveViews({ ...args, yamlViews: { ground: { camera_mode: 'invalid' } } })[0].camera_mode).toBeNull();
+  });
   it('generated views get migrated show-mode rules', () => {
     const v = resolveViews({ manifest: { levels, views: [] }, haFloors: [], layoutViews: {}, yamlViews: {}, savedLevels: { attic: { show: 'all-only' } } });
     expect(v.find((x) => x.id === 'ground').rules.at(-1)).toEqual({ hide: 'level:attic' });

@@ -233,7 +233,7 @@ export function resolveViews({ manifest, haFloors, layoutViews, yamlViews, saved
       { id: 'all', label: 'All', rules: [], floors: null, source: 'floors' }];
   } else if (manifest.views && manifest.views.length) {
     base = manifest.views.filter((v, i, a) => a.findIndex((x) => x.id === v.id) === i)
-      .map((v) => ({ id: v.id, label: v.label || v.id, rules: modelViewRules(v), camera: v.camera, floors: null, source: 'model', section: v.section, camera_top: v.camera_top }));
+      .map((v) => ({ id: v.id, label: v.label || v.id, rules: modelViewRules(v), camera: v.camera, floors: null, source: 'model', section: v.section, camera_top: v.camera_top, camera_mode: v.camera_mode }));
   } else {
     const mig = migrateShowModes(savedLevels);
     base = generatedViews(mLevels).map((v) => ({
@@ -265,8 +265,10 @@ export function resolveViews({ manifest, haFloors, layoutViews, yamlViews, saved
     const camera_top = normTopCamera(y.camera_top) || normTopCamera(l.camera_top) || normTopCamera(b.camera_top);
     const camera_topFrame = camera_top && !normTopCamera(y.camera_top) && !normTopCamera(l.camera_top) && b.source === 'model' ? 'model' : 'card';
     const zoom_to = zoomOk(y.zoom_to) || zoomOk(l.zoom_to);
+    const preferredMode = pick('camera_mode', b.camera_mode);
+    const camera_mode = ['3d', 'top'].includes(preferredMode) ? preferredMode : null;
     return { id: b.id, label: pick('label', b.label), rules, camera, cameraFrame, camera_topFrame, floors, cut: pick('cut', null), source: b.source, hidden: !!pick('hidden', false),
-      section, modelSection: normSection(b.section), camera_top, zoom_to };
+      section, modelSection: normSection(b.section), camera_top, camera_mode, zoom_to };
   });
 }
 

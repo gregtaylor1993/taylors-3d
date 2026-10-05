@@ -25,6 +25,7 @@ jobs:
           test "$(node -p "require('./custom_components/taylors3d/manifest.json').version")" = "$TAG"
           grep -q "const VERSION = '$TAG'" src/taylors3d-card.js
       - run: npm run build
+      - run: npm run check:bundle
       - name: Package integration (card bundled inside) for HACS
         run: |
           cp LICENSE custom_components/taylors3d/LICENSE

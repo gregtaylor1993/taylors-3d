@@ -9,5 +9,45 @@
     "abort": {
       "single_instance_allowed": "Taylor's 3D is already set up."
     }
+  },
+  "services": {
+    "select_view": {
+      "name": "Select camera preset",
+      "description": "Select a saved view on one open Taylor's 3D card. Specify its panel or card ID, or both. Unavailable or duplicate card targets and unknown presets report an action error.",
+      "fields": {
+        "layout_key": {
+          "name": "Layout key",
+          "description": "The layout_key configured on the intended card."
+        },
+        "preset": {
+          "name": "Preset",
+          "description": "The saved view ID or its exact, unique name."
+        },
+        "panel": {
+          "name": "Panel",
+          "description": "The panel name saved for this browser in the card's Views tab, or automation_panel in its configuration. Provide this or a card ID."
+        },
+        "card_id": {
+          "name": "Card ID",
+          "description": "The automation_card_id configured on the card. Provide this or a panel."
+        },
+        "mode": {
+          "name": "Camera mode",
+          "description": "Optional override. Otherwise use the preset's saved mode, or the card's current mode."
+        },
+        "return_after": {
+          "name": "Return after",
+          "description": "Optional seconds before restoring the previous view and camera. Zero or omitted leaves the selected preset in place. Touching the card or another matching request cancels the return."
+        }
+      }
+    }
+  },
+  "selector": {
+    "camera_mode": {
+      "options": {
+        "3d": "3D",
+        "top": "Top"
+      }
+    }
   }
 }

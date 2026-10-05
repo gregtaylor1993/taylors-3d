@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Scene } from 'three';
+import { StatusOverlays } from '../src/status-overlays.js';
 
 const GET_LAYOUT = 'taylors3d/layout/get';
 const SET_LAYOUT = 'taylors3d/layout/set';
@@ -181,5 +183,68 @@ describe('card configuration and layout persistence', () => {
     expect(card._store).toBe(currentStore);
     expect(card._store.backend).toBe('shared');
     expect(card._loading).toBe(false);
+  });
+
+  it('undoes a grouped layout edit, saves the restored layout and leaves live HA states alone', async () => {
+    const callWS = vi.fn(async (message) => message.type === GET_LAYOUT ? { layout: layoutFor('office') } : {});
+    const card = cardWith('home', callWS);
+    await card._load();
+    const liveStates = { 'light.desk': { state: 'on' } };
+    card._hass.states = liveStates;
+    card.beginHistory('Move device');
+    card._commit({ ...card._layout, pins: { lamp: { x: 1, y: 1 } } });
+    card._commit({ ...card._layout, pins: { lamp: { x: 3, y: 1 } } });
+    card.endHistory();
+    expect(card._history.size).toBe(1);
+    card.undoEdit();
+    expect(card._layout.pins).toEqual({});
+    expect(card._hass.states).toBe(liveStates);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(callWS).toHaveBeenLastCalledWith({ type: SET_LAYOUT, key: 'home', layout: card._layout });
+    card.redoEdit();
+    expect(card._layout.pins.lamp.x).toBe(3);
+    card.undoEdit();
+    card._commit({ ...card._layout, hidden: ['lamp'] });
+    expect(card._history.canRedo).toBe(false);
+  });
+
+  it('keeps undo confined to the current layout after switching names', async () => {
+    const callWS = vi.fn(async (message) => ({ layout: layoutFor(message.key) }));
+    const card = cardWith('home', callWS);
+    await card._load();
+    card._commit({ ...card._layout, hidden: ['lamp'] });
+    expect(card._history.canUndo).toBe(true);
+    card.setConfig({ ...card._config, layout_key: 'holiday' });
+    await Promise.resolve();
+    await Promise.resolve();
+    card.undoEdit();
+    expect(card._layout.rooms[0].id).toBe('holiday');
+    expect(card._history.canUndo).toBe(false);
+    expect(card._store.key).toBe('holiday');
+  });
+
+  it('leaves the house renderer idle on unrelated HA updates when overlays are off', () => {
+    const card = cardWith('home', vi.fn());
+    card._layout = layoutFor('office');
+    card._floors = card._layout.floors;
+    card._roomList = [];
+    card._markers = [];
+    card._editing = false;
+    card._view = { dirty: false, floorElevation: () => 0 };
+    card._statusLegend = document.createElement('div');
+    card._statusOverlays = new StatusOverlays(new Scene(), {
+      onInvalidate: () => { card._view.dirty = true; },
+    });
+    try {
+      card._syncStatus();
+      expect(card._view.dirty).toBe(false);
+      for (let i = 0; i < 10; i++) {
+        card._hass = { ...card._hass, states: { 'sensor.unrelated': { state: String(i) } } };
+        card._syncStatus();
+      }
+      expect(card._view.dirty).toBe(false);
+      expect(card._statusOverlays.rooms.size).toBe(0);
+      expect(card._statusOverlays.alerts.size).toBe(0);
+    } finally { card._statusOverlays.dispose(); }
   });
 });

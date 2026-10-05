@@ -34,6 +34,7 @@ from .const import (
     STORAGE_VERSION,
 )
 from .model import ModelView
+from .services import async_register_services
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ class LayoutStore:
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """YAML `taylors3d:` is imported as a config entry."""
+    async_register_services(hass)
     if DOMAIN in config and not hass.config_entries.async_entries(DOMAIN):
         hass.async_create_task(
             hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_IMPORT}, data={})

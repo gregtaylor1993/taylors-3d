@@ -2022,6 +2022,7 @@ export class FloorplanView {
       this._raf = requestAnimationFrame(loop);
       if (this._tween) this._stepTween(performance.now());
       if (this.controls.update()) this.dirty = true; // damping still moving
+      if (this.onFrame?.(performance.now())) this.dirty = true;
       if (this.pivotMarker && !this.pivotMarker.position.equals(this.controls.target)) {
         this.pivotMarker.position.copy(this.controls.target);
         this.dirty = true;

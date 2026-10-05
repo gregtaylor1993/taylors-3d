@@ -26,6 +26,10 @@ position and map overlay.
 - `device-popup.js` — room/device panels; explicit quick controls and HA All controls fallback.
 - `minimap.js` — north-up SVG mini-map sharing room outlines and live marker/model-object positions.
 - `navigation.js` — bubble control ordering, room picking and camera focus math.
+- `history.js` — bounded session snapshots; root `_commit` records editable layout, EditMode groups gestures.
+- `preset-events.js` — authenticated integration-owned camera subscription, acknowledgements and optional return.
+- `status-overlays.js` — explicit room measurements/units/meters and located alerts; existing Three.js renderer. `setData()` returns whether visible data changed and invalidates only then. Unrelated HA updates must leave an idle model unrendered; identical data keeps an active pulse's phase.
+- `overlay-editor.js` — visual room sensor/alert bindings in Edit → Overlays.
 
 Review these, fix bugs, add unit tests (vitest) for placement + mower math.
 
@@ -74,6 +78,16 @@ View mode:
 - SVG mini-map: selected floor, devices and camera focus, click-to-focus; hidden during editing.
   The scene has its own container above the reserved bottom bar. Capture-phase object gestures
   must ignore `[data-taylors3d-ui]` and both popup elements, including their outside-dismiss events.
+- Room/device controls default to a right-hand panel. Wide containers reserve 332px beside the scene;
+  narrow containers keep the panel above the bubble bar. `control_panel: popup` uses the earlier popup.
+- `taylors3d.select_view` targets one registered open card. Browser-local `taylors3d.panel` (Edit → Views)
+  overrides shared `automation_panel`; `automation_card_id` distinguishes cards on one screen.
+  Saved `camera_mode` must survive resolveViews. Any pointer/manual navigation interrupts flight/return.
+- Overlays use saved `layout.room_overlays` / `layout.alert_bindings`, falling back to matching card options.
+  `_syncStatus` uses resolved room/floor visibility and actual elevation. `view.onFrame` animates pulses;
+  respect reduced motion and stop the render loop when disconnected. Never conflate W and Wh.
+- Undo/Redo changes layout/config snapshots, never hass state or services. Reload/key/GLB replacement
+  resets history. Cancel transient edit gestures and ignore async old-context upload/import results.
 - Lights that are on: additive radial glow on the floor, colour from rgb_color, strength from brightness.
 - Marker shows secondary sensor value (e.g. temperature) when the device has one.
 

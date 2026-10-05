@@ -12,3 +12,11 @@ CARD_URL_BASE = "/taylors3d_static"
 MODEL_URL = "/api/taylors3d/model"
 MODEL_DIR = "taylors3d/models"
 MAX_MODEL_BYTES = 100 * 1024 * 1024
+
+SERVICE_SELECT_VIEW = "select_view"
+EVENT_SELECT_VIEW = "taylors3d_select_view"
+WS_PRESET_RESULT = "taylors3d/preset/result"
+WS_PRESET_SUBSCRIBE = "taylors3d/preset/subscribe"
+DATA_PRESET_REQUESTS = "taylors3d_preset_requests"
+DATA_PRESET_TARGETS = "taylors3d_preset_targets"
+PRESET_RESPONSE_TIMEOUT = 10  # seconds to hear from the requested open dashboard

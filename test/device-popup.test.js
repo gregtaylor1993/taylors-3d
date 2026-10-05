@@ -260,6 +260,24 @@ describe('DevicePopup', () => {
     expect(popup.el.style.top).toBe('8px');
   });
 
+  it('can dock on the right, change placement while open and release reserved space on close', () => {
+    const changed = vi.fn();
+    popup.onVisibilityChange = changed;
+    popup.setPlacement('right');
+    popup.showRoom({ id: 'office', area_id: 'office' }, [light]);
+    expect(popup.el.dataset.placement).toBe('right');
+    expect(popup.el.dataset.taylors3dUi).toBe('');
+    expect(popup.el.style.left).toBe('');
+    expect(popup.el.style.top).toBe('');
+    expect(changed).toHaveBeenLastCalledWith(true, 'right');
+    popup.setPlacement('popup');
+    expect(popup.el.style.left).not.toBe('');
+    expect(changed).toHaveBeenLastCalledWith(true, 'popup');
+    popup.close();
+    expect(changed).toHaveBeenLastCalledWith(false, 'popup');
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
   it('dispose removes UI and global listeners, even after an in-flight action', async () => {
     const remove = vi.spyOn(window, 'removeEventListener');
     let resolve;

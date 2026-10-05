@@ -14,11 +14,14 @@ import { levelsFromFloorMap } from './bindings.js';
 import { outlineLoops, pickLoop, rasterGrid, outlineFromGrid } from './outline.js';
 import { snapPin, attachOffset, floorAtHeight } from './objects/logic.js';
 import { actionTarget } from './objects/popup.js';
+import { historyShortcut, isNativeEditing } from './history.js';
+import { OverlayEditor } from './overlay-editor.js';
 
 const DENSE_TRIS = 150000;
 
 const CLICK_SLOP_PX = 5;
 const SNAP_PX = 10; // snap radius never smaller than this many screen pixels
+const activeEditors = new Set(); // window shortcuts belong to the focused card
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
@@ -42,6 +45,8 @@ const fmt = (v) => (Math.round(v * 100) / 100).toString();
 export class EditMode {
   constructor(card) {
     this.card = card;
+    this._generation = 0;
+    this._overlayEditor = new OverlayEditor(card, () => this.render());
     this.tab = 'rooms';
     this.selectedRoom = null;
     this.selectedMarker = null;
@@ -63,15 +68,17 @@ export class EditMode {
     this.panel.addEventListener('change', (e) => this._onPanelChange(e));
     this.panel.addEventListener('input', (e) => this._onPanelInput(e));
     // rebuilding the panel under a dragged slider would drop the drag: hold renders until release
-    this.panel.addEventListener('pointerdown', (e) => { if (e.target.type === 'range') this._sliding = true; });
-    const release = () => {
-      if (!this._sliding) return;
-      this._sliding = false;
-      if (this._renderHeld) { this._renderHeld = false; this.render(); }
-    };
-    window.addEventListener('pointerup', release);
-    window.addEventListener('pointercancel', release);
-    this.panel.addEventListener('change', (e) => { if (e.target.type === 'range') release(); });
+    this.panel.addEventListener('pointerdown', (e) => {
+      if (e.target.type === 'range') { this._sliderKeyboard = false; this._beginSlider(); }
+    });
+    this._onSliderRelease = () => this._endSlider();
+    const sliderKey = (e) => e.target.type === 'range' && /^(Arrow(Left|Right|Up|Down)|Page(Up|Down)|Home|End)$/.test(e.key);
+    this.panel.addEventListener('keydown', (e) => {
+      if (sliderKey(e) && !e.ctrlKey && !e.metaKey && !e.altKey) { this._sliderKeyboard = true; this._beginSlider(); }
+    });
+    this.panel.addEventListener('keyup', (e) => { if (sliderKey(e)) this._endSlider(); });
+    this.panel.addEventListener('change', (e) => { if (e.target.type === 'range' && !this._sliderKeyboard) this._endSlider(); });
+    this.panel.addEventListener('focusout', (e) => { if (e.target.type === 'range') this._endSlider(); });
     this._onKey = (e) => this._onKeyDown(e);
     this._onWinMove = (e) => this._dragMove(e);
     this._onWinUp = (e) => this._dragEnd(e);
@@ -117,7 +124,7 @@ export class EditMode {
   }
 
   enter() {
-    window.addEventListener('keydown', this._onKey);
+    this.attach();
     this.view.setStems(true);
     this.render();
     this.refreshOverlay();
@@ -126,18 +133,24 @@ export class EditMode {
 
   // card detached while editing / attached again: window listeners off / on (state kept)
   detach() {
+    activeEditors.delete(this);
     window.removeEventListener('keydown', this._onKey);
+    window.removeEventListener('pointerup', this._onSliderRelease);
+    window.removeEventListener('pointercancel', this._onSliderRelease);
+    this._endSlider();
     this._endWindowDrag();
     this._closeMenu();
   }
 
   attach() {
+    activeEditors.add(this);
     window.addEventListener('keydown', this._onKey);
+    window.addEventListener('pointerup', this._onSliderRelease);
+    window.addEventListener('pointercancel', this._onSliderRelease);
   }
 
   exit() {
-    window.removeEventListener('keydown', this._onKey);
-    this._endWindowDrag();
+    this.detach();
     this.drawing = null;
     this.picking = null;
     this.doorMode = false;
@@ -176,6 +189,70 @@ export class EditMode {
     const el = this.panel.querySelector('.save-state');
     if (el) el.textContent = this._saveText();
     else this.render();
+  }
+
+  _beginSlider() {
+    if (this._sliding) return;
+    this._sliding = true;
+    this.card.beginHistory?.('Adjust slider');
+    this.updateHistoryState();
+  }
+
+  _endSlider() {
+    if (!this._sliding) return;
+    this._sliding = false;
+    this._sliderKeyboard = false;
+    this.card.endHistory?.();
+    this.updateHistoryState();
+    if (this._renderHeld) { this._renderHeld = false; this.render(); }
+  }
+
+  _historyBusy() {
+    return !!(this.drag || this._sliding || this.drawing || this.picking || this.pivoting || this.uploading);
+  }
+
+  // Key changes/reloads discard transient tools before another layout can receive their results.
+  cancelHistoryGestures() {
+    this._generation++;
+    this._sliding = false; this._sliderKeyboard = false; this._renderHeld = false;
+    this._endWindowDrag(false);
+    this.card._history?.cancel();
+    this.drawing = null; this.picking = null; this.calibrating = null;
+    this.doorMode = false; this.colorPick = false; this.overlayMove = false; this.pivoting = false;
+    this.selectedRoom = null; this.selectedMarker = null; this.vwPick = null; this.vwSel = null; this.modelPick = null;
+    this.uploading = null; this._panelNameDraft = null; this._overlayEditor.reset();
+    this._closeMenu();
+    this.view?.setOverlay?.({}); this.view?.highlightModelNode?.(null);
+    this.card._applyMarkerSelection?.(null);
+    if (this.card._stage && this.view?.setPivotMarker) this._syncStageClasses();
+    this.updateHistoryState();
+  }
+
+  _sameContext(generation, key) { return this._generation === generation && this.card._config.layout_key === key; }
+
+  // Update button state without rebuilding a focused input or a slider under the pointer.
+  updateHistoryState() {
+    const history = this.card._history;
+    for (const action of ['undo', 'redo']) {
+      const button = this.panel.querySelector(`[data-act="history-${action}"]`);
+      if (!button) continue;
+      button.disabled = this._historyBusy() || !history?.[action === 'undo' ? 'canUndo' : 'canRedo'];
+      const label = history?.[action === 'undo' ? 'undoLabel' : 'redoLabel'];
+      button.title = `${action === 'undo' ? 'Undo' : 'Redo'}${label ? ': ' + label : ''}`;
+      button.setAttribute('aria-label', button.title);
+    }
+  }
+
+  _runHistory(action) {
+    if (this._historyBusy()) return false;
+    const history = this.card._history;
+    const method = action === 'undo' ? 'undoEdit' : 'redoEdit';
+    if (!history?.[action === 'undo' ? 'canUndo' : 'canRedo'] || typeof this.card[method] !== 'function') return false;
+    this.message = null;
+    this.confirmDelete = false;
+    this.card[method]();
+    this.updateHistoryState();
+    return true;
   }
 
   // ---------- plan pointer events (from the card's canvas listeners) ----------
@@ -443,9 +520,28 @@ export class EditMode {
     this.render();
   }
 
+  _ownsHistoryShortcut(e) {
+    const path = e.composedPath?.() || [e.target];
+    const owner = [...activeEditors].find((edit) => path.includes(edit.panel) || path.includes(edit.card));
+    if (owner) return owner === this;
+    // A view-only card also owns its focused controls; another card's editor must not claim them.
+    if (path.some((node) => node?.localName === 'taylors3d-card')) return path.includes(this.card);
+    const focusPath = [];
+    for (let focus = document.activeElement; focus; focus = focus.shadowRoot?.activeElement) focusPath.push(focus);
+    const focused = [...activeEditors].find((edit) => focusPath.some((node) => node === edit.card || node === edit.panel || edit.panel.contains(node)));
+    if (focused) return focused === this;
+    if (focusPath.some((node) => node?.localName === 'taylors3d-card')) return focusPath.includes(this.card);
+    // Preserve the body shortcut for a single editor, without guessing between multiple open editors.
+    return activeEditors.size === 1 && activeEditors.has(this);
+  }
+
   _onKeyDown(e) {
-    const target = e.composedPath()[0];
-    if (target && /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName)) return;
+    const action = historyShortcut(e);
+    if (action) {
+      if (this._ownsHistoryShortcut(e) && this._runHistory(action)) e.preventDefault();
+      return;
+    }
+    if (isNativeEditing(e)) return;
     if (this.menu && e.key === 'Escape') {
       this._closeMenu();
       e.preventDefault();
@@ -486,6 +582,7 @@ export class EditMode {
     const picking = !!this.card._editing && (this.tab === 'model' || this.tab === 'views') && !!this.view.model;
     this.card._stage.classList.toggle('picking', picking);
     this.card._stage.classList.toggle('picking-views', picking && this.tab === 'views');
+    this.updateHistoryState();
   }
 
   // Overlay move tool: grab the pointer before OrbitControls sees it (capture phase on the stage).
@@ -520,6 +617,7 @@ export class EditMode {
 
   // live values in the Mower tab, without re-rendering the panel
   onStates() {
+    if (this.tab === 'overlays') { this._overlayEditor.updatePreviews(this.panel); return; }
     if (this.tab !== 'mower') return;
     const el = this.panel.querySelector('.mower-live');
     if (el) el.innerHTML = this._mowerLiveHtml();
@@ -655,14 +753,17 @@ export class EditMode {
 
   // ---------- drags (corners, midpoints, markers) ----------
   _startWindowDrag(drag) {
+    if (this.drag) this._endWindowDrag();
+    this.card.beginHistory?.(drag.kind === 'overlay' ? 'Move map' : drag.kind === 'marker' ? 'Move device' : 'Edit room shape');
     this.drag = drag;
+    this.updateHistoryState();
     this.view.setControlsEnabled(false);
     window.addEventListener('pointermove', this._onWinMove);
     window.addEventListener('pointerup', this._onWinUp);
     window.addEventListener('pointercancel', this._onWinUp);
   }
 
-  _endWindowDrag() {
+  _endWindowDrag(finishHistory = true) {
     const d = this.drag;
     if (d && d.raf) { cancelAnimationFrame(d.raf); d.raf = 0; }
     if (d && d.kind === 'marker' && d.attach !== undefined && this.view) this.view.highlightModelNode(null);
@@ -671,6 +772,8 @@ export class EditMode {
     window.removeEventListener('pointercancel', this._onWinUp);
     if (this.view) this.view.setControlsEnabled(true);
     this.drag = null;
+    if (d && finishHistory) this.card.endHistory?.();
+    this.updateHistoryState();
   }
 
   _vertexDown(e, roomId, index) {
@@ -795,26 +898,31 @@ export class EditMode {
       d.raf = 0;
       this._magnet(d);
     }
-    this._endWindowDrag();
-    if (!d || !d.moved) {
-      if (d && d.kind !== 'marker') this.refreshOverlay();
-      return;
-    }
-    if (d.kind === 'overlay') {
-      this.render();
-    } else if (d.kind === 'marker') {
-      const at = { x: d.pos.x, y: d.pos.y, z: d.pos.z, floor_id: d.pos.floorId };
-      const anchor = d.attach && this.card._objects && this.card._objects.anchorOf(d.attach);
-      if (anchor) {
-        const offset = attachOffset(anchor, d.pos, this.view.floorElevation(d.pos.floorId));
-        this.commit(E.attachPin(this.layout, d.id, d.attach, offset, at));
-      } else {
-        this.commit(E.setPin(this.layout, d.id, { ...at, on_model: this._onModel(d.id) }, { grid: !d.snapped }));
+    this._endWindowDrag(false);
+    try {
+      if (!d || !d.moved) {
+        if (d && d.kind !== 'marker') this.refreshOverlay();
+        return;
       }
-    } else if (d.preview) {
-      this.commit(E.upsertRoom(this.layout, d.preview));
-    } else {
-      this.refreshOverlay();
+      if (d.kind === 'overlay') {
+        this.render();
+      } else if (d.kind === 'marker') {
+        const at = { x: d.pos.x, y: d.pos.y, z: d.pos.z, floor_id: d.pos.floorId };
+        const anchor = d.attach && this.card._objects && this.card._objects.anchorOf(d.attach);
+        if (anchor) {
+          const offset = attachOffset(anchor, d.pos, this.view.floorElevation(d.pos.floorId));
+          this.commit(E.attachPin(this.layout, d.id, d.attach, offset, at));
+        } else {
+          this.commit(E.setPin(this.layout, d.id, { ...at, on_model: this._onModel(d.id) }, { grid: !d.snapped }));
+        }
+      } else if (d.preview) {
+        this.commit(E.upsertRoom(this.layout, d.preview));
+      } else {
+        this.refreshOverlay();
+      }
+    } finally {
+      if (d) this.card.endHistory?.();
+      this.updateHistoryState();
     }
   }
 
@@ -824,11 +932,13 @@ export class EditMode {
   }
 
   render() {
+    if (this._sliding) { this._renderHeld = true; this.updateHistoryState(); return; }
     // a rebuild must not move the panel under the user: keep scroll position and the focused control
     const oldBody = this.panel.querySelector('.tab-body');
     const scroll = oldBody && this._renderedTab === this.tab ? oldBody.scrollTop : 0;
     const active = this.panel.contains(this.panel.getRootNode().activeElement) ? this.panel.getRootNode().activeElement : null;
     const focusKey = active && active.dataset && active.dataset.field ? [active.dataset.field, active.dataset.id || ''] : null;
+    const historyFocus = active?.dataset?.act?.startsWith('history-') ? active.dataset.act : null;
     const report = this.panel.querySelector('details.report');
     if (report) this._reportOpen = report.open;
     const adv = this.panel.querySelector('details.advanced');
@@ -836,22 +946,33 @@ export class EditMode {
     this._renderedTab = this.tab;
     const hasObjects = this._hasObjects();
     if (this.tab === 'objects' && !hasObjects) this.tab = 'devices';
-    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ...(hasObjects ? [['objects', 'Objects']] : []), ['mower', 'Mower'], ['views', 'Views'], ['model', 'Model'], ['data', 'Data']];
+    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ...(hasObjects ? [['objects', 'Objects']] : []), ['overlays', 'Overlays'], ['mower', 'Mower'], ['views', 'Views'], ['model', 'Model'], ['data', 'Data']];
     const body = {
       rooms: () => this._roomsTab(), devices: () => this._devicesTab(), objects: () => this._objectsTab(), mower: () => this._mowerTab(), views: () => this._viewsTab(),
       model: () => this._modelTab(), data: () => this._dataTab(),
+      overlays: () => this._overlayEditor.render(),
     }[this.tab]();
     const msg = this.message ? `<div class="msg ${this.message.error ? 'error' : this.message.warn ? 'warn' : ''}">${esc(this.message.text)}</div>` : '';
     this.panel.innerHTML = `
       <div class="tabs">${tabs.map(([id, label]) => `<button data-act="tab" data-id="${id}" class="${this.tab === id ? 'on' : ''}">${label}</button>`).join('')}</div>
+      <div class="row history-controls" role="group" aria-label="Edit history" style="padding: 4px 12px">
+        <button data-act="history-undo" style="min-height: 44px" disabled>Undo</button>
+        <button data-act="history-redo" style="min-height: 44px" disabled>Redo</button>
+        <span class="dim" style="font-size: 11px">Ctrl / ⌘ Z</span>
+      </div>
       <div class="tab-body">${msg}${body}</div>
       <div class="foot"><span class="save-state">${this._saveText()}</span><span>${esc(this._backendLabel())}</span></div>`;
+    this.updateHistoryState();
     const newBody = this.panel.querySelector('.tab-body');
     if (newBody && scroll) newBody.scrollTop = scroll;
     if (focusKey) {
       const el = [...this.panel.querySelectorAll('[data-field]')]
         .find((x) => x.dataset.field === focusKey[0] && (x.dataset.id || '') === focusKey[1]);
       if (el) el.focus({ preventScroll: true });
+    } else if (historyFocus) {
+      const button = this.panel.querySelector(`[data-act="${historyFocus}"]`);
+      const target = button.disabled ? this.panel.querySelector('.history-controls button:not(:disabled)') : button;
+      target?.focus({ preventScroll: true });
     }
   }
 
@@ -1255,9 +1376,11 @@ export class EditMode {
 
   _viewsTab() {
     const card = this.card;
+    const screen = `<section class="box"><label>Screen name (this browser)<input data-field="screen-name" maxlength="128" style="min-height:44px" value="${esc(this._panelNameDraft ?? card._panelName ?? '')}" placeholder="${esc(card._config.automation_panel || 'e.g. kitchen-wall')}"></label>
+      <button data-act="save-screen-name" style="min-height:44px">Save screen name</button><p class="hint">Give each wall panel/browser a different name, e.g. kitchen-wall. This is saved only on this browser; your layout remains shared. Leave blank to use the card's screen name.</p></section>`;
     const views = card._views || [];
     const v = this._vwView();
-    if (!v) return '<p class="hint">No views yet.</p>';
+    if (!v) return screen + '<p class="hint">No views yet.</p>';
     const st = card._stateFor(v);
     const lv = (this.layout.views || {})[v.id] || {};
     const i = views.indexOf(v);
@@ -1265,7 +1388,7 @@ export class EditMode {
     const opts = views.map((x) => `<option value="${esc(x.id)}" ${x.id === v.id ? 'selected' : ''}>${esc(x.label)}${x.hidden ? ' (hidden)' : ''}</option>`).join('');
     const hideLabel = v.source === 'added' ? 'Delete view' : v.hidden ? 'Unhide' : 'Hide';
     const top = card._mode === 'top';
-    let out = `<p class="hint">Each view is a button on the card. Choose what it shows: click a part of the model, or use the eyes below.</p>
+    let out = screen + `<p class="hint">Each view is a button on the card. Choose what it shows: click a part of the model, or use the eyes below.</p>
       <label>View <select data-field="vw-view">${opts}</select></label>
       <label>Label <input data-field="vw-label" value="${esc(v.label)}"></label>
       <div class="row"><button data-act="vw-add">Add view</button>
@@ -1395,11 +1518,11 @@ export class EditMode {
       const camera_top = { center: [Math.round(point[0] * 100) / 100 + 0, Math.round(-point[2] * 100) / 100 + 0], zoom: cur.zoom };
       this.view.setTopCamera(camera_top);
       this.message = { text: `Top view of "${v.label}" now centres here.` };
-      card.saveViewPatch(v.id, { camera_top });
+      card.saveViewPatch(v.id, { camera_top, camera_mode: card._mode });
     } else {
       const camera = this.view.setPivot(point);
       this.message = { text: `Rotation centre of "${v.label}" set.` };
-      card.saveViewPatch(v.id, { camera });
+      card.saveViewPatch(v.id, { camera, camera_mode: card._mode });
     }
     this.render();
   }
@@ -1517,7 +1640,11 @@ export class EditMode {
       case 'vw-add': {
         const { id, n } = nextViewId([...card._views.map((x) => x.id), ...Object.keys(this.layout.views || {})]);
         // a copy of the current view: all its rules (model / generated base + saved), so it looks the same
-        const views = { ...(this.layout.views || {}), [id]: { added: true, label: `View ${n}`, rules: (v.rules || []).map((r) => ({ ...r })) } };
+        const camera = card._mode === 'top' ? { camera_top: this.view.getTopCamera() } : { camera: this.view.getCamera() };
+        const section = v.section || v.modelSection ? card.sectionPlaneNow?.(v) || v.section : null;
+        const views = { ...(this.layout.views || {}), [id]: { added: true, label: `View ${n}`, rules: (v.rules || []).map((r) => ({ ...r })),
+          floors: Array.isArray(v.floors) ? [...v.floors] : null,
+          ...(section ? { section: { normal: [...section.normal], constant: section.constant } } : {}), camera_mode: card._mode, ...camera } };
         this.vwSel = null;
         this.commit({ ...this.layout, views });
         after(() => card._setView(id));
@@ -1553,10 +1680,10 @@ export class EditMode {
         card.leaveSection();
         if (card._mode === 'top') {
           this.message = { text: `Saved the current top view as the start of "${v.label}".` };
-          card.saveViewPatch(v.id, { camera_top: this.view.getTopCamera() });
+          card.saveViewPatch(v.id, { camera_top: this.view.getTopCamera(), camera_mode: card._mode });
         } else {
           this.message = { text: `Saved the current camera as the start of "${v.label}".` };
-          card.saveViewPatch(v.id, { camera: this.view.getCamera() });
+          card.saveViewPatch(v.id, { camera: this.view.getCamera(), camera_mode: card._mode });
         }
         this.render();
         return true;
@@ -1581,7 +1708,7 @@ export class EditMode {
         return true;
       case 'vw-reset-cam':
       case 'vw-reset':
-        card.saveViewPatch(v.id, act === 'vw-reset' ? { rules: [], camera: null, camera_top: null }
+        card.saveViewPatch(v.id, act === 'vw-reset' ? { rules: [], camera: null, camera_top: null, camera_mode: null }
           : card._mode === 'top' ? { camera_top: null } : { camera: null });
         if (v.id === card._viewId) after(() => card._resetCamera());
         return true;
@@ -1682,6 +1809,7 @@ export class EditMode {
   }
 
   async _uploadModel(file) {
+    const generation = this._generation, key = this.card._config.layout_key;
     if (!/\.glb$/i.test(file.name)) {
       this.message = { text: 'Choose a .glb file (binary glTF). Export one with tools/export-glb.js.', error: true };
       this.render();
@@ -1695,27 +1823,33 @@ export class EditMode {
       body.append('file', file, file.name);
       const r = await this.hass.fetchWithAuth(this._modelApi(), { method: 'POST', body });
       const j = await r.json().catch(() => ({}));
+      if (!this._sameContext(generation, key)) return;
       if (!r.ok) throw new Error(j.message || 'Upload failed (HTTP ' + r.status + ')');
       const cur = this.layout.model || { position: [0, 0, 0], rotation: 0, scale: 1, opacity: 1 };
       this._freshModel = true;
       this.message = { text: `Uploaded ${j.name} (${(j.size / 1048576).toFixed(1)} MB).` };
       this.commit({ ...this.layout, model: { ...cur, version: j.version, name: j.name, size: j.size, uploaded: new Date().toISOString() } });
+      this.card.resetHistory?.(); // replaced GLB bytes cannot be restored by a configuration snapshot
     } catch (err) {
+      if (!this._sameContext(generation, key)) return;
       this._freshModel = false;
       this.message = { text: err.message, error: true };
     } finally {
-      this.uploading = null;
-      this.render();
+      if (this._sameContext(generation, key)) { this.uploading = null; this.render(); }
     }
   }
 
   async _removeModel() {
+    const generation = this._generation, key = this.card._config.layout_key;
     try {
       const r = await this.hass.fetchWithAuth(this._modelApi(), { method: 'DELETE' });
+      if (!this._sameContext(generation, key)) return;
       if (!r.ok && r.status !== 404) throw new Error('Delete failed (HTTP ' + r.status + ')');
       this.confirmModelDelete = false;
       this.commit({ ...this.layout, model: null });
+      this.card.resetHistory?.(); // deleting an asset is outside configuration undo
     } catch (err) {
+      if (!this._sameContext(generation, key)) return;
       this.message = { text: err.message, error: true };
     }
     this.render();
@@ -1859,11 +1993,23 @@ export class EditMode {
     const btn = e.target.closest('[data-act]');
     if (!btn || btn.disabled) return;
     const id = btn.dataset.id;
+    if (this._overlayEditor.onClick(btn.dataset.act, btn)) return;
     const sel = this.room(this.selectedRoom);
     this.message = null;
     // Views tab actions commit; the rebuild after the commit renders the panel once
     if (btn.dataset.act.startsWith('vw-') && this._viewsClick(btn.dataset.act, btn)) return;
     switch (btn.dataset.act) {
+      case 'save-screen-name': {
+        try {
+          const value = this.panel.querySelector('[data-field="screen-name"]')?.value || '';
+          this.card.setPanelName(value);
+          this._panelNameDraft = null;
+          this.message = { text: value.trim() ? 'Screen name saved on this browser.' : 'This browser now uses the card screen name.' };
+        } catch (error) { this.message = { text: error.message, error: true }; }
+        this.render(); return;
+      }
+      case 'history-undo': this._runHistory('undo'); return;
+      case 'history-redo': this._runHistory('redo'); return;
       case 'tab':
         if (id !== this.tab) {
           this.picking = null;
@@ -1998,6 +2144,7 @@ export class EditMode {
   _onPanelChange(e) {
     const el = e.target;
     const f = el.dataset.field;
+    if (this._overlayEditor.onChange(f, el)) return;
     const sel = this.room(this.selectedRoom);
     if (f && f.startsWith('vw-')) this._viewsChange(f, el);
     else if (f === 'room-area' && sel) this.commit(E.upsertRoom(this.layout, { ...sel, area_id: el.value }));
@@ -2100,14 +2247,18 @@ export class EditMode {
     } else if (f === 'import') {
       const file = el.files && el.files[0];
       el.value = ''; // picking the same file again must fire change again
-      if (file) file.text().then((text) => this._import(text));
+      const generation = this._generation, key = this.card._config.layout_key;
+      if (file) file.text().then((text) => { if (this._sameContext(generation, key)) this._import(text); })
+        .catch((error) => { if (this._sameContext(generation, key)) { this.message = { text: error.message, error: true }; this.render(); } });
     }
   }
 
   // sliders update the overlay live, without re-rendering the panel under the pointer
   _onPanelInput(e) {
     const el = e.target;
+    if (el.type === 'range') this._beginSlider();
     const f = el.dataset.field;
+    if (f === 'screen-name') { this._panelNameDraft = el.value; return; }
     if (f === 'vw-sec-pos') {
       const v = this._vwView();
       const label = this.panel.querySelector('[data-val="vw-sec-pos"]');

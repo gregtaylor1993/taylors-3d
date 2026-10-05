@@ -16,31 +16,54 @@ const check = (name, ok, detail = '') => {
 };
 
 async function settle(page, index = 0) {
+  await page.evaluate((i) => {
+    window.__navigationSettleProbes ||= {};
+    window.__navigationSettleProbes[i] = { startedAt: performance.now(), polls: 0, rafs: 0, stage: 'starting', samples: [] };
+  }, index);
   await page.waitForFunction(async (i) => {
     const c = document.querySelectorAll('taylors3d-card')[i];
     const v = c?._view;
-    if (!v || v._tween) return false;
-    const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    const probe = window.__navigationSettleProbes[i];
+    probe.polls++;
+    if (!v || v._tween) { probe.stage = !v ? 'waiting-view' : 'waiting-tween'; return false; }
+    const frame = () => new Promise((resolve) => requestAnimationFrame(() => { probe.rafs++; probe.lastRafAt = performance.now(); resolve(); }));
     const snapshot = () => [...v.camera.position.toArray(), ...v.controls.target.toArray(), v.camera.zoom || 1];
     const still = (a, b) => a.every((value, j) => Math.abs(value - b[j]) < 1e-5);
+    const sample = (stage, values) => {
+      const now = performance.now();
+      probe.stage = stage;
+      probe.samples.push({ stage, elapsedMs: Math.round(now - probe.startedAt), values,
+        finite: values.every(Number.isFinite), renderedFrames: v.stats.frames, tween: !!v._tween });
+      // Keep only the latest eight snapshots; diagnostics never grow with the polling loop.
+      if (probe.samples.length > 8) probe.samples.shift();
+    };
     // OrbitControls damping can keep panning after a camera tween finishes. Wait for
     // actual camera/target stability across rendered frames, not a fixed wall-clock sleep.
     const before = snapshot();
+    sample('waiting-frame-1', before);
     await frame();
-    if (v._tween) return false;
+    if (v._tween) { probe.stage = 'waiting-tween-after-frame'; return false; }
     const next = snapshot();
+    sample('waiting-frame-2', next);
     await frame();
-    return !v._tween && still(before, next) && still(next, snapshot());
+    const after = snapshot();
+    sample('checking-stability', after);
+    probe.maxChange = Math.max(...before.map((value, j) => Math.abs(value - next[j])), ...next.map((value, j) => Math.abs(value - after[j])));
+    return !v._tween && still(before, next) && still(next, after);
   }, { timeout: 7000, polling: 'raf' }, index).catch(async (error) => {
     const diagnostic = await page.evaluate((i) => {
       const c = document.querySelectorAll('taylors3d-card')[i], v = c?._view;
       return { mode: c?._mode, viewMode: v?.mode, raf: v?._raf, dirty: v?.dirty,
         tween: !!v?._tween, tweenAge: v?._tween ? performance.now() - v._tween.t0 : null,
         hidden: document.hidden, frame: v?.stats?.frames, size: v?.size,
-        dampingPan: v?.controls?._panOffset?.toArray() };
+        dampingPan: v?.controls?._panOffset?.toArray(), camera: v?.camera.position.toArray(), target: v?.controls.target.toArray(),
+        zoom: v?.camera.zoom, programs: v?.renderer.info.programs.length,
+        elapsedMs: Math.round(performance.now() - window.__navigationSettleProbes[i].startedAt),
+        probe: window.__navigationSettleProbes[i] };
     }, index);
     throw new Error(`${error.message}; camera diagnostics: ${JSON.stringify(diagnostic)}`, { cause: error });
   });
+  await page.evaluate((i) => { delete window.__navigationSettleProbes[i]; }, index);
 }
 
 async function clickElement(page, selector, index = 0) {

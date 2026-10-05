@@ -1,0 +1,49 @@
+select_view:
+  name: Select camera preset
+  description: Select a saved view on one open Taylor's 3D card. Specify its panel or card ID, or both. Unavailable or duplicate card targets and unknown presets report an action error.
+  fields:
+    layout_key:
+      name: Layout key
+      description: The layout_key configured on the intended card.
+      required: true
+      example: default
+      selector:
+        text:
+    preset:
+      name: Preset
+      description: The saved view ID or its exact, unique name.
+      required: true
+      example: Front door
+      selector:
+        text:
+    panel:
+      name: Panel
+      description: The panel name saved for this browser in the card's Views tab, or automation_panel in its configuration. Provide this or a card ID.
+      example: hallway
+      selector:
+        text:
+    card_id:
+      name: Card ID
+      description: The automation_card_id configured on the card. Provide this or a panel.
+      example: wall-tablet
+      selector:
+        text:
+    mode:
+      name: Camera mode
+      description: Optional override. Otherwise use the preset's saved mode, or the card's current mode.
+      selector:
+        select:
+          translation_key: camera_mode
+          options:
+            - 3d
+            - top
+    return_after:
+      name: Return after
+      description: Optional seconds before restoring the previous view and camera. Zero or omitted leaves the selected preset in place. Touching the card or another matching request cancels the return.
+      selector:
+        number:
+          min: 0
+          max: 86400
+          step: 1
+          unit_of_measurement: seconds
+          mode: box

@@ -19,14 +19,19 @@ const STYLE = `
     touch-action: manipulation; user-select: text; }
   .taylors3d-device-popup .t3d-popup-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
   .taylors3d-device-popup h3 { margin: 0; flex: 1; font-size: 16px; overflow-wrap: anywhere; }
-  .taylors3d-device-popup button { font: inherit; border-radius: 10px; cursor: pointer; min-height: 40px;
+  .taylors3d-device-popup button { font: inherit; border-radius: 10px; cursor: pointer; min-height: 44px;
     border: 1px solid var(--divider-color, #ddd);
     background: var(--secondary-background-color, var(--ha-card-background, var(--card-background-color, #f5f5f5)));
     color: var(--primary-text-color, #212121); padding: 6px 10px; }
   .taylors3d-device-popup button:focus-visible, .taylors3d-device-popup input:focus-visible {
     outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
   .taylors3d-device-popup button:disabled { opacity: .5; cursor: default; }
-  .taylors3d-device-popup .t3d-popup-close { min-width: 40px; font-size: 20px; }
+  .taylors3d-device-popup .t3d-popup-close { min-width: 44px; font-size: 20px; }
+  .taylors3d-device-popup[data-placement="right"] { left: auto; right: 8px; top: 8px;
+    bottom: calc(var(--taylors3d-bar-height, 0px) + 8px); width: 316px; max-height: none;
+    border-radius: 16px; box-shadow: 0 3px 18px rgba(0,0,0,.16); }
+  .taylors3d-device-popup .t3d-popup-kind { margin: 0 0 4px; font-size: 12px;
+    color: var(--secondary-text-color, #727272); }
   .taylors3d-device-popup .t3d-entity { border-top: 1px solid var(--divider-color, #ddd); padding: 10px 0; }
   .taylors3d-device-popup .t3d-entity-name { font-weight: 600; overflow-wrap: anywhere; }
   .taylors3d-device-popup .t3d-entity-value { margin: 4px 0 8px; color: var(--secondary-text-color, #727272); }
@@ -89,8 +94,10 @@ function button(text, action, entityId) {
 }
 
 export class DevicePopup {
-  constructor(root, { onAction, onMoreInfo } = {}) {
+  constructor(root, { onAction, onMoreInfo, placement = 'popup', onVisibilityChange } = {}) {
     this.root = root;
+    this.placement = placement === 'right' ? 'right' : 'popup';
+    this.onVisibilityChange = onVisibilityChange || (() => {});
     this.onAction = onAction || ((domain, service, data) => this.hass.callService(domain, service, data));
     this.onMoreInfo = onMoreInfo || ((entityId) => root.dispatchEvent(new CustomEvent('hass-more-info', {
       detail: { entityId }, bubbles: true, composed: true,
@@ -136,6 +143,8 @@ export class DevicePopup {
     this._session++;
     this._position = position;
     const el = element('div', 'taylors3d-device-popup');
+    el.dataset.placement = this.placement;
+    el.dataset.taylors3dUi = '';
     el.setAttribute('role', 'dialog');
     el.setAttribute('aria-label', selection.title);
     el.setAttribute('aria-modal', 'false');
@@ -145,7 +154,11 @@ export class DevicePopup {
     const close = button('×', 'close');
     close.className = 't3d-popup-close';
     close.setAttribute('aria-label', 'Close controls');
-    head.append(element('h3', '', selection.title), close);
+    const heading = element('div');
+    heading.style.flex = '1';
+    heading.append(element('p', 't3d-popup-kind', selection.kind === 'room' ? 'Room controls' : 'Device controls'),
+      element('h3', '', selection.title));
+    head.append(heading, close);
     this._body = element('div', 't3d-popup-body');
     el.append(style, head, this._body);
     // Keep popup interactions out of orbiting, room selection and marker gestures.
@@ -157,6 +170,7 @@ export class DevicePopup {
     el.addEventListener('focusout', (e) => { if (e.target.type === 'range') { e.target.dataset.editing = ''; this._refreshRows(); } });
     this.el = el;
     this.root.append(el);
+    this.onVisibilityChange(true, this.placement);
     window.addEventListener('pointerdown', this._onOutside, true);
     window.addEventListener('keydown', this._onKey);
     this._refreshRows();
@@ -317,6 +331,7 @@ export class DevicePopup {
 
   reposition(position = this._position) {
     if (!this.el) return;
+    if (this.placement === 'right') return;
     this._position = position;
     const box = this.root.getBoundingClientRect();
     const point = Array.isArray(position) ? position : position && [position.clientX, position.clientY];
@@ -335,6 +350,7 @@ export class DevicePopup {
     window.removeEventListener('keydown', this._onKey);
     if (this.el) this.el.remove();
     this.el = null;
+    if (hadPopup) this.onVisibilityChange(false, this.placement);
     this._body = null;
     this._empty = null;
     this._selection = null;
@@ -348,4 +364,14 @@ export class DevicePopup {
   }
 
   dispose() { this.close({ restoreFocus: false }); }
+
+  setPlacement(placement) {
+    this.placement = placement === 'right' ? 'right' : 'popup';
+    if (!this.el) return;
+    this.el.dataset.placement = this.placement;
+    this.el.style.left = '';
+    this.el.style.top = '';
+    this.onVisibilityChange(true, this.placement);
+    this.reposition();
+  }
 }

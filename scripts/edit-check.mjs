@@ -70,12 +70,19 @@ const dotOffset = () => ev(`(() => { const c = ${card}, v = c._view; const r = v
     worst = Math.max(worst, Math.hypot(d.x + d.width / 2 - sx, d.y + d.height / 2 - sy)); n++;
   }
   return { worst, n }; })()`);
-// camera at rest (no tween, no damping) and rendered: two frames in a row with the same camera
+// Camera/target/zoom must settle before projecting input coordinates. Resizing the edit
+// panel can reframe the top camera after it has changed mode, even with no tween.
 const settle = async () => {
-  await page.waitForFunction(`!${card}._view._tween`, { timeout: 5000 }).catch(() => {});
-  await page.waitForFunction(`(async () => { const v = ${card}._view, frame = () => new Promise((r) => requestAnimationFrame(r));
-    const sig = () => v.camera.matrixWorld.elements.map((x) => x.toFixed(6)).join();
-    await frame(); const a = sig(); await frame(); await frame(); return a === sig(); })()`, { timeout: 5000, polling: 50 }).catch(() => {});
+  await page.waitForFunction(`(async () => {
+    const v = ${card}._view, frame = () => new Promise((r) => requestAnimationFrame(r));
+    const snapshot = () => [...v.camera.position.toArray(), ...v.controls.target.toArray(), v.camera.zoom || 1, v.size.w, v.size.h];
+    const same = (a, b) => a.every((x, i) => Math.abs(x - b[i]) < 1e-5);
+    if (v._tween) return false;
+    const before = snapshot(); await frame();
+    if (v._tween) return false;
+    const next = snapshot(); await frame();
+    return !v._tween && same(before, next) && same(next, snapshot());
+  })()`, { timeout: 7000, polling: 'raf' });
 };
 // stems: [stem count, visible stem discs, visible markers]
 const stems = () => ev(`(() => { const v = ${card}._view; return [v.stems.size, [...v.stems.values()].filter((s) => s.disc.visible).length,
@@ -109,8 +116,9 @@ try {
 
   // draw the garage west of the bedroom, sharing its wall (x = 0)
   check('start drawing', await rowButton('Garage', 'Draw'));
+  await settle();
   await ev(`(() => { const v = ${card}._view; v.ortho.zoom = 0.75; v.ortho.updateProjectionMatrix(); v.dirty = true; })()`);
-  await sleep(200);
+  await settle();
   check('switched to top view', (await ev(`${card}._mode`)) === 'top');
   await click(-4.02, 5.03);
   await click(0.08, 5.06); // within 25 cm of the bedroom corner (0, 5): snaps onto it
@@ -126,7 +134,9 @@ try {
   check('corners snapped to shared wall', garage && JSON.stringify(garage.polygon) === JSON.stringify([[-4, 5], [0, 5], [0, 9], [-4, 9]]));
   check('garage stored without floor_id (area floor)', garage && garage.floor_id === undefined);
   check('room selected after drawing', (await ev(`${card}._edit.selectedRoom`)) === garage?.id);
-  await sleep(800);
+  // Saving is debounced; wait for the actual shared-store acknowledgement rather
+  // than assuming a timer has run while software WebGL is busy rendering.
+  await page.waitForFunction((rooms) => JSON.stringify(window.__savedLayout?.rooms) === JSON.stringify(rooms), { timeout: 8000 }, l.rooms);
   check('layout saved through storage', JSON.stringify((await saved())?.rooms) === JSON.stringify(l.rooms));
 
   // drag the north-west corner 1 m further west

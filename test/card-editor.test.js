@@ -44,6 +44,17 @@ describe('card editor', () => {
     expect(mod.cleanConfig({ merge: false })).toEqual({ merge: false });
   });
 
+  it('offers the right-hand panel and converts visual model positions into the existing format', () => {
+    const fields = mod.SCHEMA.flatMap((field) => field.schema || [field]);
+    const panel = fields.find((field) => field.name === 'control_panel');
+    expect(panel.selector.select.options.map((option) => option.value)).toEqual(['right', 'popup']);
+    expect(mod.cleanConfig({ control_panel: 'right' })).toEqual({});
+    expect(mod.cleanConfig({ control_panel: 'popup', automation_panel: 'kitchen-wall', model: '/local/home.glb',
+      model_position_x: '1.25', model_position_y: 2, model_position_z: -3 }))
+      .toEqual({ control_panel: 'popup', automation_panel: 'kitchen-wall', model: '/local/home.glb', model_position: [1.25, 2, -3] });
+    expect(mod.cleanConfig({ model_position_x: 0, model_position_y: 0, model_position_z: 0 })).toEqual({});
+  });
+
   it('renders ha-form with defaults and emits cleaned config', () => {
     const el = document.createElement('taylors3d-card-editor');
     document.body.append(el);

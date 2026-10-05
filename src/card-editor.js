@@ -6,7 +6,7 @@ const DEFAULTS = {
   layout_key: 'default', height: '520px', group_by: 'device', wall_height: 1.0, view: '3d', room_labels: 'size', zoom_to: 'center',
   occlusion: true, lights: 'auto', merge: true, sky_bodies: true,
   show_bubble_bar: true, bubble_bar_controls: BUBBLE_CONTROLS, mini_map: true, mini_map_size: 180,
-  mini_map_position: 'top-right', device_tap_action: 'popup',
+  mini_map_position: 'top-right', device_tap_action: 'popup', control_panel: 'right',
 };
 
 export const SCHEMA = [
@@ -27,6 +27,9 @@ export const SCHEMA = [
       { name: 'device_tap_action', selector: { select: { mode: 'dropdown', options: [
         { value: 'popup', label: 'Open device controls' }, { value: 'toggle', label: 'Quick toggle' },
       ] } } },
+      { name: 'control_panel', selector: { select: { mode: 'dropdown', options: [
+        { value: 'right', label: 'Right-hand panel' }, { value: 'popup', label: 'Popup beside the device' },
+      ] } } },
     ],
   },
   {
@@ -45,10 +48,19 @@ export const SCHEMA = [
   { name: 'sky_bodies', selector: { boolean: {} } },
   { name: 'layout_key', selector: { text: {} } },
   {
+    type: 'expandable', name: '', title: 'Automation target', schema: [
+      { name: 'automation_panel', selector: { text: {} } },
+      { name: 'automation_card_id', selector: { text: {} } },
+    ],
+  },
+  {
     type: 'expandable', name: '', title: 'Model from a URL (instead of uploading in the card)', schema: [
       { name: 'model', selector: { text: {} } },
       {
         type: 'grid', name: '', schema: [
+          { name: 'model_position_x', selector: { number: { step: 0.01, mode: 'box', unit_of_measurement: 'm' } } },
+          { name: 'model_position_y', selector: { number: { step: 0.01, mode: 'box', unit_of_measurement: 'm' } } },
+          { name: 'model_position_z', selector: { number: { step: 0.01, mode: 'box', unit_of_measurement: 'm' } } },
           { name: 'model_rotation', selector: { number: { min: -180, max: 180, step: 0.5, mode: 'box', unit_of_measurement: '°' } } },
           { name: 'model_scale', selector: { number: { min: 0.0001, step: 0.0001, mode: 'box' } } },
           { name: 'model_opacity', selector: { number: { min: 0.1, max: 1, step: 0.05, mode: 'slider' } } },
@@ -81,6 +93,12 @@ const LABELS = {
   mini_map_size: 'Mini-map size',
   mini_map_position: 'Mini-map corner',
   device_tap_action: 'When you tap a device',
+  control_panel: 'Room and device controls',
+  automation_panel: 'Panel name',
+  automation_card_id: 'Card name (optional)',
+  model_position_x: 'Model east position',
+  model_position_y: 'Model height position',
+  model_position_z: 'Model south position',
 };
 
 const HELPERS = {
@@ -100,11 +118,23 @@ const HELPERS = {
   mini_map_size: 'Width in pixels, from 120 to 260.',
   mini_map_position: 'Place the mini-map in the top right or top left of the 3D view.',
   device_tap_action: 'Open device controls shows a popup first. All controls opens Home Assistant’s own options for that entity. Quick toggle changes supported devices with one tap; hold opens their controls.',
+  control_panel: 'A right-hand panel leaves the house visible beside the controls on wider screens.',
+  automation_panel: "A name such as kitchen-wall. Use the same panel name in the Taylor's 3D Select camera preset action. Give different screens different names.",
+  automation_card_id: "Use a unique name if this panel has more than one Taylor's 3D card.",
 };
 
 // Drop empty values and defaults so the YAML stays short.
 export function cleanConfig(config) {
   const out = {};
+  const positionFields = ['model_position_x', 'model_position_y', 'model_position_z'];
+  if (positionFields.some((key) => key in config)) {
+    config = { ...config, model_position: positionFields.map((key, i) => {
+      const value = config[key] ?? config.model_position?.[i] ?? 0;
+      return Number.isFinite(Number(value)) ? Number(value) : 0;
+    }) };
+    for (const key of positionFields) delete config[key];
+    if (config.model_position.every((value) => value === 0)) delete config.model_position;
+  }
   for (const [k, value] of Object.entries(config)) {
     let v = value;
     if (v === undefined || v === null || v === '') continue;
@@ -114,6 +144,7 @@ export function cleanConfig(config) {
     }
     if (k === 'mini_map_position' && !['top-right', 'top-left'].includes(v)) v = DEFAULTS.mini_map_position;
     if (k === 'device_tap_action' && !['popup', 'toggle'].includes(v)) v = DEFAULTS.device_tap_action;
+    if (k === 'control_panel' && !['right', 'popup'].includes(v)) v = DEFAULTS.control_panel;
     if (['show_bubble_bar', 'mini_map'].includes(k) && typeof v !== 'boolean') v = DEFAULTS[k];
     if (k === 'bubble_bar_controls') {
       v = Array.isArray(v) ? [...new Set(v.filter((id) => BUBBLE_CONTROLS.includes(id)))] : BUBBLE_CONTROLS;
@@ -221,7 +252,9 @@ export class Taylors3dCardEditor extends HTMLElement {
     this._form.hass = this._hass;
     this._form.schema = SCHEMA;
     const data = { ...DEFAULTS, ...cleanConfig(this._config) };
-    this._form.data = { ...data, bubble_bar_controls: [...data.bubble_bar_controls] };
+    this._form.data = { ...data, bubble_bar_controls: [...data.bubble_bar_controls],
+      model_position_x: data.model_position?.[0] ?? 0, model_position_y: data.model_position?.[1] ?? 0,
+      model_position_z: data.model_position?.[2] ?? 0 };
     this._renderControlOrder(data);
   }
 }

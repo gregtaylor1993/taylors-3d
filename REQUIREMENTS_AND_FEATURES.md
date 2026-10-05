@@ -18,7 +18,7 @@ Every idea has a permanent number, such as **F01**, so we can discuss it without
 | Testing | Implemented, with checks still to complete. |
 | Done | Meets its completion checklist, with evidence recorded. |
 
-Taylor chose the first group: **bubble bar, room/device popups and 2D mini-map**. F18–F21 have a first implementation and are **Testing**, including checks against the actual Home Assistant/wall panel still to do. The other requested additions remain **Planned**. Existing foundations are listed separately; they do not mean the complete requested feature is finished.
+Taylor chose the first group: **bubble bar, room/device popups and 2D mini-map**. F18–F21 have a first implementation and are **Testing**, including checks against the actual Home Assistant/wall panel still to do. The next pass adds right-hand controls, editing history, targeted camera automations and room measurements/alerts. Other requested additions remain visible below. Existing foundations do not mean the complete requested feature is finished.
 
 For each implementation, update its status, record the changed behavior, link its commit or pull request, and record the checks performed. Keep unfinished parts visible instead of marking a whole feature Done early.
 
@@ -26,15 +26,15 @@ For each implementation, update its status, record the changed behavior, link it
 
 | ID | Feature | Existing foundation | Status |
 |---|---|---|---|
-| F01 | Named camera presets and automation-triggered flights | Named saved 3D/top views and smooth camera moves | Planned |
-| F02 | Complete visual configuration | Visual card editor and in-card edit tabs | Planned |
-| F03 | General undo and redo | Undo the last point while drawing only | Planned |
-| F04 | Full dashboard backup and restore | Layout JSON import/export | Planned |
-| F05 | Temperature, power and energy views | Sensor labels and climate object state | Planned |
+| F01 | Named camera presets and automation-triggered flights | Named saved 3D/top views and smooth camera moves | Testing |
+| F02 | Complete visual configuration | Visual card editor and in-card edit tabs; new overlay/screen controls | In progress |
+| F03 | General undo and redo | General session history and grouped gestures | Testing |
+| F04 | Full dashboard backup and restore | Layout JSON import/export | Needs input |
+| F05 | Temperature, power and energy views | Sensor readings, conversion, floor overlays and visual bindings | Testing |
 | F06 | Security doors/windows and animated doors | Contact/lock markers and room door points | Planned |
 | F07 | Camera coverage cones and live-feed popups | Camera markers and HA more-info | Planned |
 | F08 | Presence: people/devices in rooms | Motion/occupancy markers | Planned |
-| F09 | Alert pulses at the affected location | Generic active sensor markers | Planned |
+| F09 | Alert pulses at the affected location | Located, labelled smoke/leak/unlocked/custom alerts | Testing |
 | F10 | Actual sun plus rain, clouds and snow | Automatic sun/day/night and moon already exist | Planned |
 | F11 | Hue colour/brightness lighting the rooms | Real coloured lamps and a bounded light pool | Planned |
 | F12 | Scene previews | HA device controls; no scene preview | Planned |
@@ -50,7 +50,7 @@ For each implementation, update its status, record the changed behavior, link it
 | F22 | Cars appearing on the drive | EV charger status; no vehicle detection/model | Planned |
 | F23 | Robot vacuums moving while running | Vacuum markers and reusable mower tracking math | Planned |
 | F24 | Horizontal split floors and vertical layers | Individual floors, All and section views | Planned |
-| F25 | Translations, preview, screenshots and bundle checks | English integration strings, mock HA, tests and CI | Planned |
+| F25 | Translations, preview, screenshots and bundle checks | English service strings, mock HA, screenshots and source/bundle gates | In progress |
 
 ## Proposed build order
 
@@ -67,7 +67,7 @@ The phases group related work so each step can be used and tested before the nex
 | 6 — model presentation | F14 cut-away, F15 furniture, F16 baked shadows, F24 split floors | Adds the more demanding model and rendering work. |
 | Throughout | F17 HA integration and F25 accessibility/translations/demo/tests | Each feature should work well with HA and remain testable. |
 
-Taylor confirmed Phase 1 first on 4 October 2026. Later phases remain a proposed order and can change as we learn from the actual house and devices.
+Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develops safe editing, automation and measurement foundations alongside right-hand controls. The remaining phase order can change as we learn from the actual house and devices.
 
 ## Detailed requirements
 
@@ -78,6 +78,8 @@ Taylor confirmed Phase 1 first on 4 October 2026. Later phases remain a proposed
 **Already present:** named views, saved 3D camera position/target, separate Top camera position/zoom, and smooth transitions. The missing part is automation control and targeting the intended display.
 
 **Complete when:** presets can be created, renamed, reordered, saved and selected visually; they survive reload; an automation selects a named preset on a chosen panel/card; the correct floor and 3D/Top mode are selected; touch interrupts the camera flight. Invalid preset/target requests have a clear result. Provide a simple HA automation example. Agree whether the view should return automatically after a doorbell event and how competing alerts are handled.
+
+**Current implementation:** `taylors3d.select_view` targets one registered open card by shared layout plus browser-local screen name and/or card ID. No match or duplicate targets fail clearly. Saved camera mode reaches the resolved preset. Optional `return_after` restores the exact earlier camera; omitted/zero stays at the selected preset. New requests supersede the earlier return; touch/manual navigation cancels it. Authenticated non-admin panels use an integration-owned subscription. See the [controls guide](docs/FEATURES-GUIDE.md). Actual doorbell/panel testing remains.
 
 ### F02 — complete configuration without YAML
 
@@ -95,11 +97,15 @@ Taylor confirmed Phase 1 first on 4 October 2026. Later phases remain a proposed
 
 **Complete when:** room geometry, device/furniture movement, bindings, view changes and visual settings can be undone and redone. One drag or slider gesture counts as one edit. A new edit after Undo clears the redo branch. Buttons and keyboard shortcuts work, and save failures are visible. Undo changes the dashboard's configuration; it must not reverse real device actions or live sensor updates. Define history limits and behavior after import/reload before implementation.
 
+**Current implementation:** defensive session snapshots, 100 edits / 8 MiB, grouped drags and pointer/keyboard sliders, Undo/Redo buttons and shortcuts, redo-branch clearing, and normal persistence/error state. Reload/key changes reset history; importing editable layout JSON is one edit. Replacing/deleting GLB bytes resets history because the server currently stores one model file; asset recovery belongs to F04. Furniture edits become covered when F15 exists. Live HA states/actions are excluded. Actual household editing and external Lovelace settings persistence still need verification.
+
 ### F04 — full dashboard backup and restore
 
 **Want:** export and import the complete setup so the layout can be backed up and restored.
 
 **Already present:** layout JSON export/import, including views, bindings and model metadata. It does not include GLB bytes, every Lovelace card option or an entire HA dashboard.
+
+**Pending scope question:** Taylor's 3D settings/layout/model assets, the entire HA dashboard including other cards, or both. Work depending on this decision has not started.
 
 **Complete when:** the agreed backup scope includes card settings, layout, views/presets, entity/area mappings, furniture and required model/assets. A restore preview shows what will change and which entities/areas/assets are missing. Restoring into a fresh setup reproduces the saved result, and the existing setup can be recovered if an import is rejected. Backup format/version and migration are documented.
 
@@ -114,6 +120,8 @@ Taylor confirmed Phase 1 first on 4 October 2026. Later phases remain a proposed
 **Complete when:** the user chooses an overlay and its sensor bindings visually; rooms/devices update with HA values; a legend shows the scale and units; missing/unavailable readings have an explicit appearance. Temperature aggregation is configurable, and room power totals avoid counting the same circuit/device twice. Keep instantaneous power (W/kW) separate from accumulated energy (Wh/kWh and a chosen period). Labels make the information understandable without relying only on colour.
 
 **Needs:** actual temperature/power/energy entities and confirmed room outlines. A model supporting outlines does not prove Taylor's house model already contains them.
+
+**Current implementation:** visual Overlays tab, explicit room sensors/aggregation, C/F/K and W/kW or Wh/kWh conversion, matching energy periods, fixed/automatic scale, accessible legend/readings and grey missing data. Multi-meter sums require separate-load confirmation or explicit non-overlapping circuit groups. Partial/conflicting data withholds a combined total. Resolved floor visibility/elevation works for drawn rooms and tagged GLBs. Actual house data and panel performance remain to test.
 
 ### F06 — security doors, windows and door animation
 
@@ -154,6 +162,8 @@ Taylor confirmed Phase 1 first on 4 October 2026. Later phases remain a proposed
 **Complete when:** alert entities, trigger states and locations are configurable; each alert has a clear icon/label; the highlight follows current state and clears according to the chosen rule. Multiple alerts can coexist. Unavailable data is distinguished from a cleared alert. Reduced-motion mode uses a static highlight rather than a pulse. Doorbell/security alerts can optionally select a preset through F01.
 
 **Needs:** Taylor does not currently expect the FireAngel setup to provide HA data. Check the exact hardware/entities rather than declaring the whole brand unsupported; available Zigbee smoke/leak entities can be mapped when present.
+
+**Current implementation:** visual smoke/leak/unlocked/custom-state binding with room/device positions, trigger/clear rules and optional browser-session latch. Multiple labelled rings follow live data; missing/unavailable states remain distinct. Acknowledge clears a latch only once the source stops triggering; reloading starts fresh. Reduced motion gives a static highlight; editing/detaching stops animations. Camera action can be added to the same HA automation using F01; real alarm/panel validation remains.
 
 ### F10 — actual sun and weather
 
@@ -307,6 +317,8 @@ Navigation-only configuration changes preserve the selected viewing mode, tempor
 
 **Complete when:** new and existing card UI can be translated with sensible fallback; preview scenarios cover the new features without needing real household devices; screenshots can be recreated; relevant automated checks protect behavior. Release assets contain the current source's bundle, and the integration's frontend copy matches the generated `dist` file. Define the stale-bundle check around build/release contents rather than demanding a Git diff of ignored files. Keep local development instructions clear for Windows as well as macOS/Linux.
 
+**Current implementation:** new right-panel/preset/overlay browser suites and screenshots, English service translations, and `npm run check:bundle`. That command recompiles current source in memory and checks both distributed copies; CI and release packaging fail if either copy is missing or stale. Full card UI translation work remains.
+
 ## Baseline work to resolve
 
 ### B01 — distant terrain camera range
@@ -376,6 +388,7 @@ A feature is Done only after its agreed behavior works, it persists where approp
 | 2026-10-04 | Model fixture correction | Exposed the lamp with a closer fixture camera and required a real uncovered canvas pixel. All 15 focused magnetic checks pass, with unchanged tolerances and zero browser errors. App code and navigation controls are unchanged by this correction. Included in the final successful full CI. | `ec2f581` |
 | 2026-10-04 | Popup and room-test polish | Fixed theme background fallback and confirmed enabled-button contrast in both themes. The complete navigation suite, stricter GLB room taps and all 20 popup unit tests pass. Screenshots updated. | `9de9626` |
 | 2026-10-04 | Automated validation | Complete GitHub CI and HACS validation pass. Full model suite passed on the first attempt. Manual installation zip matches the generated frontend. Actual household validation remains B03. | `9de9626` |
+| 2026-10-05 | Phase 2 | Right-hand panels, individually addressed camera actions with acknowledgements/optional return, grouped Undo/Redo, and visual measurement/alert bindings implemented. All 668 JS tests, lint, build and source/bundle freshness gate pass. Final local navigation, full editor, 22 history and 23 overlay browser checks pass. Fixes retain named-view floors, scope keyboard Undo to the focused card and keep unrelated HA updates from redrawing the house. GitHub integration/full-suite validation is pending; actual HA/house/panel checks remain. | This change |
 
 ### Phase 1: Taylor's Home Assistant check
 
@@ -390,6 +403,26 @@ After installing a build containing Phase 1:
 7. In the dashboard card's visual editor, change button order/visibility, map size/corner and device-tap behavior. Save, reload and confirm those settings persist.
 8. Enter the card's layout Edit mode: the map hides, room/device editing still works, and Done restores normal navigation.
 9. Try the wall panel in its real light/dark theme, including narrow layout and touch use. Record any issue here before marking F18–F21 Done.
+
+### Phase 2: camera actions, editing and overlays
+
+The right-side controls, saved-camera action, Undo/Redo and room/alert overlays are implemented. Read [the controls guide](docs/FEATURES-GUIDE.md) for the steps and the meaning of each setting. Automated checks use the supplied example houses and mock Home Assistant; household acceptance remains separate.
+
+**Validation details:** the original complete local model run passed its geometry, lighting, alignment, view, export and editor assertions, but found one real regression: ten unrelated HA state updates caused ten unnecessary model frames. The fix invalidates status layers only for changed visible data; the original strict model idle assertion remains in place. The new overlay browser checks also require zero extra frames/shadow work with overlays off and with unchanged configured readings. An earlier navigation stability timeout did not reproduce in the final complete navigation run, with its original timeout and camera tolerances unchanged; its cause remains unconfirmed. Bounded diagnostics were added for a repeat. Final online CI must exercise the Python services and the full freshly built browser suites before this update is considered automatically verified.
+
+**Local performance result:** the final overlay browser suite passes all 23 checks. With overlays off, ten unrelated HA updates leave model frames at 10, shadow passes at 8 and shadow-light work at 13. With an enabled, unchanged temperature reading, frames stay at 11 with the same shadow counters. Final navigation, all 22 history/visual-editor checks and the complete existing editing browser suite pass, with no browser errors. The package's frontend matches the current source build (`0e433a7b44e600a034de11b62c71f853b7b814573e59259fee8f93e43d7ecdc6`). Python service execution and the final complete model rerun still require online CI.
+
+1. On a wide screen, open a room and device panel. Confirm the house and mini-map remain usable beside it. On the wall panel, check scrolling, closing, touch targets and the bottom bar.
+2. Give each browser a unique screen name in Edit → Views. Save Front door, Garden and Top-down views. Reload and confirm the screen name and views survive.
+3. Run the Select camera preset action for just one screen. Confirm the other screens stay unchanged. Check an incorrect screen/preset gives an action error rather than reporting success.
+4. Try a 30-second return, then touch the screen during another return. Confirm the first returns to its previous position and the second leaves your manual view alone.
+5. Move a device, draw/change a room, save a view and change an overlay. Undo and Redo each change, then reload to confirm the restored layout was saved. Typing in a text box must keep normal text Undo.
+6. In Edit → Overlays, connect one real temperature sensor and one power sensor to their rooms. Change the real readings and confirm the colours and labelled units follow them. Confirm unavailable readings look different from zero.
+7. For an energy view, confirm the selected sensors use the same period. For several meters, identify separate loads and avoid counting both a total and its parts.
+8. Use a harmless test entity for an alert. Check its assigned location, active pulse, unavailable state and clear/acknowledge behavior. Try reduced motion: it should remain a steady marker.
+9. Keep your GLB backed up separately. Replacing/deleting its server file resets Undo history; full model-asset backup is still F04.
+
+Record actual HA version, browser/panel and entity IDs when these checks are completed. Do not mark F01/F03/F05/F09 Done based only on the mock preview.
 
 The earlier local full-model regression run was stopped after its initial rendering/visibility/terrain/section/sky/merge checks passed, because its loaded script still expected the old default tap behavior. Those assertions now explicitly select Quick toggle. That local run remained partial; the final GitHub CI subsequently completed and passed the entire model suite.
 
