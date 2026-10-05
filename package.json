@@ -25,9 +25,10 @@
     "check:weather": "node scripts/weather-check.mjs",
     "check:lighting": "node scripts/lighting-check.mjs",
     "check:shading": "node scripts/shading-check.mjs",
+    "check:scenes": "node scripts/scenes-check.mjs",
     "check:model": "node scripts/model-check.mjs",
     "check-model": "node tools/check-model.mjs",
-    "check": "npm run build && npm run check:bundle && node scripts/screenshot.mjs && node scripts/edit-check.mjs && node scripts/navigation-check.mjs && node scripts/panels-check.mjs && node scripts/presets-check.mjs && node scripts/overlays-check.mjs && node scripts/history-check.mjs && node scripts/cameras-check.mjs && node scripts/tracking-check.mjs && node scripts/calibration-check.mjs && node scripts/security-check.mjs && node scripts/weather-check.mjs && node scripts/lighting-check.mjs && node scripts/shading-check.mjs && node scripts/model-check.mjs",
+    "check": "npm run build && npm run check:bundle && node scripts/screenshot.mjs && node scripts/edit-check.mjs && node scripts/navigation-check.mjs && node scripts/panels-check.mjs && node scripts/presets-check.mjs && node scripts/overlays-check.mjs && node scripts/history-check.mjs && node scripts/cameras-check.mjs && node scripts/tracking-check.mjs && node scripts/calibration-check.mjs && node scripts/security-check.mjs && node scripts/weather-check.mjs && node scripts/lighting-check.mjs && node scripts/shading-check.mjs && node scripts/scenes-check.mjs && node scripts/model-check.mjs",
     "deploy": "node scripts/deploy.mjs",
     "make-demo-model": "node scripts/make-demo-model.mjs"
   },

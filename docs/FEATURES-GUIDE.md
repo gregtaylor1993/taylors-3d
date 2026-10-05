@@ -13,6 +13,11 @@ For lighter model rendering on a wall panel, open **Edit → Model → Model sha
 The [model shading guide](MODEL-SHADING-GUIDE.md) explains the shadow/lamp choices,
 what the material report means, and how to prepare ambient occlusion textures in Blender.
 
+For trying a lighting look, use **Edit → Scenes** and the [scene preview guide](SCENE-PREVIEW-GUIDE.md).
+You choose the lights and desired settings explicitly. A preview changes the house drawing;
+**Activate** runs the real saved Home Assistant scene and can also affect its other devices.
+The device menus continue to show actual readings during a preview.
+
 ## Room and device controls
 
 Tap a room's floor to see its devices and readings on the right. Tap a device to see its own

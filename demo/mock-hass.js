@@ -123,6 +123,29 @@ device('demo_climate', 'Living climate unit', 'living_room', [['climate.demo_liv
 device('demo_charger', 'EV charger', 'garden', [['sensor.demo_charger', 'charging', { power: 7.4, energy: 12.6 }]]);
 void temp;
 
+// Explicit made-up light definitions for the optional scene demonstration.
+// These are authored demo data, not a definition inferred from HA scene state.
+const SCENES = [
+  { id: 'movie', label: 'Movie (simulated)', scene_entity: 'scene.movie', lights: [
+    { entity: 'light.living_ceiling', state: 'on', brightness: 35, color: { mode: 'rgb', rgb: [255, 80, 30] } },
+    { entity: 'light.floor_lamp', state: 'on', brightness: 90, color: { mode: 'rgb', rgb: [75, 85, 255] } },
+    { entity: 'light.demo_living', state: 'on', brightness: 35, color: { mode: 'rgb', rgb: [255, 80, 30] } },
+    { entity: 'light.demo_strip', state: 'on', brightness: 90, color: { mode: 'rgb', rgb: [75, 85, 255] } },
+    { entity: 'light.hall', state: 'off' }, { entity: 'light.demo_hall', state: 'off' },
+  ] },
+  { id: 'bedtime', label: 'Bedtime (simulated)', scene_entity: 'scene.bedtime', lights: [
+    { entity: 'light.living_ceiling', state: 'off' }, { entity: 'light.demo_living', state: 'off' },
+    { entity: 'light.floor_lamp', state: 'on', brightness: 35, color: { mode: 'rgb', rgb: [255, 145, 70] } },
+    { entity: 'light.demo_strip', state: 'off' },
+    { entity: 'light.hall', state: 'on', brightness: 20 }, { entity: 'light.demo_hall', state: 'on', brightness: 20 },
+    { entity: 'light.bedroom', state: 'on', brightness: 20 },
+  ] },
+];
+
+export function demoScenePreviews() {
+  return { enabled: true, items: JSON.parse(JSON.stringify(SCENES)) };
+}
+
 // In-memory stand-in for the integration's /api/taylors3d/model/<key> endpoint.
 const models = new Map();
 async function fetchWithAuth(url, init = {}) {
@@ -141,40 +164,74 @@ async function fetchWithAuth(url, init = {}) {
   return json(200, { size: buf.byteLength, version: digest.slice(0, 12), name: file.name });
 }
 
-export function createMockHass({ onChange }) {
+export function createMockHass({ onChange, scenes = false }) {
   let layoutStore = JSON.parse(JSON.stringify(DEMO_LAYOUT));
   let current;
+  const user = { id: 'taylors3d-demo-user', name: 'Demo', is_admin: true, is_active: true };
+  // Updating a simulated state is not an HA reconnect. Controllers can attach
+  // and remove their real disconnected listeners on this stable event surface.
+  const connection = new EventTarget(); connection.connected = true;
+  const services = Object.fromEntries(['light', 'switch', 'fan', 'input_boolean', 'homeassistant']
+    .map((domain) => [domain, { toggle: {}, turn_on: {}, turn_off: {} }]));
+  services.lawn_mower = { start_mowing: {}, dock: {} };
+  const sceneDefinitions = scenes ? demoScenePreviews().items : [];
+  if (scenes) services.scene = { turn_on: {} };
+  const sceneStates = Object.fromEntries(sceneDefinitions.map((scene) => [scene.scene_entity,
+    { entity_id: scene.scene_entity, state: 'unknown', attributes: { friendly_name: scene.label } }]));
+  const sceneEntities = Object.fromEntries(sceneDefinitions.map((scene) => [scene.scene_entity, { entity_id: scene.scene_entity }]));
+  const instanceEntities = scenes ? { ...entities, ...sceneEntities } : entities;
+  // HA retains this action function while replacing its state snapshot.
+  const callService = async (domain, service, data) => {
+    (window.__serviceCalls = window.__serviceCalls || []).push([domain, service, data]); // headless checks
+    if (domain === 'scene') {
+      const definition = service === 'turn_on' && sceneDefinitions.find((scene) => scene.scene_entity === data.entity_id);
+      if (!definition) return;
+      const timestamp = new Date().toISOString(), source = current.states[definition.scene_entity];
+      const changes = { [definition.scene_entity]: { ...source, state: timestamp, last_changed: timestamp, last_updated: timestamp } };
+      for (const target of definition.lights) {
+        const lamp = current.states[target.entity];
+        if (!lamp) continue;
+        const attributes = { ...lamp.attributes };
+        if (target.state === 'on') {
+          attributes.brightness = target.brightness;
+          attributes.color_mode = target.color ? 'rgb' : 'brightness';
+          if (target.color) { attributes.rgb_color = target.color.rgb.slice(); delete attributes.color_temp_kelvin; }
+        } else delete attributes.brightness;
+        changes[target.entity] = { ...lamp, state: target.state, attributes, last_changed: timestamp, last_updated: timestamp };
+      }
+      update(changes); // one mock report; no light services or physical calls
+      return;
+    }
+    const s = current.states[data.entity_id];
+    if (!s || !['toggle', 'turn_on', 'turn_off'].includes(service)) return;
+    const on = service === 'toggle' ? s.state !== 'on' : service === 'turn_on';
+    const attrs = { ...s.attributes };
+    if (s.entity_id.startsWith('light.')) {
+      if (on) {
+        attrs.brightness = data.brightness ?? attrs.brightness ?? 255;
+        if (Array.isArray(attrs.supported_color_modes))
+          attrs.color_mode = attrs.color_mode || (attrs.supported_color_modes.includes('rgb') ? 'rgb' : 'brightness');
+      }
+      else delete attrs.brightness;
+      if (on && data.rgb_color) { attrs.rgb_color = data.rgb_color; attrs.color_mode = 'rgb'; delete attrs.color_temp_kelvin; }
+      if (on && data.color_temp_kelvin !== undefined) {
+        attrs.color_mode = 'color_temp'; attrs.color_temp_kelvin = data.color_temp_kelvin; delete attrs.rgb_color;
+        // Simulate HA's reported conversion, instead of keeping a stale RGB
+        // attribute from the previously selected colour mode.
+        const appearance = readLightAppearance({ entity_id: s.entity_id, state: 'on', attributes: attrs });
+        if (appearance.colorKnown) attrs.rgb_color = appearance.color;
+      }
+    }
+    update({ [data.entity_id]: { ...s, state: on ? 'on' : 'off', attributes: attrs } });
+  };
   const make = (st) => ({
-    states: st, entities, devices, areas, floors,
-    user: { name: 'Demo', is_admin: true },
+    states: st, entities: instanceEntities, devices, areas, floors,
+    user, connection, services,
     config: { latitude: 52.0, longitude: 5.0, time_zone: 'UTC' }, // generic location (moon position)
     language: 'en',
     hassUrl: (p) => p,
     fetchWithAuth,
-    callService: async (domain, service, data) => {
-      (window.__serviceCalls = window.__serviceCalls || []).push([domain, service, data]); // headless checks
-      const s = current.states[data.entity_id];
-      if (!s || !['toggle', 'turn_on', 'turn_off'].includes(service)) return;
-      const on = service === 'toggle' ? s.state !== 'on' : service === 'turn_on';
-      const attrs = { ...s.attributes };
-      if (s.entity_id.startsWith('light.')) {
-        if (on) {
-          attrs.brightness = data.brightness ?? attrs.brightness ?? 255;
-          if (Array.isArray(attrs.supported_color_modes))
-            attrs.color_mode = attrs.color_mode || (attrs.supported_color_modes.includes('rgb') ? 'rgb' : 'brightness');
-        }
-        else delete attrs.brightness;
-        if (on && data.rgb_color) { attrs.rgb_color = data.rgb_color; attrs.color_mode = 'rgb'; delete attrs.color_temp_kelvin; }
-        if (on && data.color_temp_kelvin !== undefined) {
-          attrs.color_mode = 'color_temp'; attrs.color_temp_kelvin = data.color_temp_kelvin; delete attrs.rgb_color;
-          // Simulate HA's reported conversion, instead of keeping a stale RGB
-          // attribute from the previously selected colour mode.
-          const appearance = readLightAppearance({ entity_id: s.entity_id, state: 'on', attributes: attrs });
-          if (appearance.colorKnown) attrs.rgb_color = appearance.color;
-        }
-      }
-      update({ [data.entity_id]: { ...s, state: on ? 'on' : 'off', attributes: attrs } });
-    },
+    callService,
     callWS: async (msg) => {
       if (msg.type === 'taylors3d/layout/get') return { layout: layoutStore };
       if (msg.type === 'taylors3d/layout/set') { layoutStore = msg.layout; window.__savedLayout = msg.layout; return null; }
@@ -185,7 +242,7 @@ export function createMockHass({ onChange }) {
     current = make({ ...current.states, ...changes });
     onChange(current);
   };
-  current = make({ ...states });
+  current = make({ ...states, ...sceneStates });
 
   // mower drives a circle in the garden (~4 m radius)
   let t = 0;

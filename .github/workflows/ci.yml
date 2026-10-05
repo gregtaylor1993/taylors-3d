@@ -39,6 +39,10 @@ jobs:
         run: node scripts/shading-check.mjs
         env:
           CHROME_PATH: /usr/bin/google-chrome
+      - name: Headless browser checks (scene light previews and deliberate scene actions)
+        run: node scripts/scenes-check.mjs
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
       - uses: actions/upload-artifact@v4
         if: always()
         with:

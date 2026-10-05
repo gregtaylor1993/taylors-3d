@@ -21,6 +21,7 @@ import { TrackingEditor } from './tracking-editor.js';
 import { WeatherEditor } from './weather-editor.js';
 import { SecurityEditor } from './security-editor.js';
 import { ModelRenderingEditor } from './model-rendering-editor.js';
+import { ScenePreviewEditor } from './scene-preview-editor.js';
 import { entityChoices, registryIssues } from './entity-metadata.js';
 
 const DENSE_TRIS = 150000;
@@ -58,6 +59,7 @@ export class EditMode {
     this._weatherEditor = new WeatherEditor(card, () => this.render());
     this._securityEditor = new SecurityEditor(card, () => this.render());
     this._modelRenderingEditor = new ModelRenderingEditor(card, () => this.render());
+    this._scenePreviewEditor = new ScenePreviewEditor(card, () => this.render());
     this.tab = 'rooms';
     this.selectedRoom = null;
     this.selectedMarker = null;
@@ -149,6 +151,7 @@ export class EditMode {
     this._weatherEditor.reset();
     this._securityEditor.reset();
     this._modelRenderingEditor.reset();
+    this._scenePreviewEditor.reset();
     activeEditors.delete(this);
     window.removeEventListener('keydown', this._onKey);
     window.removeEventListener('pointerup', this._onSliderRelease);
@@ -166,6 +169,7 @@ export class EditMode {
     this._weatherEditor.dispose();
     this._securityEditor.dispose();
     this._modelRenderingEditor.dispose();
+    this._scenePreviewEditor.dispose();
   }
 
   attach() {
@@ -223,6 +227,11 @@ export class EditMode {
       this._modelRenderingEditor.updatePreviews(this.panel);
       return;
     }
+    if (this.tab === 'scenes' && this.panel.contains(active)
+      && (active?.dataset?.field?.startsWith('scene-preview-') || active?.dataset?.act?.startsWith('scene-preview-'))) {
+      this._scenePreviewEditor.updatePreviews(this.panel);
+      return;
+    }
     if (this._sliding) this._renderHeld = true;
     else this.render();
   }
@@ -272,6 +281,7 @@ export class EditMode {
     this.selectedRoom = null; this.selectedMarker = null; this.vwPick = null; this.vwSel = null; this.modelPick = null;
     this.uploading = null; this._panelNameDraft = null; this._overlayEditor.reset(); this._cameraEditor.reset(); this._trackingEditor.reset(); this._weatherEditor.reset(); this._securityEditor.reset();
     this._modelRenderingEditor.reset();
+    this._scenePreviewEditor.reset();
     this._closeMenu();
     this.view?.setOverlay?.({}); this.view?.highlightModelNode?.(null);
     this.card._applyMarkerSelection?.(null);
@@ -305,6 +315,7 @@ export class EditMode {
     this._weatherEditor.reset();
     this._securityEditor.reset();
     this._modelRenderingEditor.reset();
+    this._scenePreviewEditor.reset();
     this.card[method]();
     this.updateHistoryState();
     return true;
@@ -379,7 +390,7 @@ export class EditMode {
       if (point?.length >= 2 && point.every(Number.isFinite)) this._trackingEditor.acceptPlanPoint(point.slice(0, 2), trackingPick.floorId, trackingPick.token);
       this.refreshOverlay(); return;
     }
-    if (this.tab === 'tracking') return; // Tracking edits never fall through into room selection.
+    if (this.tab === 'tracking' || this.tab === 'scenes') return; // Source/appearance edits never fall through into room selection.
     if (this.pivoting) {
       this._setPivot(e);
       return;
@@ -645,6 +656,9 @@ export class EditMode {
       this._trackingEditor.cancelPlanPick(); this._trackingPickContext = this._trackingPickCursor = null;
       this.refreshOverlay(); this.render(); e.preventDefault(); return;
     }
+    if (e.key === 'Escape' && this.tab === 'scenes' && this._scenePreviewEditor.previewToken !== null && this._ownsHistoryShortcut(e)) {
+      this._scenePreviewEditor.onClick('scene-preview-stop'); e.preventDefault(); return;
+    }
     if (isNativeEditing(e)) return;
     if (this.menu && e.key === 'Escape') {
       this._closeMenu();
@@ -721,6 +735,7 @@ export class EditMode {
 
   // live values in the Mower tab, without re-rendering the panel
   onStates() {
+    if (this.tab === 'scenes') { this._scenePreviewEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'model') { this._modelRenderingEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'security') { this._securityEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'tracking') { this._trackingEditor.updatePreviews(this.panel); return; }
@@ -918,7 +933,7 @@ export class EditMode {
   markerDown(m, e) {
     if (e.button !== 0) return;
     e.stopPropagation();
-    if (this.tab === 'tracking' || this.drawing || this.doorMode || this.calibrating || this.colorPick || this._trackingPlanPick()) return;
+    if (this.tab === 'tracking' || this.tab === 'scenes' || this.drawing || this.doorMode || this.calibrating || this.colorPick || this._trackingPlanPick()) return;
     if (m.id === this.card._mowerMarkerId) {
       this.selectMarker(m.id); // positioned live, nothing to drag
       return;
@@ -1063,6 +1078,7 @@ export class EditMode {
     const scroll = oldBody && this._renderedTab === this.tab ? oldBody.scrollTop : 0;
     const active = this.panel.contains(this.panel.getRootNode().activeElement) ? this.panel.getRootNode().activeElement : null;
     const focusKey = active && active.dataset && active.dataset.field ? [active.dataset.field, active.dataset.id || ''] : null;
+    const sceneFocus = active?.dataset?.field?.startsWith('scene-preview-') ? [active.dataset.binding || '', active.dataset.target || ''] : null;
     const historyFocus = active?.dataset?.act?.startsWith('history-') ? active.dataset.act : null;
     const report = this.panel.querySelector('details.report');
     if (report) this._reportOpen = report.open;
@@ -1071,7 +1087,7 @@ export class EditMode {
     this._renderedTab = this.tab;
     const hasObjects = this._hasObjects();
     if (this.tab === 'objects' && !hasObjects) this.tab = 'devices';
-    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ...(hasObjects ? [['objects', 'Objects']] : []), ['overlays', 'Overlays'], ['cameras', 'Cameras'], ['tracking', 'Tracking'], ['security', 'Security'], ['environment', 'Environment'], ['mower', 'Mower'], ['views', 'Views'], ['model', 'Model'], ['data', 'Data']];
+    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ...(hasObjects ? [['objects', 'Objects']] : []), ['overlays', 'Overlays'], ['cameras', 'Cameras'], ['tracking', 'Tracking'], ['security', 'Security'], ['environment', 'Environment'], ['scenes', 'Scenes'], ['mower', 'Mower'], ['views', 'Views'], ['model', 'Model'], ['data', 'Data']];
     const body = {
       rooms: () => this._roomsTab(), devices: () => this._devicesTab(), objects: () => this._objectsTab(), mower: () => this._mowerTab(), views: () => this._viewsTab(),
       model: () => this._modelTab(), data: () => this._dataTab(),
@@ -1080,6 +1096,7 @@ export class EditMode {
       tracking: () => this._trackingEditor.render(),
       environment: () => this._weatherEditor.render(),
       security: () => this._securityEditor.render(),
+      scenes: () => this._scenePreviewEditor.render(),
     }[this.tab]();
     const msg = this.message ? `<div class="msg ${this.message.error ? 'error' : this.message.warn ? 'warn' : ''}">${esc(this.message.text)}</div>` : '';
     this.panel.innerHTML = `
@@ -1096,11 +1113,13 @@ export class EditMode {
     if (this.tab === 'environment') this._weatherEditor.updatePreviews(this.panel);
     if (this.tab === 'security') this._securityEditor.updatePreviews(this.panel);
     if (this.tab === 'model') this._modelRenderingEditor.updatePreviews(this.panel);
+    if (this.tab === 'scenes') this._scenePreviewEditor.updatePreviews(this.panel);
     const newBody = this.panel.querySelector('.tab-body');
     if (newBody && scroll) newBody.scrollTop = scroll;
     if (focusKey) {
       const el = [...this.panel.querySelectorAll('[data-field]')]
-        .find((x) => x.dataset.field === focusKey[0] && (x.dataset.id || '') === focusKey[1]);
+        .find((x) => x.dataset.field === focusKey[0] && (x.dataset.id || '') === focusKey[1]
+          && (!sceneFocus || (x.dataset.binding || '') === sceneFocus[0] && (x.dataset.target || '') === sceneFocus[1]));
       if (el) el.focus({ preventScroll: true });
     } else if (historyFocus) {
       const button = this.panel.querySelector(`[data-act="${historyFocus}"]`);
@@ -2152,6 +2171,7 @@ export class EditMode {
     if (this._weatherEditor.onClick(btn.dataset.act, btn)) return;
     if (this._securityEditor.onClick(btn.dataset.act, btn)) return;
     if (this._modelRenderingEditor.onClick(btn.dataset.act, btn)) return;
+    if (this._scenePreviewEditor.onClick(btn.dataset.act, btn)) return;
     const sel = this.room(this.selectedRoom);
     this.message = null;
     // Views tab actions commit; the rebuild after the commit renders the panel once
@@ -2175,6 +2195,7 @@ export class EditMode {
           if (this.tab === 'environment') this._weatherEditor.reset();
           if (this.tab === 'security') this._securityEditor.reset();
           if (this.tab === 'model') this._modelRenderingEditor.reset();
+          if (this.tab === 'scenes') this._scenePreviewEditor.reset();
           this.picking = null;
           this.pivoting = false;
           this.modelPick = null;
@@ -2183,6 +2204,14 @@ export class EditMode {
           this.view.highlightModelNode(null);
         }
         if (id !== 'objects') this.objSel = null;
+        if (id === 'scenes') {
+          // Orbiting a lighting preview must not leave a room tool or pinned
+          // marker gesture active behind the source-only form.
+          this.drawing = this.calibrating = null;
+          this.doorMode = this.colorPick = this.overlayMove = false;
+          this.selectedRoom = this.selectedMarker = null;
+          this.card._applyMarkerSelection(null);
+        }
         this.tab = id;
         this.card._syncCameraCoverage?.();
         this.card._syncTracking?.();
@@ -2317,6 +2346,7 @@ export class EditMode {
     if (this._weatherEditor.onChange(f, el)) return;
     if (this._securityEditor.onChange(f, el)) return;
     if (this._modelRenderingEditor.onChange(f, el)) return;
+    if (this._scenePreviewEditor.onChange(f, el)) return;
     const sel = this.room(this.selectedRoom);
     if (f && f.startsWith('vw-')) this._viewsChange(f, el);
     else if (f === 'room-area' && sel) this.commit(E.upsertRoom(this.layout, { ...sel, area_id: el.value }));
@@ -2434,6 +2464,7 @@ export class EditMode {
     if (this._weatherEditor.onInput(f, el)) return;
     if (this._securityEditor.onInput(f, el)) return;
     if (this._modelRenderingEditor.onInput(f, el)) return;
+    if (this._scenePreviewEditor.onInput(f, el)) return;
     if (f?.startsWith('cov-') && this._cameraEditor.onChange(f, el)) return;
     if (f === 'screen-name') { this._panelNameDraft = el.value; return; }
     if (f === 'vw-sec-pos') {

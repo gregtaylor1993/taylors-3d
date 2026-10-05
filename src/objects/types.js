@@ -66,6 +66,9 @@ function anchorOf(obj, glow, root, offset) {
 // A glow mesh can belong to several objects (e.g. two fixtures resolving to one mesh): its material is
 // cloned once; every owner writes its level and the mesh shows the strongest owner.
 const shared = new WeakMap(); // mesh -> { original, clones: Material[], owners: Set<part> }
+// Hypothetical scene appearances never enter the public part or HA chain. Only
+// owned emissive materials and the layer's private pool reading consume these.
+const lightLooks = new WeakMap();
 
 // Claim a glow mesh for a part: clones its material once, shared between owners.
 function claimGlow(part, glow) {
@@ -100,7 +103,10 @@ function paint(glow) {
   const entry = glow && shared.get(glow);
   if (!entry) return;
   let best = null;
-  for (const p of entry.owners) if (!best || (p.output ?? p.level) > (best.output ?? best.level)) best = p;
+  for (const part of entry.owners) {
+    const p = lightLooks.get(part) || part;
+    if (!best || (p.output ?? p.level) > (best.output ?? best.level)) best = p;
+  }
   const level = best ? best.level : 0, c = (best && best.color) || [0, 0, 0];
   const key = `${level}|${c.join(',')}`;
   if (key === entry.paintKey) return;
@@ -111,21 +117,29 @@ function paint(glow) {
   }
 }
 
-function updateLight(part, chain) {
-  // A validated on/off relay chain has no light source and uses an explicit display fallback.
-  const appearance = readLightAppearance(chain.source || { state: chain.unavailable ? 'unavailable' : chain.lit ? 'on' : 'off', attributes: {} });
-  const output = chain.lit ? appearance.output : 0;
+function lightResult(appearance, lit) {
+  const output = lit ? appearance.output : 0;
   const level = output > 0 ? appearance.level : 0;
   const color = output > 0 ? appearance.color : [0, 0, 0];
-  part.appearance = appearance;
-  part.level = level;
-  part.output = output;
-  part.color = color;
-  paint(part.glow);
   return { lit: output > 0, level, color, output, appearance };
 }
 
+function updateLight(part, chain, ctx = {}) {
+  // A validated on/off relay chain has no light source and uses an explicit display fallback.
+  const appearance = readLightAppearance(chain.source || { state: chain.unavailable ? 'unavailable' : chain.lit ? 'on' : 'off', attributes: {} });
+  const result = lightResult(appearance, chain.lit);
+  part.appearance = appearance;
+  part.level = result.level;
+  part.output = result.output;
+  part.color = result.color;
+  const preview = ctx.lightPreviewReading;
+  lightLooks.set(part, preview ? lightResult(preview.appearance, preview.lit) : result);
+  paint(part.glow);
+  return result;
+}
+
 function disposeLight(part) {
+  lightLooks.delete(part);
   const entry = part.glow && shared.get(part.glow);
   if (!entry || !entry.owners.delete(part)) return;
   if (entry.owners.size) { paint(part.glow); return; }
@@ -298,13 +312,13 @@ const generic = {
 export const TYPES = {
   light: {
     prepare: (obj, ctx) => prepareLight(obj, ctx, true),
-    update: updateLight, dispose: disposeLight,
+    update: updateLight, render: (part) => lightLooks.get(part), dispose: disposeLight,
     defaults: { tap: 'toggle', hold: 'popup', popup: ['toggle', 'brightness', 'color'] },
   },
   light_strip: {
     // real light only when the model asks for one (hints.max)
     prepare: (obj, ctx) => prepareLight(obj, ctx, !!obj.hints && fin(obj.hints.max) && obj.hints.max > 0),
-    update: updateLight, dispose: disposeLight,
+    update: updateLight, render: (part) => lightLooks.get(part), dispose: disposeLight,
     defaults: { tap: 'toggle', hold: 'popup', popup: ['toggle', 'brightness', 'color'] },
   },
   mower: {

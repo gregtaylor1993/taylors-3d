@@ -34,6 +34,8 @@ import { buildTrackedEntities, TrackedEntitiesLayer } from './tracked-entities.j
 import { readSunState, readHaLocation, readWeather, WeatherLayer } from './weather.js';
 import { SecurityLayer } from './security.js';
 import { readModelRendering } from './model-rendering.js';
+import { ScenePreviewController } from './scene-preview.js';
+import { ScenePreviewBar } from './scene-preview-bar.js';
 
 const VERSION = '0.1.0';
 const NONE = Object.freeze({}); // stable stand-in for a missing layout.objects / groups (binding cache key)
@@ -67,6 +69,8 @@ const STYLE = `
     background: var(--ha-card-background, var(--card-background-color, #fff));
     box-shadow: 0 3px 14px rgba(0,0,0,.15); touch-action: manipulation; }
   .toolbar[hidden] { display: none; }
+  .scene-presets { min-width: 0; max-width: 100%; }
+  .scene-presets:has(> [hidden]) { display: none; }
   .chips { display: flex; flex-wrap: nowrap; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
   .chips:empty { display: none; }
   .bubble-actions { display: flex; gap: 6px; align-items: center; overflow-x: auto; scrollbar-width: thin; }
@@ -75,7 +79,8 @@ const STYLE = `
   .toolbar button:focus-visible { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: -3px; }
   .toolbar [hidden] { display: none !important; }
   @container (min-width: 800px) {
-    .toolbar { flex-direction: row; align-items: center; }
+    .toolbar { flex-direction: row; flex-wrap: wrap; align-items: center; }
+    .scene-presets { flex-basis: 100%; }
     .chips { flex: 1; }
     .bubble-actions { flex: none; }
   }
@@ -376,6 +381,14 @@ class Taylors3dCard extends HTMLElement {
     this._bindKey = null;
     this._miniMapVisible = true;
     this._history = new EditHistory();
+    this._lightPreview = null;
+    this._lightPreviewOwner = null;
+    this._scenePreviewStatus = null;
+    this._scenePreviewController = new ScenePreviewController({
+      getContext: () => this._scenePreviewContext(),
+      onPreview: (overrides, metadata) => this.previewSceneLights(overrides, metadata),
+      onStatus: (status) => { this._scenePreviewStatus = status; this._scenePreviewBar?.update(); },
+    });
     this._trackingMemory = { presence: {}, vehicles: {}, vacuums: {} };
     this._trackingSourceKeys = new Map();
     this._trackingData = { records: [], diagnostics: [], miniMap: [], nextExpiry: null };
@@ -427,6 +440,7 @@ class Taylors3dCard extends HTMLElement {
     this._config = { layout_key: 'default', height: '520px', group_by: 'device', wall_height: 1.0, view: '3d',
       show_bubble_bar: true, mini_map: true, mini_map_size: 180, mini_map_position: 'top-right', device_tap_action: 'popup',
       control_panel: 'right', ...config };
+    this._syncScenePreviews();
     if (!previous || previous.mini_map !== this._config.mini_map) this._miniMapVisible = this._config.mini_map !== false;
     if (!previous || previous.view !== this._config.view) this._mode = this._config.view === 'top' ? 'top' : '3d';
     const keyChanged = previous && previous.layout_key !== this._config.layout_key;
@@ -510,7 +524,11 @@ class Taylors3dCard extends HTMLElement {
       opts.reload = reload;
     }
     const prevModel = this._view.model;
+    const modelSource = opts && (opts.id || opts.url);
+    const requestedModel = modelSource && opts.merge === false ? modelSource + '#nomerge' : modelSource;
+    if (reload || (requestedModel || null) !== (prevModel?.id || null)) this._stopScenePreview('model loading');
     this._view.setModel(opts).then((err) => {
+      if (this._view.model !== prevModel) this._stopScenePreview('model changed');
       if (this._view.model !== prevModel && this._section) this._dropSection();
       if (this._view.model !== prevModel) { this._endGesture(); this._popup.close(); this._devicePopup.close(); }
       this._objects.setModel(this._view.model);
@@ -633,6 +651,7 @@ class Taylors3dCard extends HTMLElement {
       this._trackingInputKey = null;
     }
     this._hass = hass;
+    this._syncScenePreviews();
     if (this.isConnected) this._presetEvents.setHass(hass);
     if (this._view && this._view.model && this._skyMode === 'auto') this._applySky(false);
     if (!this._layout && !this._loading) this._load();
@@ -667,6 +686,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this._stopScenePreview('disconnected');
     window.removeEventListener('taylors3d-panel-change', this._onPanelName);
     window.removeEventListener('storage', this._onPanelName);
     document.removeEventListener('visibilitychange', this._onTrackingVisibility);
@@ -692,6 +712,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   async _load() {
+    this._stopScenePreview('layout loading');
     this._edit?.cancelHistoryGestures?.();
     this._resetTracking();
     this._resetSecurity();
@@ -713,6 +734,8 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _render() {
+    this._scenePreviewBar?.dispose();
+    this._stopScenePreview('renderer replaced');
     this._securityLayer?.dispose();
     this._securityLayer = null;
     this._securityInputKey = null;
@@ -739,6 +762,7 @@ class Taylors3dCard extends HTMLElement {
                 <button class="minimap-toggle reset" data-bubble="minimap" title="Show or hide mini-map" aria-label="Show or hide mini-map"><ha-icon icon="mdi:map-outline"></ha-icon></button>
                 <button class="edit" data-bubble="edit" hidden title="Edit floorplan"><ha-icon icon="mdi:pencil"></ha-icon><span>Edit</span></button>
               </div>
+              <div class="scene-presets"></div>
             </nav>
             <div class="empty" hidden></div>
             <div class="notice" hidden></div>
@@ -812,6 +836,7 @@ class Taylors3dCard extends HTMLElement {
       onMoreInfo: (entityId) => this._moreInfo(entityId),
       placement: this._config.control_panel,
       onVisibilityChange: (open, placement) => {
+        if (open) this._stopScenePreview('device controls opened');
         this._stage.classList.toggle('controls-open', open && placement === 'right');
         requestAnimationFrame(() => this.isConnected && this._resize());
       },
@@ -827,12 +852,20 @@ class Taylors3dCard extends HTMLElement {
     this._loadModel();
     this._edit = new EditMode(this);
     this._body.append(this._edit.panel);
+    this._scenePreviewBar = new ScenePreviewBar(root.querySelector('.scene-presets'), {
+      controller: this._scenePreviewController,
+      getContext: () => ({ hass: this._hass, settings: this._scenePreviewSettings(),
+        suspended: !this._scenePreviewAvailable(false), contextKey: this._scenePreviewKey(), status: this._scenePreviewStatus }),
+    });
     const canvas = this._view.renderer.domElement;
     this._stage.addEventListener('pointerdown', (e) => {
+      this._scenePreviewInteraction(e);
       this._presetEvents.interrupt();
       if (!this._editing && this._view._tween) this._view.stopCameraMotion();
       if (this._editing && e.target === canvas) this._edit.canvasDownCapture(e);
     }, true);
+    this._body.addEventListener('pointerdown', (event) => this._scenePreviewInteraction(event), true);
+    this._body.addEventListener('keydown', (event) => this._scenePreviewInteraction(event), true);
     canvas.addEventListener('pointerdown', (e) => this._editing && this._edit.canvasDown(e));
     canvas.addEventListener('pointerdown', (e) => this._roomDown(e));
     canvas.addEventListener('pointermove', (e) => this._editing && this._edit.canvasMove(e));
@@ -843,6 +876,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _toggleEdit() {
+    this._stopScenePreview('editing changed');
     this._presetEvents.interrupt();
     this._view.stopCameraMotion();
     this._endGesture();
@@ -1051,6 +1085,8 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _syncWeatherVisibility() {
+    if (!this.isConnected || document.hidden || this._weatherInView === false || this._loading) this._stopScenePreview('view unavailable');
+    this._scenePreviewBar?.update();
     this._weatherLayer?.setVisible(!!(this.isConnected && !document.hidden && this._weatherInView !== false
       && !this._loading && this._layout && !this._editing && !this._section && !this._view?.sectionClip));
   }
@@ -1348,10 +1384,12 @@ class Taylors3dCard extends HTMLElement {
 
   _restoreHistory(snapshot) {
     if (!snapshot) return;
+    this._stopScenePreview('history changed');
     this._markerRenderKey = null;
     this._edit?._cameraEditor?.reset();
     this._edit?._trackingEditor?.reset();
     this._edit?._modelRenderingEditor?.reset();
+    this._edit?._scenePreviewEditor?.reset();
     this._cameraCoveragePreview = null;
     this._historyReplaying = true;
     try {
@@ -1399,6 +1437,7 @@ class Taylors3dCard extends HTMLElement {
   // comparisons per part keep e.g. overlay slider changes from rebuilding the whole scene.
   _update() {
     this._syncModelRendering();
+    this._syncScenePreviews();
     const h = this._hass;
     const b = this._built;
     const l = this._layout;
@@ -1928,6 +1967,7 @@ class Taylors3dCard extends HTMLElement {
     if (!this._selectingPreset) { this._presetEvents.interrupt(); this._view.stopCameraMotion(); }
     const v = this._views.find((x) => x.id === id);
     if (!v) return;
+    this._stopScenePreview('view changed');
     const wasSection = this._section;
     this._popup.close();
     this._devicePopup.close();
@@ -1981,6 +2021,7 @@ class Taylors3dCard extends HTMLElement {
 
   // Reset view: the view's saved camera (3D incl. its rotation centre; top: camera_top), else frame it.
   _resetCamera() {
+    this._stopScenePreview('camera reset');
     if (!this._selectingPreset) this._presetEvents.interrupt();
     if (this._section) this.setSection(false, { camera: false });
     const v = this.currentView();
@@ -2038,6 +2079,7 @@ class Taylors3dCard extends HTMLElement {
 
   // Toggle the side section. Off returns to the view's visibility and (camera: true) its camera.
   setSection(on, { camera = true } = {}) {
+    this._stopScenePreview('section changed');
     if (this._popup) this._popup.close();
     if (this._devicePopup) this._devicePopup.close();
     if (on) {
@@ -2106,6 +2148,79 @@ class Taylors3dCard extends HTMLElement {
   }
 
   // Shared saved presentation takes precedence over the card's fallback settings.
+  _scenePreviewSettings() { return this._layout?.scene_previews ?? this._config?.scene_previews; }
+
+  _scenePreviewAvailable(draft) {
+    return !!(this.isConnected && !document.hidden && this._weatherInView !== false && !this._loading
+      && this._layout && this._view && this._hass?.connection?.connected === true
+      && (draft ? this._editing && this._edit?.tab === 'scenes' && this._hass?.user?.is_admin === true
+        : !this._editing && this._config?.show_bubble_bar !== false));
+  }
+
+  // A semantic context stamp: unrelated HA updates leave a preview intact.
+  // Changing the house, displayed view or access context cancels it immediately.
+  _scenePreviewKey() {
+    return JSON.stringify([this._config?.layout_key, this._config?.model || this._layout?.model,
+      this._config?.model_position, this._config?.model_rotation, this._config?.model_scale,
+      this._view?.model?.root?.uuid, this._viewId, this._floorOnly, this._mode, this._section,
+      !!this._editing, this._editing ? this._edit?.tab : null, this.isConnected, document.hidden,
+      this._weatherInView !== false, !!this._loading, this._config?.show_bubble_bar !== false]);
+  }
+
+  _scenePreviewContext() {
+    return { hass: this._hass, bindings: this._scenePreviewAvailable(false) ? this._scenePreviewSettings() : undefined,
+      contextKey: this._scenePreviewKey(), canEdit: this._hass?.user?.is_admin === true };
+  }
+
+  _syncScenePreviews() {
+    if (this._syncingScenePreviews) return;
+    this._syncingScenePreviews = true;
+    try {
+      this._scenePreviewController?.revalidate();
+      this._edit?._scenePreviewEditor?.controller?.revalidate();
+      if (this._lightPreview && !this._scenePreviewAvailable(this._lightPreviewDraft)) this._stopScenePreview('view unavailable');
+      this._scenePreviewBar?.update();
+    } finally { this._syncingScenePreviews = false; }
+  }
+
+  previewSceneLights(overrides, metadata = {}) {
+    if (!metadata.token) return false;
+    if (overrides instanceof Map) {
+      if (!this._scenePreviewAvailable(metadata.draft === true)) {
+        const controller = metadata.draft ? this._edit?._scenePreviewEditor?.controller : this._scenePreviewController;
+        controller?.stop(metadata.token, 'view unavailable');
+        return false;
+      }
+      // Claim the new owner first: a previous controller's late clear must not
+      // replace these lights or briefly restore real-state shadow assignments.
+      this._lightPreview = overrides;
+      this._lightPreviewOwner = metadata.token;
+      this._lightPreviewDraft = metadata.draft === true;
+      const other = metadata.draft ? this._scenePreviewController : this._edit?._scenePreviewEditor?.controller;
+      other?.stop(undefined, 'another preview started');
+    } else if (overrides === null && this._lightPreviewOwner === metadata.token) {
+      this._lightPreview = null;
+      this._lightPreviewOwner = null;
+      this._lightPreviewDraft = false;
+    } else return false;
+    this._updateObjects();
+    if (this._view && this._hass && this._positions) this._refreshStates();
+    return true;
+  }
+
+  _stopScenePreview(reason = 'stopped') {
+    this._scenePreviewController?.stop(undefined, reason);
+    this._edit?._scenePreviewEditor?.controller?.stop(undefined, reason);
+  }
+
+  _scenePreviewInteraction(event) {
+    if (event.type === 'keydown' && event.key !== 'Escape'
+      && !['Enter', ' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    const own = event.composedPath().some((element) => element?.hasAttribute?.('data-scene-preview-bar')
+      || element?.hasAttribute?.('data-scene-preview-editor'));
+    if (event.type === 'keydown' && event.key === 'Escape' || !own) this._stopScenePreview('interaction');
+  }
+
   _syncModelRendering() {
     const policy = readModelRendering(this._layout?.model_rendering ?? this._config?.model_rendering);
     this._view?.setModelRendering?.(policy);
@@ -2117,7 +2232,7 @@ class Taylors3dCard extends HTMLElement {
     if (!layer || !layer.model || !this._hass || !this._config) return;
     const policy = this._syncModelRendering();
     layer.update(this._hass.states, { visibleLevel: this._levelShown(),
-      lightsOn: this._config.lights !== 'off' && policy.lamps !== 'off' });
+      lightsOn: this._config.lights !== 'off' && policy.lamps !== 'off', lightPreview: this._lightPreview });
   }
 
   _levelShown() {
@@ -2399,7 +2514,9 @@ class Taylors3dCard extends HTMLElement {
       if (m.domain === 'light') {
         el.style.setProperty('--fp-light', g ? `rgb(${g.rgb.join(',')})` : '');
         const p = this._positions.get(m.id);
-        if (g && p) glows.push({ id: m.id, x: p.x, y: p.y, floorId: p.floorId, ...g });
+        const preview = this._lightPreview?.get(m.entityId)?.appearance;
+        const drawnGlow = preview ? preview.output > 0 ? { rgb: preview.color, strength: 0.25 + 0.75 * preview.level } : null : g;
+        if (drawnGlow && p) glows.push({ id: m.id, x: p.x, y: p.y, floorId: p.floorId, ...drawnGlow });
       }
     }
     this._view.setGlows(glows);
@@ -2411,6 +2528,7 @@ class Taylors3dCard extends HTMLElement {
     // Resolve its current metadata and reject a queued click for a removed marker.
     m = (this._markers || []).find((current) => current.id === m.id);
     if (!m) return;
+    this._stopScenePreview('device selected');
     if (this._config.device_tap_action !== 'toggle') {
       this._popup.close();
       const p = this._positions.get(m.id);
@@ -2424,6 +2542,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _moreInfo(entityId) {
+    this._stopScenePreview('device details opened');
     this._popup.close();
     this._devicePopup.close();
     this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId }, bubbles: true, composed: true }));
@@ -2486,6 +2605,7 @@ class Taylors3dCard extends HTMLElement {
       }
     }
     if (!selected) return;
+    this._stopScenePreview('room selected');
     this._selectedRoomId = selected.room.id;
     this._popup.close();
     this._devicePopup.update(this._hass);
@@ -2498,6 +2618,7 @@ class Taylors3dCard extends HTMLElement {
   _focusPlan(point) {
     this._presetEvents.interrupt();
     if (this._editing || !this._view) return;
+    this._stopScenePreview('map selected');
     this._view.stopCameraMotion();
     this._popup.close();
     this._devicePopup.close();
@@ -2562,6 +2683,7 @@ class Taylors3dCard extends HTMLElement {
   // One HA floor (edit mode): the view linked to just that floor, else that floor on its own
   // with the model's level rules. Frames the floor.
   _setFloor(id) {
+    this._stopScenePreview('floor changed');
     const vis = this._views.filter((v) => !v.hidden);
     // a storey view linked to just that floor wins over an overview (Exterior) linked to it
     const only = (v) => { const f = this._stateFor(v).floors; return f.length === 1 && f[0] === id; };
@@ -2584,6 +2706,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _setMode(mode) {
+    this._stopScenePreview('mode changed');
     if (!this._selectingPreset) this._presetEvents.interrupt();
     this._popup.close();
     this._devicePopup.close();
@@ -2703,6 +2826,7 @@ class Taylors3dCard extends HTMLElement {
     }
     for (const id of controls) actions.append(actions.querySelector(`[data-bubble="${id}"]`));
     this._toolbar.hidden = this._config.show_bubble_bar === false && !this._editing;
+    this._syncScenePreviews();
     this._syncMiniMap();
     requestAnimationFrame(() => this.isConnected && this._resize());
     if (this._empty && this._editing) this._empty.hidden = true;

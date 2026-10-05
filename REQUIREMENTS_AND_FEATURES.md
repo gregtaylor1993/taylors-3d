@@ -37,7 +37,7 @@ For each implementation, update its status, record the changed behavior, link it
 | F09 | Alert pulses at the affected location | Located, labelled smoke/leak/unlocked/custom alerts | Testing |
 | F10 | Actual sun plus rain, clouds and snow | Strict sun/location evidence and opt-in bounded outdoor weather | Testing |
 | F11 | Hue colour/brightness lighting the rooms | Validated light readings, inline colour/white controls and a bounded pool | Testing |
-| F12 | Scene previews | HA device controls; no scene preview | Planned |
+| F12 | Scene previews | Explicit light targets, current-light capture, editor and saved-bar controls implemented; final verification running | In progress |
 | F13 | Ambient idle rotation and night dimming | Automatic night lighting; no idle rotation | Planned |
 | F14 | Camera-aware cut-away and glass/faded walls | Side Section, opacity and authored glass | Planned |
 | F15 | Furniture packs and drag-and-drop placement | Furniture inside GLB models and layer visibility | Planned |
@@ -193,9 +193,27 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 
 **Already present:** device controls, but no scene-preview system.
 
+**Phase 8 implementation (verification running):** Edit → Scenes drafts explicit light targets and can
+capture the selected lights' current appearance. Saved previews have mouse hover
+and touch/keyboard Preview/Stop controls in the bubble bar. A separate Activate
+uses the exact saved HA scene. Only the existing model/floor light rendering is
+overridden; real states, controls, security, tracking and readings stay actual.
+Stop uses the latest actual readings. Default is disabled; the optional demo
+labels Movie/Bedtime as simulations. All 2,276 JavaScript tests in 80 files and
+lint/build/bundle checks pass. Native checks verify actual lighting pixels,
+separate deliberate activation, history/reload, focused colour captions and the
+scrolling narrow list. Complete regression, GitHub checks and the exact-commit
+package remain. The current install zip is verified Phase 7.
+[Scene preview guide](docs/SCENE-PREVIEW-GUIDE.md).
+
 **Complete when:** hover or a touch Preview action temporarily changes only the local visual appearance; leaving/cancelling restores the live appearance. Preview makes no HA service calls. A separate intentional Activate action applies the actual scene. Scene mappings are visible and editable; missing target state data is reported rather than guessed.
 
-**Needs:** a scene entity may not expose all its intended device states. Confirm how preview states will be supplied, and provide a touch equivalent to hover.
+**Chosen approach:** HA scenes do not expose a dependable complete target definition
+to this card. Taylor chooses visual light targets explicitly, or captures current
+light readings. Those targets describe an approximate lighting look, including
+off states and reported RGB/Kelvin/brightness capabilities; they do not claim to
+be the real scene definition. Preview and Activate are independent. Actual home
+scenes, entity permissions, materials and wall-panel checks remain.
 
 ### F13 — ambient idle mode
 

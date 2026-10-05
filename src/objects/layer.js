@@ -7,13 +7,14 @@
 import * as THREE from 'three';
 import { chainState, lightBudget } from './logic.js';
 import { typeOf } from './types.js';
+import { renderLightChainPreview } from '../scene-preview-rendering.js';
 
 const POINTS = 8, SPOTS = 4, SHADOWS = 4;
 const DEG = Math.PI / 180;
 
 const shown = (node) => { for (let n = node; n; n = n.parent) if (!n.visible) return false; return true; };
 const colorKey = (c) => (c ? c.join(',') : '');
-const renderKey = (p) => JSON.stringify([p.result?.level || 0, p.result?.color || null, p.part.text || null]);
+const renderKey = (p) => JSON.stringify([p.renderResult?.level || 0, p.renderResult?.color || null, p.part.text || null]);
 const within = (node, ancestor) => { for (let n = node; n; n = n.parent) if (n === ancestor) return true; return false; };
 
 // Match types.js's authored anchor priority and ROOT-local offset convention exactly.
@@ -61,7 +62,7 @@ export class ObjectLayer {
     this._lightsOn = true;
     this._shadowKeys = new Array(SHADOWS).fill(null); // per shadow slot: fixture@position its map was rendered for
     this.model = null;
-    this.parts = new Map(); // id -> { obj, type, part, chain, result, inputs }
+    this.parts = new Map(); // actual chain/result; renderResult and previewKey stay private
     this.bindings = new Map();
     this.groups = {};
     this._budgetSig = null;
@@ -173,18 +174,25 @@ export class ObjectLayer {
       const ents = hidden ? [] : [own, ctrl, p.obj.type === 'dock' ? mowerEntity : null, ...extra];
       // HA replaces a state object when it changes: same objects, nothing to do
       const inputs = ents.map((e) => (e ? states[e] : null));
-      if (!p.inputs || inputs.length !== p.inputs.length || inputs.some((x, i) => x !== p.inputs[i]) || ents.some((e, i) => e !== p.ents[i])) {
-        const prev = p.result;
+      const inputChanged = !p.inputs || inputs.length !== p.inputs.length || inputs.some((x, i) => x !== p.inputs[i]) || ents.some((e, i) => e !== p.ents[i]);
+      if (inputChanged) {
         p.inputs = inputs;
         p.ents = ents;
-        this.stats.evaluated++;
         p.chain = hidden ? { lit: false, unavailable: false, source: null, entities: [], reason: null }
           : chainState(p.obj, binding, this.groups, states);
-        p.result = p.type.update(p.part, p.chain, { ...ctx, states, entity: hidden ? null : (binding && binding.entity) || null, mowerEntity });
+      }
+      const preview = p.type.render && !hidden ? renderLightChainPreview(p.chain, states, ctx.lightPreview) : null;
+      const previewKey = preview?.key ?? null;
+      if (inputChanged || previewKey !== p.previewKey) {
+        const prev = p.renderResult;
+        p.previewKey = previewKey;
+        this.stats.evaluated++;
+        p.result = p.type.update(p.part, p.chain, { ...ctx, states, entity: hidden ? null : (binding && binding.entity) || null, mowerEntity, lightPreviewReading: preview });
+        p.renderResult = p.type.render?.(p.part) || p.result;
         const key = renderKey(p);
         if (key !== p.renderKey) changed = true;
         p.renderKey = key;
-        if (prev && (prev.level !== p.result.level || colorKey(prev.color) !== colorKey(p.result.color))) recolour.push(id);
+        if (prev && (prev.level !== p.renderResult.level || colorKey(prev.color) !== colorKey(p.renderResult.color))) recolour.push(id);
       }
       if (p.part.label) {
         p.part.label.visible = !!p.part.text && !hidden && visibleLevel(p.obj.level) && shown(p.obj.node);
@@ -193,8 +201,8 @@ export class ObjectLayer {
       if (!p.part.pool || hidden) continue;
       const h = p.part.hints;
       fixtures.push({
-        id, lit: lightsOn && !!p.result.lit, visible: visibleLevel(p.obj.level) && shown(p.obj.node),
-        group: p.obj.group, max: h.max, output: p.result.output, beam: h.beam, castShadow: h.castShadow,
+        id, lit: lightsOn && !!p.renderResult.lit, visible: visibleLevel(p.obj.level) && shown(p.obj.node),
+        group: p.obj.group, max: h.max, output: p.renderResult.output, beam: h.beam, castShadow: h.castShadow,
       });
     }
     // the model was placed elsewhere: pool positions move with it
@@ -325,7 +333,7 @@ export class ObjectLayer {
   }
 
   _light(slot, p) {
-    const r = p.result;
+    const r = p.renderResult;
     const c = r.color || [255, 255, 255];
     slot.light.color.setRGB(c[0] / 255, c[1] / 255, c[2] / 255, THREE.SRGBColorSpace);
     // A finite authored maximum can still overflow after the group multiplier.
