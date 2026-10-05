@@ -433,6 +433,8 @@ async function guardScenario(page) {
 async function dimScenario(page, mode) {
   await setPolicy(page, { enabled: false }); await ready(page);
   await page.evaluate(() => document.querySelector('taylors3d-card')._scene.style.setProperty('filter', 'contrast(1.1)', 'important'));
+  // The fixture's own CSS setup must settle before measuring dim-only work.
+  await ready(page);
   const before = await snapshot(page);
   await setPolicy(page, policy({ rotate: false, dim: { enabled: true, brightness: .5, when: 'sun', start: '22:00', end: '07:00' } }));
   await waitController(page); let dimmed = await snapshot(page);
