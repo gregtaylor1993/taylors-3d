@@ -74,8 +74,8 @@ function chooseVehicle(ctx, kind = 'occupancy') {
 }
 function chooseXY(ctx) {
   ctx.section('vacuums'); ctx.click('add'); ctx.change('kind', 'xy'); ctx.change('entity', 'vacuum.robot');
-  ctx.change('position-source', 'sensor.position'); ctx.change('x-attr', 'location.east'); ctx.change('y-attr', 'location.north');
-  ctx.change('position-floor', 'ground'); ctx.change('plan-metres', true); ctx.change('location-mode', 'anchor'); ctx.change('anchor', 'object:dock');
+  ctx.change('cal-entity', 'sensor.position'); ctx.change('cal-x_attr', 'location.east'); ctx.change('cal-y_attr', 'location.north');
+  ctx.change('cal-floorId', 'ground'); ctx.change('cal-units', 'm'); ctx.change('cal-frame', 'plan'); ctx.change('location-mode', 'anchor'); ctx.change('anchor', 'object:dock');
 }
 function chooseRoomLocation(ctx) {
   ctx.click('add'); ctx.change('kind', 'room_location'); ctx.change('entity', 'sensor.room'); ctx.change('room-source', 'sensor.room');
@@ -252,12 +252,12 @@ describe('vacuum status and measured placement', () => {
     const transform = compileCalibration(saved.position_source); expect(transform.status).toBe('ready'); expect(transform.transform({ kind: 'xy', raw: [1.5, 2.5], status: 'ready' })).toEqual([1.5, 2.5]); ctx.assertNoHA();
   });
   it('will not treat XY as metres merely because a vacuum is cleaning', () => {
-    const ctx = setup(); chooseXY(ctx); ctx.change('plan-metres', false); ctx.click('save');
-    expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled(); expect(ctx.host.textContent).toContain('Confirm that coordinates already use');
+    const ctx = setup(); chooseXY(ctx); ctx.change('cal-frame', 'calibrated'); ctx.click('save');
+    expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled(); expect(ctx.host.textContent).toContain('Capture at least two distinct source points');
   });
   it('rejects missing or duplicate coordinate attribute paths and an undeclared floor', () => {
-    const ctx = setup(); chooseXY(ctx); ctx.change('y-attr', 'location.east'); ctx.click('save'); expect(ctx.host.textContent).toContain('distinct X and Y');
-    ctx.change('y-attr', 'location.north'); ctx.change('position-floor', ''); ctx.click('save'); expect(ctx.host.textContent).toContain('floor for measured coordinates');
+    const ctx = setup(); chooseXY(ctx); ctx.change('cal-y_attr', 'location.east'); ctx.click('save'); expect(ctx.host.textContent).toContain('distinct X/Y');
+    ctx.change('cal-y_attr', 'location.north'); ctx.change('cal-floorId', ''); ctx.click('save'); expect(ctx.host.textContent).toContain('actual mapped floor');
     expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled();
   });
   it('shows missing/bool/blank coordinate readings as invalid instead of animating a made-up route', () => {
@@ -279,12 +279,13 @@ describe('vacuum status and measured placement', () => {
     expect(ctx.host.textContent).toContain('does not provide a current observation'); ctx.click('save');
     expect(ctx.card._layout.vacuum_bindings[0].entity).toBe('vacuum.offline'); ctx.assertNoHA();
   });
-  it('preserves calibrated imported coordinates read-only until a deliberate relink', () => {
+  it('preserves imported known-unit calibration on a label edit without forcing a relink', () => {
     const old = { ...vacuum, kind: 'xy', position_source: { entity: 'sensor.position', source: 'xy', units: 'cm', calibration: [{ src: [0, 0], plan: [2, 3] }], floorId: 'ground' } };
     const ctx = setup({ layout: { vacuum_bindings: [old] } }); ctx.section('vacuums'); ctx.click('edit', 0);
-    expect(ctx.host.querySelector('[data-field="trk-entity"]').disabled).toBe(true); expect(ctx.host.textContent).toContain('uses calibration or different units');
-    ctx.click('relink'); expect(ctx.editor.draft.position_source).toEqual({ entity: '', source: 'xy', units: 'm', plan_meters: false, x_attr: '', y_attr: '', floorId: '' });
-    expect(ctx.card._layout.vacuum_bindings[0]).toEqual(old); ctx.click('cancel'); expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled();
+    expect(ctx.host.querySelector('[data-field="trk-entity"]').disabled).toBe(false); expect(ctx.host.textContent).toContain('Preserved one-point translation');
+    ctx.change('label', 'My robot'); expect(ctx.card._layout.vacuum_bindings[0]).toEqual(old); ctx.click('save');
+    expect(ctx.card._layout.vacuum_bindings[0]).toMatchObject({ ...old, label: 'My robot' });
+    expect(ctx.card._layout.vacuum_bindings[0].position_source).toEqual(old.position_source);
   });
 });
 
@@ -376,7 +377,7 @@ describe('saved references, coordinates and history', () => {
   it('rejects restored measured coordinates in the preview even when old numeric X/Y attributes remain', () => {
     const ctx = setup(); chooseXY(ctx); ctx.card._hass.states['sensor.position'].attributes.restored = true; ctx.editor.updatePreviews(ctx.host);
     const preview = ctx.host.querySelector('[data-trk-preview]').textContent;
-    expect(preview).toContain('Position source sensor.position is a stored/restored reading'); expect(preview).toContain('A current reading is not available.');
+    expect(preview).toContain('Position source sensor.position is a stored/restored reading'); expect(preview).toContain('Stored/restored reading. Waiting for a current Home Assistant update.');
     expect(preview).not.toContain('Ready to save this explicit source'); expect(preview).not.toContain('Current HA state;');
     ctx.click('save'); const saved = ctx.card._layout.vacuum_bindings[0];
     expect(saved.position_source).toMatchObject({ entity: 'sensor.position', x_attr: 'location.east', y_attr: 'location.north', plan_meters: true });

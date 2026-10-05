@@ -10,6 +10,17 @@ const close = (actual, expected) => expected.forEach((v, i) => expect(actual[i])
 const event = { kind: 'event', expires_seconds: 30, event_types: ['vehicle'] };
 
 describe('measured coordinate evidence', () => {
+  it.each(['true', 'false', 0, 1, null, [], {}].map((value) => [value]))('rejects malformed restored flag %j across coordinates, freshness and detection', (restored) => {
+    const source = state('on', { restored, x: 4, y: 5 });
+    const coordinates = readCoordinate(source, xy);
+    expect(coordinates).toMatchObject({ status: 'invalid', raw: null });
+    expect(coordinates.diagnostics[0].code).toBe('restored');
+    expect(readFreshness(source, undefined, now).status).toBe('invalid');
+    expect(readDetection(source, { kind: 'occupancy', active_states: ['on'], clear_states: ['off'] }, now).status).toBe('invalid');
+  });
+  it.each([{}, { restored: false }])('accepts a current reading with valid restored metadata %j', (attributes) => {
+    expect(readCoordinate(state('on', { ...attributes, x: 4, y: 5 }), xy)).toMatchObject({ status: 'ready', raw: [4, 5] });
+  });
   it('reads one atomic source and nested attribute paths without converting its raw units', () => {
     const source = state('cleaning', { location: { east: '1.25e3', north: '-.5' } });
     const result = readCoordinate(source, { source: 'xy', x_attr: 'location.east', y_attr: 'location.north', units: 'mm' });

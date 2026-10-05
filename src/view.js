@@ -302,6 +302,10 @@ export class FloorplanView {
     this._occIds = null; // marker ids waiting for a partial pass (live mower)
     this._occSig = null; // inputs of the last occlusion pass (shown markers, model visibility, cut, section)
     this._shadowSig = null; // inputs of the last shadow map render (model visibility, cut, section)
+    this._motionKeys = new WeakMap(); // current model-node world matrices, seeded at placement
+    this._motionModel = null;
+    this._modelMotionMoving = false;
+    this._modelMotionRevision = 0;
     this.stats = { occPasses: 0, occPartial: 0, occDone: 0, shadow: 0, frames: 0, shadowLights: 0 }; // counters for the headless checks (occDone: full passes finished; shadowLights: per-light map redraws requested)
     this._depth = null;
 
@@ -465,6 +469,7 @@ export class FloorplanView {
     }
     for (const h of handles) {
       const obj = new CSS2DObject(h.element);
+      if (h.element.classList.contains('calibration')) obj.renderOrder = 30; // Numbered measured points stay readable above nearer device badges.
       obj.position.copy(planToWorld(h.x, h.y, 0.03, this.floorElevation(h.floorId)));
       this.overlayGroup.add(obj);
       this.cssObjects.push({ obj, floorId: h.floorId, kind: 'handle' });
@@ -513,6 +518,7 @@ export class FloorplanView {
       this._applyFloorVisibility();
       this._scheduleOcclusion(0);
       this._objectsInvalid();
+      this._captureModelMotion();
       this.dirty = true;
     };
     if (this.model && this.model.id === id) {
@@ -651,6 +657,7 @@ export class FloorplanView {
     this._shadowDirty();
     this._scheduleOcclusion(0);
     this._objectsInvalid();
+    this._captureModelMotion();
     this.dirty = true;
   }
 
@@ -761,8 +768,13 @@ export class FloorplanView {
   _disposeModel() {
     this._modelId = null;
     this._modelVisibility = null;
+    this._motionKeys = new WeakMap();
+    this._motionModel = null;
+    this._modelMotionMoving = false;
+    this._modelMotionRevision = 0;
     if (!this.model) return;
     this.highlightModelNode(null);
+    this.securityLayer?.setModel(null); // Restore hinges and release owned outlines before disposing authored geometry.
     if (this.objectLayer) this.objectLayer.setModel(null); // restores cloned materials before they are disposed
     this._clearGroup(this.modelGroup);
     this.model = null;
@@ -966,7 +978,7 @@ export class FloorplanView {
 
   // Fit the sun's shadow camera to the house: storey / basement / roof levels (untagged: meshes up
   // to 30 m across) + 4 m, not the whole plot, so the 2048² map stays sharp. Sun azimuth from fp.north.
-  _fitShadow() {
+  _fitShadow({ invalidate = true } = {}) {
     if (!this.model) return;
     const sun = this.sun;
     this.modelGroup.updateMatrixWorld(true);
@@ -1002,8 +1014,7 @@ export class FloorplanView {
     cam.far = radius * 5;
     cam.updateProjectionMatrix();
     sun.target.updateMatrixWorld();
-    this._sunShadow();
-    this.stats.shadow++;
+    if (invalidate) { this._sunShadow(); this.stats.shadow++; }
     this.dirty = true;
   }
 
@@ -1068,6 +1079,8 @@ export class FloorplanView {
 
   // Mower trail: plan points [[x, y], ...] on one floor, or null.
   setTrail(points, floorId) {
+    // HA refreshes also clear disabled trails; an already-empty scene needs no redraw.
+    if (!this.trail && (!points || points.length < 2)) return;
     if (this.trail) {
       this.mowerGroup.remove(this.trail);
       this.trail.geometry.dispose();
@@ -1629,7 +1642,57 @@ export class FloorplanView {
     const vis = mv ? mv.index.nodes.map((n) => (n.node.visible ? 1 : 0)).join('')
       : this.model.manifest.levels.map((l) => (l.node.visible ? 1 : 0)).join('');
     const s = this.sectionClip;
-    return [this.model.id, vis, this.modelClip.constant, s ? [...s.normal.toArray(), s.constant].map((v) => v.toFixed(4)).join() : ''].join('|');
+    return [this.model.id, vis, this.modelClip.constant, s ? [...s.normal.toArray(), s.constant].map((v) => v.toFixed(4)).join() : '', this._modelMotionRevision || 0].join('|');
+  }
+
+  // Capture after model placement/merge, without changing authored local transforms.
+  _captureModelMotion() {
+    const sameModel = this._motionModel === this.model;
+    this._motionKeys = new WeakMap(); this._motionModel = this.model;
+    if (!sameModel) { this._modelMotionMoving = false; this._modelMotionRevision = 0; }
+    if (!this.model) return;
+    this.model.root.updateWorldMatrix(true, true);
+    this.model.root.traverse((node) => { if (!node.userData.helper) this._motionKeys.set(node, node.matrixWorld.elements.slice()); });
+  }
+
+  // A model layer reports actual moved targets once. Geometry changes invalidate the
+  // same existing renderer's bounds/picks/shadows; unchanged targets are completely idle.
+  // Occlusion slices are cancelled during flight and recomputed once after settling.
+  modelMotionChanged(targets, { moving = false } = {}) {
+    const result = { changed: false, objectIds: new Set(), roots: new Set(), anchors: [] };
+    if (this._disposed || !this.model) return result;
+    if (this._motionModel !== this.model) { this._motionKeys = new WeakMap(); this._motionModel = this.model; this._modelMotionRevision = 0; }
+    const root = this.model.root;
+    const within = (node) => { for (let n = node; n; n = n.parent) if (n === root) return true; return false; };
+    const supplied = targets instanceof Set || Array.isArray(targets) ? [...targets] : [];
+    const nodes = supplied.filter((node) => node?.isObject3D && within(node) && !node.userData.helper);
+    if (supplied.length && !nodes.length) return result; // Old-model callbacks cannot gate the new model's occlusion.
+    const changed = [];
+    for (const node of new Set(nodes)) {
+      node.updateWorldMatrix(true, true);
+      const previous = this._motionKeys.get(node);
+      if (!previous || node.matrixWorld.elements.some((value, index) => value !== previous[index])) changed.push(node);
+    }
+    const wasMoving = !!this._modelMotionMoving;
+    this._modelMotionMoving = moving === true;
+    if (changed.length) {
+      for (const node of changed) node.traverse((descendant) => { if (!descendant.userData.helper) this._motionKeys.set(descendant, descendant.matrixWorld.elements.slice()); });
+      this._modelMotionRevision = (this._modelMotionRevision || 0) + 1;
+      this._occBoxes = null;
+      this._bounds = this._sceneBounds();
+      const refreshed = this.objectLayer?.refreshAnchors(new Set(changed), { requestShadows: false, markDirty: false });
+      if (refreshed) { result.objectIds = refreshed.objectIds; result.roots = refreshed.roots; result.anchors = refreshed.anchors; }
+      this.pickHelper?.update();
+      this._fitShadow({ invalidate: false });
+      this._shadowDirty(); // one caster request; includes the moved assigned-light positions
+      this._shadowSig = this._modelSig();
+      this._occSig = this._shadowSig + '|' + this.mode + '|' + this._shownMarkersSig();
+      this._updateDepth(); this.markDirty(); result.changed = true;
+    }
+    if (this._modelMotionMoving) {
+      if (changed.length || !wasMoving) this._cancelOcclusion();
+    } else if (changed.length || wasMoving) this._scheduleOcclusion(0);
+    return result;
   }
 
   // Shown markers and where they are (occlusion input).
@@ -1845,7 +1908,7 @@ export class FloorplanView {
   // id: only that marker (a moving live marker); a pending or running full pass already covers it.
   // Nothing runs while the card is detached (start() schedules a full pass again).
   _scheduleOcclusion(delay = OCCLUSION_DELAY_MS, id = null) {
-    if (this._disposed || !this._raf) return;
+    if (this._disposed || !this._raf || this._modelMotionMoving) return;
     if (id !== null) {
       if (this._occFull) return;
       (this._occIds = this._occIds || new Set()).add(id);
@@ -2051,6 +2114,7 @@ export class FloorplanView {
   stop() {
     if (this._raf) cancelAnimationFrame(this._raf);
     this._raf = null;
+    this._modelMotionMoving = false;
     this._cancelOcclusion(); // a detached card runs no passes
   }
 

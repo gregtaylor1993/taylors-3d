@@ -31,6 +31,8 @@ import { StatusOverlays, buildRoomOverlays, buildAlerts } from './status-overlay
 import { CameraCoverageLayer } from './camera-coverage.js';
 import { entityMetadata } from './entity-metadata.js';
 import { buildTrackedEntities, TrackedEntitiesLayer } from './tracked-entities.js';
+import { readSunState, readHaLocation, readWeather, WeatherLayer } from './weather.js';
+import { SecurityLayer } from './security.js';
 
 const VERSION = '0.1.0';
 const NONE = Object.freeze({}); // stable stand-in for a missing layout.objects / groups (binding cache key)
@@ -239,6 +241,8 @@ const STYLE = `
     pointer-events: none; }
   .fp-handle.draw { pointer-events: none; width: 9px; height: 9px; }
   .fp-handle.draw.first { width: 15px; height: 15px; background: var(--primary-color, #03a9f4); }
+  .fp-handle.draw.calibration { width: 24px; height: 24px; display: grid; place-items: center; font-size: 12px;
+    font-weight: 600; color: var(--primary-text-color, #222); background: var(--card-background-color, #fff); }
   .fp-handle.cursor { pointer-events: none; width: 7px; height: 7px; border: none; background: var(--primary-color, #03a9f4); }
   .fp-handle.cursor.vertex { width: 15px; height: 15px; background: none; border: 2px solid var(--primary-color, #03a9f4); }
   .fp-handle.cursor.align { width: 9px; height: 9px; }
@@ -378,8 +382,14 @@ class Taylors3dCard extends HTMLElement {
     this._trackingDeadline = null;
     this._trackingGeneration = 0;
     this._onTrackingVisibility = () => {
+      this._syncSecurity(true);
       if (document.hidden) this._clearTrackingTimer();
       else if (this.isConnected) { this._syncTracking(true); this._syncMiniMap(); }
+    };
+    this._weatherInView = true; // Older browsers without IntersectionObserver retain the normal card lifecycle.
+    this._onWeatherVisibility = () => {
+      this._syncWeatherVisibility();
+      if (this.isConnected && !document.hidden) { this._syncWeather(); this._applySky(false); }
     };
     this._panelName = readPanelName();
     this._presetEvents = new PresetEventController({
@@ -428,10 +438,12 @@ class Taylors3dCard extends HTMLElement {
       this._statusRefs = null;
       this._cameraCoveragePreview = null;
       this._resetTracking();
+      this._resetSecurity();
       this._layoutLoaded(); // release any obsolete model request waiting for the old key
       this._layoutReady = new Promise((resolve) => { this._layoutLoaded = resolve; });
       this._layout = null;
       this._loading = false;
+      this._syncWeatherVisibility();
       this._built = {};
       this._fitted = false;
       this._viewId = null;
@@ -638,6 +650,9 @@ class Taylors3dCard extends HTMLElement {
     window.addEventListener('taylors3d-panel-change', this._onPanelName);
     window.addEventListener('storage', this._onPanelName);
     document.addEventListener('visibilitychange', this._onTrackingVisibility);
+    document.addEventListener('visibilitychange', this._onWeatherVisibility);
+    this._watchWeatherVisibility();
+    this._syncWeather();
     this._trackingInputKey = null;
     this._presetEvents.setHass(this._hass);
     clearInterval(this._skyTimer);
@@ -653,8 +668,14 @@ class Taylors3dCard extends HTMLElement {
     window.removeEventListener('taylors3d-panel-change', this._onPanelName);
     window.removeEventListener('storage', this._onPanelName);
     document.removeEventListener('visibilitychange', this._onTrackingVisibility);
+    document.removeEventListener('visibilitychange', this._onWeatherVisibility);
+    this._weatherObserver?.disconnect();
+    this._weatherObserver = null;
+    this._weatherLayer?.setVisible(false);
     this._clearTrackingTimer();
     this._trackingLayer?.setVisible(false);
+    this._securityLayer?.setVisible(false);
+    this._refreshSecurityMotion();
     this._presetEvents.disconnect();
     if (this._view) this._view.stop();
     this._endGesture();
@@ -671,8 +692,10 @@ class Taylors3dCard extends HTMLElement {
   async _load() {
     this._edit?.cancelHistoryGestures?.();
     this._resetTracking();
+    this._resetSecurity();
     const store = this._store;
     this._loading = true;
+    this._syncWeatherVisibility();
     try {
       const layout = await store.load(this._hass);
       if (store !== this._store) return; // a late old-key response cannot replace the new layout
@@ -688,6 +711,16 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _render() {
+    this._securityLayer?.dispose();
+    this._securityLayer = null;
+    this._securityInputKey = null;
+    this._securityModel = null;
+    this._weatherObserver?.disconnect();
+    this._weatherObserver = null;
+    this._weatherLayer?.dispose();
+    this._weatherLayer = null;
+    this._weatherScene = null;
+    this._weatherView = null;
     const root = this.shadowRoot;
     root.innerHTML = `<style>${STYLE}</style>
       <ha-card>
@@ -749,6 +782,7 @@ class Taylors3dCard extends HTMLElement {
       this._syncToolbar();
     });
     this._view = new FloorplanView(this._scene);
+    this._ensureWeatherLayer();
     this._statusOverlays = new StatusOverlays(this._view.scene, { onInvalidate: () => { this._view.dirty = true; } });
     this._cameraCoverage = new CameraCoverageLayer(this._view.scene, { onInvalidate: () => { this._view.dirty = true; } });
     this._trackingLayer?.dispose();
@@ -812,6 +846,7 @@ class Taylors3dCard extends HTMLElement {
     this._popup.close();
     this._devicePopup.close();
     this._editing = !this._editing;
+    this._syncWeatherVisibility();
     this._body.classList.toggle('editing', this._editing);
     if (this._editing) {
       if (!this._view.model && this._floor === 'all') this._setFloor(this._floors[0].id);
@@ -940,11 +975,173 @@ class Taylors3dCard extends HTMLElement {
     return anchors;
   }
 
+  // Weather uses the same plan-metre outlines and floor elevations as the card.
+  // Indoor masks include hidden rooms: hiding a room must not put rain inside it.
+  weatherFootprints() {
+    const indoors = [], outdoors = [], floors = this._floors || [];
+    const visibleRooms = new Set(this._navigationRooms().map((entry) => entry.room.id));
+    const visibleFloors = this._navigationFloors();
+    const elevation = (id) => floors.filter((floor) => floor.id === id).length === 1
+      ? this._view?.floorElevation(id) : null;
+    const modelIds = new Set();
+    for (const entry of this._roomList || []) {
+      const room = entry.room;
+      if (room.modelId) modelIds.add(room.modelId);
+      // Preserve a broken explicit floor link instead of silently borrowing the first floor.
+      const floorId = room.floor_id ?? entry.floorId;
+      const footprint = { id: room.id, floorId, elevation: elevation(floorId), polygon: room.polygon,
+        outdoor: room.outdoor === true, shown: entry.shown !== false && visibleRooms.has(room.id) };
+      (footprint.outdoor ? outdoors : indoors).push(footprint);
+    }
+    // modelRooms omits hidden or stale level links for placement. Their indoor
+    // outlines still protect the house; a stale/unknown link fails the mask closed.
+    for (const room of this._mb?.manifest?.rooms || []) {
+      if (room.kind !== 'room' || modelIds.has(room.id)) continue;
+      const assignment = this._mb.levels?.[room.level];
+      const floorId = assignment && !assignment.stale ? assignment.floor : null;
+      const polygon = Array.isArray(room.outline)
+        ? room.outline.map((point) => Array.isArray(point) ? transformPoint(point, this._modelAlign()) : point) : null;
+      indoors.push({ id: `m:${room.id}`, floorId, elevation: elevation(floorId), polygon, outdoor: false });
+    }
+    return { outdoors, indoors, visibleFloors: visibleFloors === 'all' ? undefined : visibleFloors };
+  }
+
+  weatherDiagnostics() {
+    return { weather: this._weatherReading, diagnostics: this._weatherLayer?.diagnostics || [],
+      sun: readSunState(this._hass), location: readHaLocation(this._hass) };
+  }
+
+  _ensureWeatherLayer() {
+    const view = this._view;
+    if (!view?.scene || this._weatherScene === view.scene && this._weatherView === view) return;
+    this._weatherLayer?.dispose();
+    this._weatherScene = view.scene;
+    this._weatherView = view;
+    this._weatherRefs = null;
+    this._weatherLayer = new WeatherLayer(view.scene, {
+      onInvalidate: () => { if (this._view === view) view.dirty = true; },
+    });
+    if (this.isConnected) this._watchWeatherVisibility();
+  }
+
+  _watchWeatherVisibility() {
+    if (!this._scene || !this._view || !this.isConnected) return;
+    if (this._weatherObserver && this._weatherObservedScene === this._scene && this._weatherObservedView === this._view) return;
+    this._weatherObserver?.disconnect();
+    this._weatherObserver = null;
+    this._weatherInView = typeof IntersectionObserver !== 'function';
+    this._weatherObservedScene = this._scene;
+    this._weatherObservedView = this._view;
+    if (typeof IntersectionObserver === 'function') {
+      const view = this._view, target = this._scene;
+      const observer = new IntersectionObserver((entries) => {
+        if (this._weatherObserver !== observer || this._view !== view || !this.isConnected) return;
+        const entry = entries.find((candidate) => candidate.target === target);
+        if (!entry) return;
+        this._weatherInView = entry.isIntersecting === true;
+        this._syncWeatherVisibility();
+      });
+      this._weatherObserver = observer;
+      observer.observe(target);
+    }
+    this._syncWeatherVisibility();
+  }
+
+  _syncWeatherVisibility() {
+    this._weatherLayer?.setVisible(!!(this.isConnected && !document.hidden && this._weatherInView !== false
+      && !this._loading && this._layout && !this._editing && !this._section && !this._view?.sectionClip));
+  }
+
+  _syncWeather() {
+    this._ensureWeatherLayer();
+    this._syncWeatherVisibility(); // Hidden updates cannot request animation or a replacement scene frame.
+    if (!this._weatherLayer || !this._hass || !this._layout || !this._config || !this._roomList || this._loading) return;
+    const config = this._layout.weather ?? this._config.weather ?? NONE;
+    const metadata = entityMetadata(this._hass, config?.entity);
+    const refs = [config, metadata.state, metadata.hidden, metadata.disabled, metadata.category,
+      this._roomList, this._floors, this._viewState, this._floorOnly, this._floor, this._section, this._mode, this._mb,
+      this._layout.model, this._config.model_position, this._config.model_rotation, this._config.model_scale,
+      !!this._reducedMotion?.matches];
+    if (this._weatherRefs && this._weatherRefs.every((value, index) => value === refs[index])) return;
+    this._weatherRefs = refs;
+    this._weatherReading = readWeather(this._hass, config);
+    this._weatherLayer.setData({ weather: this._weatherReading, ...this.weatherFootprints(),
+      reducedMotion: !!this._reducedMotion?.matches });
+  }
+
   _animateFeatures(now) {
     const options = { reducedMotion: !!this._reducedMotion?.matches };
     const alerts = this._statusOverlays?.update(now, options) || false;
     const tracking = this._trackingLayer?.update(now, options) || false;
-    return alerts || tracking; // Evaluate both animations even when the first requests a frame.
+    const weather = this._weatherLayer?.update(now, options) || false;
+    const security = this._securityLayer?.update(now, options) || false;
+    if (this._refreshSecurityMotion()) this._syncMiniMap();
+    return alerts || tracking || weather || security; // Evaluate every animation before combining render requests.
+  }
+
+  securityBindings() { return this._layout?.security_bindings ?? this._config?.security_bindings ?? []; }
+
+  securityMotionWriters() {
+    return new Set([...(this._objects?.parts?.values() || [])].filter((part) => typeof part.type?.place === 'function')
+      .map((part) => part.obj?.node).filter((node) => node?.isObject3D));
+  }
+
+  _resetSecurity() {
+    this._securityLayer?.setModel(null);
+    this._refreshSecurityMotion();
+    this._securityModel = null; this._securityInputKey = null;
+  }
+
+  _refreshSecurityMotion() {
+    const layer = this._securityLayer, view = this._view;
+    if (!layer || !view?.modelMotionChanged) return false;
+    const { changedMotionTargets } = layer.takeMotionChanges();
+    if (!changedMotionTargets.size && !layer.moving && !this._securityMoving) return false;
+    const result = view.modelMotionChanged(changedMotionTargets, { moving: layer.moving });
+    this._securityMoving = layer.moving;
+    if (result.changed) {
+      this._refreshAttached();
+      this._syncCameraCoverage();
+      this._syncTracking(true);
+    }
+    return result.changed;
+  }
+
+  _syncSecurity(force = false) {
+    const view = this._view;
+    if (!view || !this._layout || !this._hass || !this._config) return false;
+    if (!this._securityLayer) this._securityLayer = new SecurityLayer({ onInvalidate: () => { if (this._view === view) view.dirty = true; } });
+    const layer = this._securityLayer;
+    view.securityLayer = layer; // The view releases helpers and restores poses before authored model resources.
+    layer.setVisible(!!(this.isConnected && !document.hidden && !this._loading && !this._editing));
+    const writers = this.securityMotionWriters(), writerKey = [...writers].map((node) => node.uuid).sort().join('|');
+    if (writerKey !== this._securityWriterKey || this._securityModel !== view.model) {
+      this._securityWriterKey = writerKey; this._securityWriters = writers;
+      this._securityInputKey = null;
+    }
+    layer.setModel(view.model, { motionWriters: this._securityWriters });
+    this._securityModel = view.model;
+    const planes = [view.modelClip, view.sectionClip].filter((plane) => plane?.isPlane);
+    layer.setClippingPlanes(planes);
+    const shownObjectIds = new Set((view.model?.manifest?.objects || []).filter((object) => {
+      const saved = this._layout.objects?.[object.id], bound = this._objects?.objectAt(object.id);
+      return nodeShown(object.node) && !saved?.hidden && !bound?.binding?.hidden && !this._mb?.levels?.[object.level]?.stale;
+    }).map((object) => object.id));
+    const bindings = this.securityBindings();
+    const evidence = (Array.isArray(bindings) ? bindings : []).map((binding) => {
+      const metadata = entityMetadata(this._hass, binding?.entity);
+      return [binding?.entity, metadata.state, metadata.deviceClass, metadata.hidden, metadata.disabled, metadata.category];
+    });
+    const now = this._now(), key = JSON.stringify([bindings, evidence, [...shownObjectIds].sort(), writerKey,
+      !!this._reducedMotion?.matches, this._loading, !!this._editing, this.isConnected, document.hidden,
+      planes.map((plane) => [...plane.normal.toArray(), plane.constant])]);
+    if (force || key !== this._securityInputKey || layer.nextExpiry !== null && layer.nextExpiry <= now) {
+      this._securityInputKey = key;
+      layer.setData({ hass: this._hass, bindings, shownObjectIds, now, animationNow: performance.now(), reducedMotion: !!this._reducedMotion?.matches });
+    }
+    const changed = this._refreshSecurityMotion();
+    this._setTrackingTimer(this._trackingData.nextExpiry);
+    return changed;
   }
 
   _clearTrackingTimer() {
@@ -964,6 +1161,8 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _setTrackingTimer(deadline) {
+    const deadlines = [deadline, this._securityLayer?.nextExpiry].filter(Number.isFinite);
+    deadline = deadlines.length ? Math.min(...deadlines) : null;
     if (!this.isConnected || document.hidden || !Number.isFinite(deadline) || deadline <= this._now()) {
       if (this._trackingTimer !== null) this._clearTrackingTimer();
       return;
@@ -976,6 +1175,7 @@ class Taylors3dCard extends HTMLElement {
       if (generation !== this._trackingGeneration || !this.isConnected) return;
       this._trackingTimer = null;
       this._trackingDeadline = null;
+      this._syncSecurity(true);
       this._syncTracking(true);
       this._syncMiniMap();
     }, Math.min(2147483647, Math.max(1, deadline - this._now())));
@@ -1655,6 +1855,7 @@ class Taylors3dCard extends HTMLElement {
       vw.setVisibleFloors('all');
       vw.applyModelVisibility(null, null);
       vw.setCut(undefined);
+      this._syncWeatherVisibility();
       return;
     }
     const visible = st.allFloors || (!st.floors.length && v.id === 'all') ? 'all' : st.floors;
@@ -1662,13 +1863,14 @@ class Taylors3dCard extends HTMLElement {
     vw.setVisibleFloors(visible);
     if (this._index && vw.model && st.effective) {
       vw.applyModelVisibility(this._index, st.effective);
-      if (section) { vw.setCut(null); return; }
+      if (section) { vw.setCut(null); this._syncWeatherVisibility(); return; }
       const floors = st.floors.map((id) => this._floors.find((f) => f.id === id)).filter(Boolean);
       vw.setCut(viewCut(v, { tagged: vw.isTagged(), floors }));
     } else {
       vw.applyModelVisibility(null, null);
       vw.setCut(undefined);
     }
+    this._syncWeatherVisibility();
   }
 
   // Devices follow the view's visible rooms / linked floors (model only; without one the floor rules apply).
@@ -2310,7 +2512,9 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _syncMiniMap() {
+    this._syncSecurity();
     this._syncTracking();
+    this._syncWeather();
     if (!this._miniMap || !this._view) return;
     this._syncStatus();
     this._syncCameraCoverage();
@@ -2396,9 +2600,9 @@ class Taylors3dCard extends HTMLElement {
     else if (this._skyMode === 'day') sunBody = { dir: sunVector(...DAY_SUN, north, rot) };
     else {
       auto = true;
-      const a = this._hass && this._hass.states && this._hass.states['sun.sun'];
-      const el = a ? Number(a.attributes.elevation) : NaN, az = a ? Number(a.attributes.azimuth) : NaN;
-      if (Number.isFinite(el) && Number.isFinite(az)) {
+      const reading = readSunState(this._hass);
+      const { elevation: el, azimuth: az } = reading;
+      if (reading.status === 'ready') {
         const dir = sunVector(az, el, north, rot);
         sky = { night: nightFactor(el), sunDir: clampSunDir(dir), sun: sunStrength(el) };
         sunBody = { dir };
@@ -2408,7 +2612,10 @@ class Taylors3dCard extends HTMLElement {
     const same = !force && l && Math.abs(l.night - sky.night) <= 0.01 && Math.abs((l.sun ?? 1) - (sky.sun ?? 1)) <= 0.01 && !!l.sunDir === !!sky.sunDir
       && (!sky.sunDir || Math.acos(Math.max(-1, Math.min(1, l.sunDir[0] * sky.sunDir[0] + l.sunDir[1] * sky.sunDir[1] + l.sunDir[2] * sky.sunDir[2]))) <= Math.PI / 180);
     const now = this._now();
-    if (same && !(auto && now - (this._moonAt ?? -Infinity) >= MOON_EVERY_MS)) return;
+    const location = auto ? readHaLocation(this._hass) : null;
+    const locationKey = location ? JSON.stringify([location.status, location.latitude, location.longitude]) : null;
+    const locationChanged = auto && locationKey !== this._skyLocationKey;
+    if (same && !locationChanged && !(auto && now - (this._moonAt ?? -Infinity) >= MOON_EVERY_MS)) return;
     if (!same) {
       this._skyLast = sky;
       this._daylight = sky.night < 0.5;
@@ -2417,10 +2624,10 @@ class Taylors3dCard extends HTMLElement {
     let moonBody = null;
     if (this._skyMode === 'night') moonBody = { dir: sunVector(...NIGHT_MOON, north, rot), phase: 0.4, illumination: 0.8 };
     else if (auto) {
-      const c = this._hass && this._hass.config;
-      const m = c ? moonPosition(now, Number(c.latitude), Number(c.longitude)) : null;
-      if (m) moonBody = { dir: sunVector(m.azimuth, m.elevation, north, rot), phase: m.phase, illumination: m.illumination, latitude: Number(c.latitude) };
+      const m = location.status === 'ready' ? moonPosition(now, location.latitude, location.longitude) : null;
+      if (m) moonBody = { dir: sunVector(m.azimuth, m.elevation, north, rot), phase: m.phase, illumination: m.illumination, latitude: location.latitude };
     }
+    this._skyLocationKey = locationKey;
     this._moonAt = now;
     v.setSkyBodies({ sun: sunBody, moon: moonBody, north: sunVector(0, 0, north, rot), on: this._config.sky_bodies !== false });
   }

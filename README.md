@@ -8,6 +8,7 @@ See [Requirements and features](REQUIREMENTS_AND_FEATURES.md) for Taylor's devel
 See the [plain-language controls guide](docs/FEATURES-GUIDE.md) for camera automations, Undo/Redo and room overlays.
 See the [camera guide](docs/CAMERAS-GUIDE.md) for camera pictures and approximate coverage.
 See the [tracking guide](docs/TRACKING-GUIDE.md) for room activity, parked vehicles and measured vacuum positions.
+See the [security and weather guide](docs/SECURITY-AND-WEATHER-GUIDE.md) for contacts, explicit door hinges and outdoor effects.
 
 A Lovelace card that shows your home as a 3D floorplan with every device on it. Draw each room
 once and link it to a Home Assistant area. After that, every device assigned to the area appears
@@ -36,6 +37,12 @@ position over its map.
   status/coordinates to their locations. Tracked symbols appear in 3D and on the mini-map;
   tapping opens their actual controls. Motion stays anonymous, recent sightings expire,
   and a cleaning state alone does not invent a vacuum route
+- Measured vacuum sources can be calibrated visually with real source/plan point pairs.
+  Status and position can have separate explicit timestamp/maximum-age rules
+- Edit → Security links real contacts to exact model objects, with optional owned outlines
+  and explicitly configured rigid door motion. Unknown readings remain uncertain
+- Edit → Environment chooses current HA weather for bounded outdoor rain/snow/cloud effects.
+  Complete indoor outlines protect the house; static/low quality supports wall panels
 - Edit mode for admins: draw rooms, doors, floors, pin and hide devices, import/export
 - One layout shared by every user and device (stored by the companion integration)
 - Robot mower: live position, trail, map image or camera overlay, point calibration

@@ -1,6 +1,7 @@
 // Explicit observation bindings. Drafts and previews never change HA devices or saved layout.
 import { entityChoices, entityMetadata, formatEntityValue } from './entity-metadata.js';
-import { compileCalibration, readCoordinate, readDetection } from './tracked-source.js';
+import { readDetection, readFreshness } from './tracked-source.js';
+import { TrackingCalibration } from './tracking-calibration.js';
 
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const copy = (value) => JSON.parse(JSON.stringify(value));
@@ -19,10 +20,27 @@ const sections = { presence: ['Presence', 'presence_bindings'], vehicles: ['Driv
 const kinds = {
   presence: [['room_activity', 'Anonymous room activity'], ['room_location', 'Reported room location']],
   vehicles: [['occupancy', 'Vehicle stays while occupied'], ['count', 'Reported vehicle count'], ['event', 'Vehicle seen recently — expires']],
-  vacuums: [['static', 'Status at a fixed room or dock'], ['room', 'Reported room, exact position unknown'], ['xy', 'Measured X/Y position in plan metres']],
+  vacuums: [['static', 'Status at a fixed room or dock'], ['room', 'Reported room, exact position unknown'], ['xy', 'Measured coordinates with an explicit plan frame']],
 };
 const locationKinds = [['room', 'Selected room'], ['position', 'Fixed plan position'], ['anchor', 'Existing object or marker']];
 const timestampKinds = [['state', 'Entity state contains the event time'], ['attribute', 'An attribute contains the event time'], ['last_changed', 'Explicit pulse when the state changes'], ['last_updated', 'Explicit event when state or attributes change']];
+const freshnessKinds = [['state', 'Entity state is the actual timestamp'], ['attribute', 'An attribute is the actual timestamp'], ['last_updated', 'Home Assistant last state or attribute update'], ['last_changed', 'Home Assistant last state change']];
+const freshnessFormats = [['iso', 'ISO date/time with Z or a timezone offset'], ['seconds', 'Unix seconds'], ['milliseconds', 'Unix milliseconds']];
+function freshnessIssues(rule) {
+  if (rule === undefined) return [];
+  if (!plain(rule)) return ['Saved freshness settings must be an object; repair the rule deliberately.'];
+  if (rule.timestamp_mode === undefined && rule.max_age_seconds === undefined) return [];
+  const issues = [];
+  if (!freshnessKinds.some(([mode]) => mode === rule.timestamp_mode)) issues.push('Choose the actual source timestamp before setting a maximum age.');
+  if (rule.timestamp_mode === 'attribute' && (!text(rule.timestamp_attr) || !rule.timestamp_attr.split('.').every((part) => part.trim()))) issues.push('Enter the actual timestamp attribute path.');
+  if (rule.timestamp_format !== undefined && !freshnessFormats.some(([format]) => format === rule.timestamp_format)) issues.push('Choose ISO with a timezone, Unix seconds or Unix milliseconds.');
+  if (['last_updated', 'last_changed'].includes(rule.timestamp_mode) && rule.timestamp_format && rule.timestamp_format !== 'iso') issues.push('Home Assistant last-updated and last-changed timestamps use ISO with a timezone.');
+  const age = number(rule.max_age_seconds);
+  if (age === null || age <= 0 || !Number.isFinite(age * 1000)) issues.push('Maximum reading age must be a positive finite number of seconds.');
+  return issues;
+}
+const freshnessMode = (rule) => rule === undefined || plain(rule) && rule.timestamp_mode === undefined && rule.max_age_seconds === undefined ? 'current'
+  : plain(rule) && (rule.timestamp_mode === '' || freshnessKinds.some(([kind]) => kind === rule.timestamp_mode)) ? 'timestamp' : 'saved';
 const homeAway = new Set(['home', 'not_home', 'away', 'unknown', 'unavailable']);
 const input = (field, label, value, extra = '') => `<label>${esc(label)}<input data-trk-setting data-field="trk-${field}" value="${esc(value)}" ${extra}></label>`;
 const option = (value, label, selected, disabled = false) => `<option value="${esc(value)}" ${value === selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}>${esc(label)}</option>`;
@@ -43,13 +61,16 @@ export function trackingEntities(hass = {}, section = 'presence', kind = 'room_a
  * updatePreviews(container), reset()/cancel()/dispose(). Only explicit Save/Clear calls
  * card.commitFeatureLayout({ presence_bindings | vehicle_bindings | vacuum_bindings }).
  * Optional card.trackingAnchors() returns genuine {id,label,position:{x,y,z,floorId}}.
- * room_source maps exact reported strings to room IDs. position_source v1 is explicitly
- * declared, direct plan-metre XY; imported calibrated/GPS sources stay read-only.
+ * room_source maps exact reported strings to room IDs. The coordinate widget owns only
+ * position_source drafts; imported GPS and known-unit mappings retain their exact fields.
+ * pendingPlanPick is pure; the parent passes an unsnapped [east,north], floor and token
+ * to acceptPlanPoint(). calibrationOverlay() supplies draft numbered points only.
  */
 export class TrackingEditor {
   constructor(card, onRender = () => {}) {
     this.card = card; this.onRender = onRender; this.section = 'presence'; this.draft = null;
     this.message = null; this.relinking = false; this.maps = []; this.locationMode = 'room'; this.disposed = false;
+    this.calibration = null; this.calibrationPreview = null; this.pickRevision = 0; this.calibrationGeneration = 0; this.publicPlanPick = null;
   }
   get hass() { return this.card._hass || {}; }
   get floors() { return list(this.card._floors).filter((floor) => typeof floor?.id === 'string'); }
@@ -66,9 +87,74 @@ export class TrackingEditor {
     const key = sections[this.section][1];
     return list(this.card._layout?.[key] ?? this.card._config?.[key]);
   }
-  reset() { this.draft = null; this.maps = []; this.message = null; this.relinking = false; this.previewContainer = null; this.editingIndex = null; }
+  reset() {
+    this._clearCalibration();
+    this.draft = null; this.maps = []; this.message = null; this.relinking = false; this.previewContainer = null; this.editingIndex = null;
+  }
   cancel() { this.reset(); }
   dispose() { this.reset(); this.disposed = true; }
+
+  get pendingPlanPick() { return this.publicPlanPick; }
+  _calibrationContext() {
+    const floors = this.floors.map((floor) => ({ ...floor, elevation: this.card._view?.floorElevation?.(floor.id) ?? floor.elevation }));
+    const model = this.card._layout?.model || {}, config = this.card._config || {};
+    const alignment = this.card._modelAlign?.() ?? (config.model
+      ? [config.model_position, config.model_rotation, config.model_scale] : [model.position, model.rotation, model.scale]);
+    return { hass: this.hass, floors, contextKey: JSON.stringify([
+      this.card._config?.layout_key, this.card._view?.model?.root?.uuid ?? null,
+      alignment,
+      floors.map((floor) => [floor.id, floor.elevation]),
+    ]) };
+  }
+  _refreshCalibrationOverlay() { this.card._edit?.refreshOverlay?.(); }
+  _clearCalibration() {
+    const hadPreview = !!this.calibrationPreview, revision = this.pickRevision;
+    this.clearingCalibration = true;
+    const calibration = this.calibration; this.calibration = null;
+    calibration?.dispose(); this.calibrationPreview = null; this.publicPlanPick = null;
+    if (hadPreview && revision === this.pickRevision) this._refreshCalibrationOverlay();
+    this.clearingCalibration = false;
+  }
+  _ensureCalibration() {
+    if (this.clearingCalibration || this.disposed || this.section !== 'vacuums' || this.draft?.kind !== 'xy') return null;
+    if (!this.calibration) {
+      const generation = ++this.calibrationGeneration;
+      this.calibration = new TrackingCalibration({ source: this.draft.position_source || { source: 'xy' },
+        imported: this.editingIndex !== null, ...this._calibrationContext(),
+        onChange: (source) => { if (this.draft) this.draft.position_source = source; },
+        onPlanPick: (pick) => {
+          this.pickRevision++;
+          this.publicPlanPick = pick ? Object.freeze({ ...pick, token: `tracking-${generation}-${pick.token}` }) : null;
+          this.card._edit?.beginTrackingPlanPick?.(this.publicPlanPick);
+        },
+        onPreview: (preview) => { this.calibrationPreview = preview; },
+      });
+    }
+    this.calibration.update(this._calibrationContext());
+    if (this._readOnly()) this.calibration.cancelPlanPick();
+    return this.calibration;
+  }
+  acceptPlanPoint(point, floorId, token) {
+    if (this.disposed) return false;
+    const calibration = this._ensureCalibration();
+    if (!calibration || this._readOnly() || token !== this.publicPlanPick?.token) return false;
+    const accepted = calibration.acceptPlanPoint(point, floorId, calibration.pending?.token);
+    this.onRender(); return accepted;
+  }
+  cancelPlanPick() {
+    if (this.disposed) return;
+    this.calibration?.cancelPlanPick();
+    if (this.previewContainer) this.calibration?.updatePreviews(this.previewContainer);
+  }
+  calibrationOverlay() {
+    const calibration = this._ensureCalibration();
+    if (!calibration || this._readOnly()) return null;
+    const preview = this.calibrationPreview;
+    return { floorId: calibration.source.floorId,
+      points: list(calibration.source.calibration).flatMap((entry, index) => !calibration.planEdits.has(index) && Array.isArray(entry?.plan) && entry.plan.length === 2 && entry.plan.every(finite)
+        ? [{ index, label: String(index + 1), x: entry.plan[0], y: entry.plan[1] }] : []),
+      mapped: preview?.mapped ?? null, status: preview?.status ?? 'invalid' };
+  }
 
   _choices(selected = this.draft?.entity) { return trackingEntities(this.hass, this.section, this.draft?.kind, selected); }
   _entitySelect(field, label, selected, choices) {
@@ -104,13 +190,12 @@ export class TrackingEditor {
     for (const id of new Set(rooms)) if (!this.rooms.some((room) => room.id === id)) issues.push(`Saved room ${id} is missing.`);
     for (const id of new Set([draft.position?.floorId, draft.position_source?.floorId].filter(Boolean))) if (!this.floors.some((floor) => floor.id === id)) issues.push(`Saved floor ${id} is missing.`);
     if (draft.position_key && !this.anchors.some((anchor) => anchor.id === draft.position_key)) issues.push(`Saved anchor ${draft.position_key} is missing.`);
-    const source = draft.position_source;
-    if (this.section === 'vacuums' && draft.kind === 'xy' && source && (source.source && source.source !== 'xy' || source.units && source.units !== 'm' || source.calibration?.length)) issues.push('This saved coordinate source uses calibration or different units. It is preserved; deliberately relink to direct plan metres, or edit it with a calibration tool.');
     return issues;
   }
   _readOnly() { return !this.relinking && this._referenceIssues().length > 0; }
 
   _start(binding, index = null) {
+    this._clearCalibration();
     this.draft = copy(binding); this.message = null; this.relinking = false;
     this.editingIndex = index;
     if (!text(this.draft.id)) {
@@ -176,13 +261,68 @@ export class TrackingEditor {
       ${input('event-type-attr', 'Event type attribute path', draft.event_type_attr || 'event_type')}${input('event-id-attr', 'Event identifier attribute path (optional)', draft.event_id_attr)}</section>`;
   }
   _xyFields() {
-    const source = this.draft.position_source || {};
-    return `<section><h4>Measured coordinates</h4><p class="trk-hint">These must be real coordinates reported by the integration. This first editor supports values already aligned to this plan in metres. Pixel maps, GPS and coordinates needing rotation/scale need calibration first.</p>
-      ${this._entitySelect('position-source', 'Position source (separate from vacuum status)', source.entity, entityChoices(this.hass, { domains: ['sensor', 'device_tracker', 'vacuum'], selected: source.entity }))}
-      ${input('x-attr', 'X attribute path — metres east', source.x_attr)}${input('y-attr', 'Y attribute path — metres north', source.y_attr)}
-      ${this._floorSelect('position-floor', 'Floor reported by these coordinates', source.floorId)}
-      ${check('plan-metres', 'I confirm these X/Y values already use this plan’s metre coordinates', source.plan_meters === true && source.units === 'm')}
-      <p class="trk-hint">If no valid measured position is reported, the vacuum remains at the fixed display location below and says its moving location is not reported. No cleaning route is invented.</p></section>`;
+    return `<fieldset data-trk-cal-fieldset ${this._readOnly() ? 'disabled' : ''}>${this._ensureCalibration().renderHTML()}</fieldset>
+      ${this._freshnessFields('position')}
+      <p class="trk-hint">The position source is separate from vacuum status. If no valid measured position is reported, the vacuum shows status at your chosen fallback below; this does not prove it is physically there. No cleaning route is invented.</p>`;
+  }
+
+  _freshnessRule(target) { return target === 'position' ? this.draft?.position_source?.freshness : this.draft?.freshness; }
+  _freshnessPreview(target) {
+    const entity = target === 'position' ? this.draft?.position_source?.entity : this.draft?.entity;
+    const metadata = entityMetadata(this.hass, entity), rule = this._freshnessRule(target);
+    if (metadata.state?.attributes?.restored === true) return '<p>Stored reading; waiting for a current Home Assistant update.</p>';
+    if (!metadata.available || metadata.hidden || metadata.category) return '<p>No current reading from this source.</p>';
+    const reading = readFreshness(metadata.state, rule, Date.now());
+    if (reading.status === 'current') return '<p>Current HA state; reading age is unverified. An unchanged state is not a reporting heartbeat.</p>';
+    const observed = typeof reading.observedAt === 'number' && Number.isFinite(reading.observedAt) && Math.abs(reading.observedAt) <= 8640000000000000
+      ? new Date(reading.observedAt).toISOString() : null;
+    return `<p>Reading age check: ${esc(reading.status)}${observed ? ` · Source timestamp ${esc(observed)}` : ''}</p>
+      ${reading.status === 'ready' && !reading.verified ? '<p>The timestamp has no maximum age; this reading’s freshness is not verified.</p>' : ''}
+      ${reading.diagnostics.map((issue) => `<p>${esc(issue.message)}</p>`).join('')}`;
+  }
+  _freshnessFields(target) {
+    const label = target === 'position' ? 'Measured position' : 'Vacuum status', rule = this._freshnessRule(target), mode = freshnessMode(rule);
+    const choices = [['current', 'Current HA state — no age limit'], ['timestamp', 'Actual timestamp — check reading age']];
+    if (mode === 'saved') choices.unshift(['saved', 'Saved rule — choose a deliberate repair']);
+    let fields = select(`freshness-${target}-mode`, `${label} freshness`, mode, choices);
+    if (mode === 'timestamp') {
+      const formats = [...freshnessFormats];
+      if (rule.timestamp_format !== undefined && !formats.some(([id]) => id === rule.timestamp_format)) formats.unshift([rule.timestamp_format, `Unsupported saved format: ${String(rule.timestamp_format)}`]);
+      fields += `${select(`freshness-${target}-timestamp-mode`, 'Which timestamp does this source really report?', rule.timestamp_mode, [['', 'Choose the actual timestamp'], ...freshnessKinds])}
+        ${rule.timestamp_mode === 'attribute' ? input(`freshness-${target}-attribute`, 'Timestamp attribute path', rule.timestamp_attr) : ''}
+        ${select(`freshness-${target}-format`, 'Actual timestamp format', rule.timestamp_format ?? 'iso', formats)}
+        ${input(`freshness-${target}-age`, 'Maximum reading age, seconds', rule.max_age_seconds, 'type="number" min="0" step="any"')}`;
+    }
+    return `<section data-trk-freshness="${target}"><h4>${label} reading age</h4>${fields}
+      <p class="trk-hint">Choose a timestamp the source actually reports. Last-changed means a state changed; it is not a heartbeat for a quiet parked sensor. Dashboard updates never become measurement times. ISO dates must include Z or a timezone offset.</p>
+      ${mode === 'saved' ? `<p class="trk-note">Unsupported or malformed saved rule is preserved until you deliberately choose a replacement above.</p><pre>${esc(JSON.stringify(rule))}</pre>` : ''}
+      ${plain(rule) && Object.keys(rule).some((key) => !['timestamp_mode', 'timestamp_attr', 'timestamp_format', 'max_age_seconds'].includes(key)) ? '<p class="trk-hint">Additional saved rule options are preserved when you edit supported fields.</p>' : ''}
+      <div data-trk-freshness-preview="${target}" aria-live="polite">${this._freshnessPreview(target)}</div></section>`;
+  }
+  _changeFreshness(field, element, inputOnly = false) {
+    const match = field.match(/^trk-freshness-(status|position)-(mode|timestamp-mode|format|attribute|age)$/);
+    if (!match || this.section !== 'vacuums' || !this.draft || match[1] === 'position' && this.draft.kind !== 'xy') return false;
+    if (this._readOnly()) return true;
+    const [, target, setting] = match, previous = this._freshnessRule(target), revision = this.pickRevision;
+    let rule = plain(previous) ? copy(previous) : undefined;
+    if (setting === 'mode') {
+      if (element.value === 'current') rule = undefined;
+      else if (element.value === 'timestamp') rule = { ...(rule || {}),
+        timestamp_mode: freshnessKinds.some(([mode]) => mode === rule?.timestamp_mode) ? rule.timestamp_mode : '',
+        timestamp_format: rule?.timestamp_format ?? 'iso', max_age_seconds: rule?.max_age_seconds ?? '' };
+      else return true;
+    } else {
+      if (!rule || freshnessMode(rule) !== 'timestamp') return true;
+      const key = { 'timestamp-mode': 'timestamp_mode', format: 'timestamp_format', attribute: 'timestamp_attr', age: 'max_age_seconds' }[setting];
+      rule[key] = setting === 'age' ? number(element.value) ?? element.value : element.value;
+    }
+    if (target === 'position') this._ensureCalibration().setFreshness(rule);
+    else if (rule === undefined) delete this.draft.freshness; else this.draft.freshness = rule;
+    this.message = null;
+    if (revision === this.pickRevision && target === 'position') this._refreshCalibrationOverlay();
+    if (!inputOnly && ['mode', 'timestamp-mode'].includes(setting)) { this.previewContainer = null; this.onRender(); }
+    else if (this.previewContainer) this.updatePreviews(this.previewContainer);
+    return true;
   }
 
   _raw() {
@@ -203,9 +343,6 @@ export class TrackingEditor {
       draft.room_source = { ...source, entity: source.entity || draft.entity, room_map: Object.fromEntries(this.maps.map((row) => [row.value, row.roomId])) };
       if (!text(source.attribute)) delete draft.room_source.attribute; else draft.room_source.attribute = text(source.attribute);
     }
-    if (this.section === 'vacuums' && draft.kind === 'xy') {
-      draft.position_source = { ...draft.position_source, source: 'xy', units: 'm', plan_meters: draft.position_source?.plan_meters === true };
-    }
     if (this.section === 'presence' && draft.kind === 'room_location') { delete draft.position; delete draft.position_key; delete draft.roomId; }
     else if (this.locationMode === 'room') { delete draft.position; delete draft.position_key; }
     else if (this.locationMode === 'anchor') { delete draft.position; delete draft.roomId; }
@@ -224,6 +361,10 @@ export class TrackingEditor {
     if (this.bindings.some((binding, index) => index !== this.editingIndex && binding?.id === draft.id)) issues.push('Saved binding IDs must be unique. Clear the duplicate binding before editing it.');
     this._validEntity(draft.entity, this._choices(draft.entity), 'Choose an actual source entity for this tracking type.', issues);
     if (this._readOnly()) issues.push('Saved references are read-only. Restore them, deliberately Relink, or Clear this binding.');
+    if (this.section === 'vacuums') {
+      issues.push(...freshnessIssues(draft.freshness).map((message) => `Vacuum status: ${message}`));
+      if (draft.kind === 'xy') issues.push(...freshnessIssues(draft.position_source?.freshness).map((message) => `Measured position: ${message}`));
+    }
     if (this.section === 'presence' && draft.kind === 'room_location') { /* Only reported room mappings locate people. */ }
     else if (this.locationMode === 'room') {
       const room = this.rooms.find((entry) => entry.id === draft.roomId);
@@ -268,14 +409,13 @@ export class TrackingEditor {
       }
     }
     if (this.section === 'vacuums' && draft.kind === 'xy') {
-      const source = draft.position_source;
+      const source = draft.position_source || {};
       this._validEntity(source.entity, entityChoices(this.hass, { domains: ['sensor', 'device_tracker', 'vacuum'], selected: source.entity }), 'Choose the real position source.', issues);
-      if (!text(source.x_attr) || !text(source.y_attr) || source.x_attr === source.y_attr) issues.push('Choose distinct X and Y attribute paths.');
-      if (!this._validFloor(source.floorId)) issues.push('Choose the floor for measured coordinates.');
-      if (!source.plan_meters) issues.push('Confirm that coordinates already use this plan’s metre frame. Cleaning status alone does not report position.');
-      if (source.calibration?.length || this.draft.position_source?.source && this.draft.position_source.source !== 'xy' || this.draft.position_source?.units && this.draft.position_source.units !== 'm') issues.push('Relink to an explicit direct plan-metre source before using this editor to save calibrated coordinates.');
-      const calibration = compileCalibration(source);
-      if (calibration.status !== 'ready') issues.push(...calibration.diagnostics.map((issue) => issue.message));
+      const calibration = this._ensureCalibration(), report = calibration.report();
+      const sourceEdited = ['entity', 'x_attr', 'y_attr'].some((key) => source[key] !== calibration.initial[key]);
+      if ((source.source || 'xy') === 'xy' && sourceEdited && (!text(source.x_attr) || !text(source.y_attr) || source.x_attr === source.y_attr)) issues.push('An edited X/Y source needs distinct actual coordinate attribute paths.');
+      if (report.status !== 'ready') issues.push(...report.diagnostics.map((issue) => issue.message));
+      if (this.pendingPlanPick) issues.push('Match or cancel the captured source point before saving this binding.');
     }
     return [...new Set(issues)];
   }
@@ -290,7 +430,7 @@ export class TrackingEditor {
       if (reading.status !== 'active' && reading.status !== 'clear' && reading.status !== 'ready') issues.push(...reading.diagnostics.map((issue) => issue.message));
     }
     if (this.section === 'vacuums' && draft.kind === 'xy' && draft.position_source?.entity) {
-      const reading = readCoordinate(this.hass.states?.[draft.position_source.entity], draft.position_source);
+      const reading = this._ensureCalibration().evidence();
       if (reading.status !== 'ready') issues.push(...reading.diagnostics.map((issue) => issue.message));
     }
     const unavailable = !entityMetadata(this.hass, draft.entity).available;
@@ -308,12 +448,21 @@ export class TrackingEditor {
   updatePreviews(container) {
     if (this.disposed || !container || !this.draft) return;
     this.previewContainer = container;
+    const before = this.calibrationPreview, revision = this.pickRevision, calibration = this._ensureCalibration();
+    calibration?.updatePreviews(container);
+    for (const target of container.querySelectorAll('[data-trk-freshness-preview]')) {
+      const html = this._freshnessPreview(target.dataset.trkFreshnessPreview);
+      if (target.innerHTML !== html) target.innerHTML = html;
+    }
+    const fieldset = container.querySelector('[data-trk-cal-fieldset]');
+    if (fieldset) fieldset.disabled = this._readOnly();
     const target = container.querySelector('[data-trk-preview]'), html = this._preview();
     if (target && target.innerHTML !== html) target.innerHTML = html;
     const root = container.matches?.('[data-trk-editor]') ? container : container.querySelector('[data-trk-editor]');
     for (const control of root?.querySelectorAll('[data-trk-setting]') || []) control.disabled = this._readOnly();
     const relink = root?.querySelector('[data-act="trk-relink"]');
     if (relink) relink.hidden = this._referenceIssues().length === 0;
+    if (before !== this.calibrationPreview && revision === this.pickRevision) this._refreshCalibrationOverlay();
   }
 
   render() {
@@ -325,6 +474,7 @@ export class TrackingEditor {
       const typeChoices = kinds[this.section].some(([kind]) => kind === draft.kind) ? kinds[this.section] : [[draft.kind, `Unsupported saved type: ${draft.kind}`], ...kinds[this.section]];
       fields = `${select('kind', 'Observation type', draft.kind, typeChoices)}${input('label', 'Display label (optional)', draft.label)}${check('enabled', 'Show this binding', draft.enabled !== false)}
         ${this._entitySelect('entity', this.section === 'vacuums' ? 'Vacuum status entity' : 'Observation source', draft.entity, this._choices())}`;
+      if (this.section === 'vacuums') fields += this._freshnessFields('status');
       if (this.section === 'presence' && draft.kind === 'room_activity') fields += `${select('signal', 'What this sensor reports', draft.signal, [['motion', 'Motion — activity, not identity'], ['occupancy', 'Occupancy — anonymous']])}${input('active', 'Active source states, separated by commas', words(draft.active_states).join(', '))}${input('clear', 'Clear source states, separated by commas', words(draft.clear_states).join(', '))}`;
       if (this.section === 'presence' && draft.kind === 'room_location' || this.section === 'vacuums' && draft.kind === 'room') fields += this._roomMapping();
       if (this.section === 'presence' && draft.kind === 'room_location') fields += this._identity();
@@ -348,6 +498,7 @@ export class TrackingEditor {
       [data-trk-editor] [aria-pressed=true]{border:2px solid var(--primary-color,#03a9f4)}[data-trk-editor] li{overflow-wrap:anywhere}[data-trk-editor] .trk-saved{padding:0;list-style:none}
       [data-trk-editor] .trk-saved li{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin:8px 0}[data-trk-editor] .trk-saved span{flex:1;min-width:110px}[data-trk-editor] small{display:block}
       [data-trk-editor] .trk-hint{color:var(--secondary-text-color,#666)}[data-trk-editor] .trk-note{border-left:3px solid var(--primary-color,#03a9f4);padding-left:9px}[data-trk-editor] section{margin-top:14px}[data-trk-editor] h4{margin:14px 0 7px}
+      [data-trk-cal-fieldset]{min-width:0;padding:0;border:0;margin:0}[data-trk-freshness] pre{white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%}
       </style><h3>Tracking</h3><p class="trk-hint">Choose what your real Home Assistant sources report. Editing changes this layout only; it never starts a vacuum or controls devices.</p>
       <nav aria-label="Tracking types">${Object.entries(sections).map(([id, [label]]) => button('section', label, `data-section="${id}" aria-pressed="${id === this.section}"`)).join('')}</nav>
       <ul class="trk-saved">${saved}</ul>${!draft ? button('add', `Add ${this.section === 'presence' ? 'presence binding' : this.section === 'vehicles' ? 'vehicle binding' : 'vacuum binding'}`) : ''}
@@ -355,12 +506,25 @@ export class TrackingEditor {
       <div class="trk-actions">${button('save', 'Save', `data-trk-setting ${this._readOnly() ? 'disabled' : ''}`)}${button('cancel', 'Cancel')}${button('relink', 'Relink deliberately', this._referenceIssues().length ? '' : 'hidden')}${this.editingIndex !== null ? button('clear-draft', 'Clear saved binding') : ''}</div></section>` : ''}</section>`;
   }
 
+  _calibrationField(field, element, inputOnly = false) {
+    const calibration = this._ensureCalibration(), revision = this.pickRevision;
+    if (!calibration || this._readOnly()) return true;
+    if (field === 'trk-cal-entity' && element.value && !entityChoices(this.hass, { domains: ['sensor', 'device_tracker', 'vacuum'], selected: element.value }).some((choice) => choice.value === element.value && choice.selectable)) return true;
+    calibration.onChange(field, element); this.message = null;
+    if (revision === this.pickRevision) this._refreshCalibrationOverlay();
+    if (!inputOnly && ['trk-cal-frame', 'trk-cal-units', 'trk-cal-entity', 'trk-cal-x_attr', 'trk-cal-y_attr', 'trk-cal-floorId'].includes(field)) { this.previewContainer = null; this.onRender(); }
+    else if (this.previewContainer) this.updatePreviews(this.previewContainer);
+    return true;
+  }
   onChange(field, element) {
     if (this.disposed || !field?.startsWith('trk-')) return false;
     if (!this.draft || this._readOnly()) return true;
+    if (field.startsWith('trk-freshness-')) return this._changeFreshness(field, element);
+    if (field.startsWith('trk-cal-')) return this._calibrationField(field, element);
     const draft = this.draft, value = element.value, name = field.slice(4), structural = new Set(['kind', 'location-mode', 'identity', 'timestamp-mode']);
     if (name === 'kind') {
       if (!kinds[this.section].some(([kind]) => kind === value)) return true;
+      this._clearCalibration();
       draft.kind = value;
       for (const key of ['room_source', 'position_source', 'identity_entity', 'identity_attribute', 'identity_value', 'timestamp_mode', 'timestamp_attr', 'event_types', 'expires_seconds']) delete draft[key];
       this.maps = [];
@@ -396,20 +560,29 @@ export class TrackingEditor {
     else if (name === 'event-types') draft.event_types = words(value);
     else if (name === 'event-type-attr') draft.event_type_attr = value;
     else if (name === 'event-id-attr') draft.event_id_attr = value;
-    else if (['position-source', 'x-attr', 'y-attr', 'position-floor', 'plan-metres'].includes(name)) {
-      const key = { 'position-source': 'entity', 'x-attr': 'x_attr', 'y-attr': 'y_attr', 'position-floor': 'floorId', 'plan-metres': 'plan_meters' }[name];
-      draft.position_source = { ...draft.position_source, source: 'xy', units: 'm', [key]: name === 'plan-metres' ? element.checked : value };
-    } else return false;
+    else return false;
     this.message = null;
     if (structural.has(name)) { this.previewContainer = null; this.onRender(); }
     else if (this.previewContainer) this.updatePreviews(this.previewContainer);
     return true;
   }
   onInput(field, element) {
+    if (this.disposed) return false;
+    if (field?.startsWith('trk-freshness-')) return ['INPUT', 'TEXTAREA'].includes(element.tagName) && this._changeFreshness(field, element, true);
+    if (field?.startsWith('trk-cal-')) return ['INPUT', 'TEXTAREA'].includes(element.tagName) && this._calibrationField(field, element, true);
     return !['trk-kind', 'trk-location-mode', 'trk-identity', 'trk-timestamp-mode'].includes(field) && this.onChange(field, element);
   }
   onClick(action, element = {}) {
     if (this.disposed || !action?.startsWith('trk-')) return false;
+    if (action.startsWith('trk-cal-')) {
+      const calibration = this._ensureCalibration(), revision = this.pickRevision;
+      if (calibration && !this._readOnly()) {
+        calibration.onClick(action, element);
+        if (revision === this.pickRevision) this._refreshCalibrationOverlay();
+        this.onRender();
+      }
+      return true;
+    }
     const index = Number(element.dataset?.index);
     if (action === 'trk-section') {
       if (own(sections, element.dataset?.section)) { this.reset(); this.section = element.dataset.section; this.onRender(); }
@@ -420,7 +593,6 @@ export class TrackingEditor {
     else if (action === 'trk-cancel') { this.reset(); this.onRender(); }
     else if (action === 'trk-relink' && this.draft) {
       this.relinking = true; this.message = 'Choose each replacement deliberately. No saved source, room or anchor has been guessed.';
-      if (this.section === 'vacuums' && this.draft.kind === 'xy') this.draft.position_source = { entity: '', source: 'xy', units: 'm', plan_meters: false, x_attr: '', y_attr: '', floorId: '' };
       this.onRender();
     } else if (action === 'trk-add-map' && this.draft && !this._readOnly()) { this.maps.push({ value: '', roomId: '' }); this.onRender(); }
     else if (action === 'trk-remove-map' && this.draft && !this._readOnly()) { this.maps.splice(index, 1); this.onRender(); }

@@ -13,6 +13,22 @@ const DEG = Math.PI / 180;
 
 const shown = (node) => { for (let n = node; n; n = n.parent) if (!n.visible) return false; return true; };
 const colorKey = (c) => (c ? c.join(',') : '');
+const within = (node, ancestor) => { for (let n = node; n; n = n.parent) if (n === ancestor) return true; return false; };
+
+// Match types.js's authored anchor priority and ROOT-local offset convention exactly.
+// Motion refreshes the cache; it must not prepare/dispose a type or alter its HA look.
+function currentAnchor(p, root) {
+  const { obj, part } = p, world = new THREE.Vector3(), box = new THREE.Box3();
+  obj.node.updateWorldMatrix(true, true);
+  if (part.glow && !box.setFromObject(part.glow).isEmpty()) box.getCenter(world);
+  else if (Array.isArray(obj.anchor)) obj.node.localToWorld(world.set(obj.anchor[0], obj.anchor[1], obj.anchor[2] || 0));
+  else if (!box.setFromObject(obj.node).isEmpty()) box.getCenter(world);
+  else obj.node.getWorldPosition(world);
+  root.worldToLocal(world);
+  // Generic prepare deliberately ignores hints.offset; retain that existing behavior.
+  if (p.type !== typeOf('generic') && part.hints?.offset) world.add(new THREE.Vector3(...part.hints.offset));
+  return world;
+}
 
 export class ObjectLayer {
   constructor(view) {
@@ -68,7 +84,8 @@ export class ObjectLayer {
       for (const obj of model.manifest.objects || []) {
         const type = typeOf(obj.type);
         try {
-          this.parts.set(obj.id, { obj, type, part: type.prepare(obj, ctx), chain: null, result: null, inputs: null });
+          const part = type.prepare(obj, ctx);
+          this.parts.set(obj.id, { obj, type, part, anchorWorld: model.root.localToWorld(part.anchor.clone()), chain: null, result: null, inputs: null });
         } catch (e) {
           console.warn('taylors3d: object', obj.id, e);
         }
@@ -179,7 +196,10 @@ export class ObjectLayer {
     if (this._pose && placeSig !== this._poseSig) this._applyPose(); // the model was re-aligned
     if (placeSig !== this._labelSig) {
       this._labelSig = placeSig;
-      for (const p of this.parts.values()) if (p.type.relayout) p.type.relayout(p.part);
+      for (const p of this.parts.values()) {
+        p.anchorWorld = root.localToWorld(p.part.anchor.clone());
+        if (p.type.relayout) p.type.relayout(p.part);
+      }
     }
     const sig = placeSig + '|' + fixtures.filter((f) => f.lit && f.visible).map((f) => f.id).join();
     if (sig !== this._budgetSig) {
@@ -288,6 +308,50 @@ export class ObjectLayer {
     const root = this.model.root;
     root.updateWorldMatrix(true, false);
     return [...this.parts].map(([id, p]) => ({ id, world: root.localToWorld(p.part.anchor.clone()) }));
+  }
+
+  // Moving model targets may contain objects OR change an enclosing object's box centre.
+  // Recompute only related anchors. Root consumes exact changed IDs for tracking/map/popups.
+  // Already assigned light slots move in place; no pool allocation or HA state evaluation.
+  refreshAnchors(targets, { requestShadows = true, markDirty = true } = {}) {
+    const result = { changed: false, objectIds: new Set(), roots: new Set(), anchors: [] };
+    if (!this.model) return result;
+    const root = this.model.root;
+    const nodes = (targets instanceof Set || Array.isArray(targets) ? [...targets] : []).filter((node) => node?.isObject3D && within(node, root));
+    if (!nodes.length) return result;
+    root.updateWorldMatrix(true, false);
+    const movedShadows = new Set();
+    for (const [id, p] of this.parts) {
+      if (!p.obj.node || !nodes.some((target) => within(p.obj.node, target) || within(target, p.obj.node))) continue;
+      const anchor = currentAnchor(p, root);
+      const world = root.localToWorld(anchor.clone());
+      if (p.part.anchor.equals(anchor) && p.anchorWorld?.equals(world)) continue;
+      p.part.anchor.copy(anchor); result.changed = true; result.objectIds.add(id); result.roots.add(p.obj.node);
+      p.anchorWorld = world.clone(); result.anchors.push({ id, world });
+      if (p.type.relayout) p.type.relayout(p.part);
+      const slot = this._slots.get(id);
+      if (slot) {
+        const light = slot.light, hints = p.part.hints, before = light.position.clone();
+        light.position.copy(world);
+        if (light.isSpotLight) {
+          if (hints.target) light.target.position.copy(root.localToWorld(new THREE.Vector3(...hints.target)));
+          else light.target.position.copy(world).y -= 1;
+          light.target.updateMatrixWorld();
+        }
+        light.updateMatrixWorld();
+        if (slot.shadow && light.intensity > 0 && !before.equals(light.position)) movedShadows.add(light);
+      }
+    }
+    // Keep assignment shadow keys current so the next identical HA update stays idle.
+    for (const light of movedShadows) {
+      const index = this.pool.points.indexOf(light);
+      if (index >= 0 && index < SHADOWS) this._shadowKeys[index] = this._shadowKey(light);
+    }
+    if (requestShadows && movedShadows.size) {
+      this.stats.shadowRequests++; this.view.requestShadowUpdate([...movedShadows]);
+    }
+    if (markDirty && result.changed) this.view.markDirty();
+    return result;
   }
 
   // World position of one object's anchor (null when the object is gone).

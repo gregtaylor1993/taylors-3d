@@ -36,8 +36,11 @@ position and map overlay.
 - `camera-editor.js` — Edit → Cameras drafts, preview/Save/Cancel/Clear, exact mount selection and missing-selection preservation. Undo, context changes and leaving the tab clear preview.
 - `tracked-source.js` — strict measured coordinate/calibration and timestamp/detection readers. Current HA occupancy is distinct from fixed-expiry events; malformed/restored readings do not become live evidence.
 - `tracked-entities.js` — explicit room observations, parked/sighted vehicles and per-vacuum measured/static positions. Owned geometry and labels reuse the existing scene; no fabricated identity or route. Optional interpolation joins measured samples only. Semantic unchanged data does not invalidate idle rendering.
-- `tracking-editor.js` — Edit → Tracking drafts and deliberate missing-link repair. Additive presence/vehicle/vacuum arrays save through root `_commit`; existing calibrated sources remain preserved until a visual calibration editor is available.
-- Root tracking owns one nearest absolute expiry timer, exact static `trackingAnchors()` keys, source-scoped event memory and shared scene/mini-map entity panel routing. Disconnect/tab hiding clear timers; resume reevaluates actual absolute source time. Evaluate both alert and tracking animation updates before combining their render request.
+- `tracking-editor.js` — Edit → Tracking drafts and deliberate missing-link repair. Additive presence/vehicle/vacuum arrays save through root `_commit`; imported fields remain preserved. Status and coordinate freshness rules are independent and explicit.
+- `tracking-calibration.js` — freezes real source readings, maps unsnapped source/plan pairs, previews methods/residuals and preserves imported GPS/units. Capture tokens/context prevent an old point entering another binding/model/floor. EditMode owns actual plan clicks, scoped Escape and read-only draft handles; no commit until Save.
+- `security.js` / `security-editor.js` — exact contact evidence, owned bounded outlines and optional explicit rigid parent-local hinge offsets. No inferred angles or device actions. Unknown/stale readings restore authored pose with uncertain outline; no closed claim. Reject duplicate/nested/external transform writers. Root passes actual clips/visibility and drains movement through `view.modelMotionChanged()` so attached anchors, picking, occlusion and existing shadows update. Release helpers before authored model teardown.
+- `weather.js` / `weather-editor.js` — opt-in current HA conditions with bounded decorative outdoor particles in the existing scene; complete indoor polygons on every floor mask precipitation. Invalid masks fail closed. Static/reduced-motion/hidden/Edit/Section/offscreen states stop animation; no new timer/light/renderer. Strict actual sun angles and numeric HA location replace coercion of absent data; manual Day/Night remain.
+- Root tracking and security share one nearest absolute expiry timer. Tracking uses exact static `trackingAnchors()` keys, source-scoped event memory and shared scene/mini-map entity panel routing. Disconnect/tab hiding clear timers; resume reevaluates actual absolute source time. Evaluate alert, tracking, weather and security animation updates independently before combining their render request.
 
 Review these, fix bugs, add unit tests (vitest) for placement + mower math.
 
@@ -134,7 +137,7 @@ iiseppi/sunseeker_local_control (MQTT).
 - GitHub (`origin`) is the main remote; HACS installs it as an Integration from release
   `taylors3d.zip` (integration with the card bundled; it registers the card via
   add_extra_js_url). Manual: copy `custom_components/taylors3d/` after `npm run build`.
-- CI: `.github/workflows/ci.yml` (lint, vitest, build, headless checks including `check:navigation`, pytest);
+- CI: `.github/workflows/ci.yml` (lint, vitest, build, source/bundle freshness, headless checks including navigation/calibration/security/weather, pytest);
   `release.yml` on `v*` tags builds the zip and creates the release.
 - Add `npm run deploy` that scp's dist + integration to the HA host (host from .env, not committed).
 - `demo/index.html` with a mock `hass` object (few areas, floors, lights, sensors, a fake mower

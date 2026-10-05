@@ -18,6 +18,8 @@ import { historyShortcut, isNativeEditing } from './history.js';
 import { OverlayEditor } from './overlay-editor.js';
 import { CameraEditor } from './camera-editor.js';
 import { TrackingEditor } from './tracking-editor.js';
+import { WeatherEditor } from './weather-editor.js';
+import { SecurityEditor } from './security-editor.js';
 import { entityChoices, registryIssues } from './entity-metadata.js';
 
 const DENSE_TRIS = 150000;
@@ -52,6 +54,8 @@ export class EditMode {
     this._overlayEditor = new OverlayEditor(card, () => this.render());
     this._cameraEditor = new CameraEditor(card, () => this.render());
     this._trackingEditor = new TrackingEditor(card, () => this.render());
+    this._weatherEditor = new WeatherEditor(card, () => this.render());
+    this._securityEditor = new SecurityEditor(card, () => this.render());
     this.tab = 'rooms';
     this.selectedRoom = null;
     this.selectedMarker = null;
@@ -140,6 +144,8 @@ export class EditMode {
   detach() {
     this._cameraEditor.cancel();
     this._trackingEditor.cancel();
+    this._weatherEditor.reset();
+    this._securityEditor.reset();
     activeEditors.delete(this);
     window.removeEventListener('keydown', this._onKey);
     window.removeEventListener('pointerup', this._onSliderRelease);
@@ -154,6 +160,8 @@ export class EditMode {
     this.detach();
     this._cameraEditor.dispose();
     this._trackingEditor.dispose();
+    this._weatherEditor.dispose();
+    this._securityEditor.dispose();
   }
 
   attach() {
@@ -197,6 +205,14 @@ export class EditMode {
     }
     if (this.tab === 'tracking' && this.panel.contains(active) && active?.dataset?.field?.startsWith('trk-')) {
       this._trackingEditor.updatePreviews(this.panel);
+      return;
+    }
+    if (this.tab === 'environment' && this.panel.contains(active) && active?.dataset?.field?.startsWith('env-weather-')) {
+      this._weatherEditor.updatePreviews(this.panel);
+      return;
+    }
+    if (this.tab === 'security' && this.panel.contains(active) && active?.dataset?.field?.startsWith('sec-')) {
+      this._securityEditor.updatePreviews(this.panel);
       return;
     }
     if (this._sliding) this._renderHeld = true;
@@ -246,7 +262,7 @@ export class EditMode {
     this.drawing = null; this.picking = null; this.calibrating = null;
     this.doorMode = false; this.colorPick = false; this.overlayMove = false; this.pivoting = false;
     this.selectedRoom = null; this.selectedMarker = null; this.vwPick = null; this.vwSel = null; this.modelPick = null;
-    this.uploading = null; this._panelNameDraft = null; this._overlayEditor.reset(); this._cameraEditor.reset(); this._trackingEditor.reset();
+    this.uploading = null; this._panelNameDraft = null; this._overlayEditor.reset(); this._cameraEditor.reset(); this._trackingEditor.reset(); this._weatherEditor.reset(); this._securityEditor.reset();
     this._closeMenu();
     this.view?.setOverlay?.({}); this.view?.highlightModelNode?.(null);
     this.card._applyMarkerSelection?.(null);
@@ -277,17 +293,57 @@ export class EditMode {
     this.message = null;
     this.confirmDelete = false;
     this._trackingEditor.reset();
+    this._weatherEditor.reset();
+    this._securityEditor.reset();
     this.card[method]();
     this.updateHistoryState();
     return true;
   }
 
   // ---------- plan pointer events (from the card's canvas listeners) ----------
+  beginTrackingPlanPick(pick) {
+    this._trackingPickCursor = null;
+    this._trackingPickContext = pick ? { token: pick.token, generation: this._generation,
+      key: this.card._config?.layout_key, model: this.view?.model, alignment: JSON.stringify(this.card._modelAlign?.() ?? null) } : null;
+    if (pick) {
+      if (!this.floors.some((floor) => floor.id === pick.floorId && Number.isFinite(this.view.floorElevation(floor.id)))) {
+        this._trackingEditor.cancelPlanPick?.(); return false;
+      }
+      this.selectedRoom = this.selectedMarker = null;
+      this.card._applyMarkerSelection?.(null);
+      if (this.card._floor !== pick.floorId) this.card._setFloor(pick.floorId);
+      if (this.card._mode !== 'top') this.card._setMode('top');
+    }
+    this.refreshOverlay();
+    return true;
+  }
+
+  _trackingPlanPick() {
+    const pick = this.tab === 'tracking' && this._trackingEditor.pendingPlanPick;
+    if (!pick) return null;
+    const context = this._trackingPickContext, shown = this.card._navigationFloors?.();
+    if (!context || context.token !== pick.token || context.generation !== this._generation
+      || context.key !== this.card._config?.layout_key || context.model !== this.view?.model
+      || context.alignment !== JSON.stringify(this.card._modelAlign?.() ?? null)
+      || !this.floors.some((floor) => floor.id === pick.floorId && Number.isFinite(this.view.floorElevation(floor.id)))
+      || Array.isArray(shown) && !shown.includes(pick.floorId)) {
+      this._trackingEditor.cancelPlanPick?.(); this._trackingPickContext = this._trackingPickCursor = null;
+      return null;
+    }
+    return pick;
+  }
+
   canvasDown(e) {
     this._down = e.button === 0 ? [e.clientX, e.clientY] : null;
   }
 
   canvasMove(e) {
+    const trackingPick = this._trackingPlanPick();
+    if (trackingPick) {
+      const point = this._planPoint(e, trackingPick.floorId);
+      this._trackingPickCursor = point?.length >= 2 && point.every(Number.isFinite) ? point.slice(0, 2) : null;
+      this.refreshOverlay(); return;
+    }
     if (!this.drawing) return;
     const p = this._planPoint(e, this.drawing.floorId);
     if (!p) return;
@@ -307,6 +363,13 @@ export class EditMode {
   }
 
   _click(e) {
+    const trackingPick = this._trackingPlanPick();
+    if (trackingPick) {
+      const point = this._planPoint(e, trackingPick.floorId);
+      if (point?.length >= 2 && point.every(Number.isFinite)) this._trackingEditor.acceptPlanPoint(point.slice(0, 2), trackingPick.floorId, trackingPick.token);
+      this.refreshOverlay(); return;
+    }
+    if (this.tab === 'tracking') return; // Tracking edits never fall through into room selection.
     if (this.pivoting) {
       this._setPivot(e);
       return;
@@ -568,6 +631,10 @@ export class EditMode {
       if (this._ownsHistoryShortcut(e) && this._runHistory(action)) e.preventDefault();
       return;
     }
+    if (e.key === 'Escape' && this._trackingPlanPick() && this._ownsHistoryShortcut(e)) {
+      this._trackingEditor.cancelPlanPick(); this._trackingPickContext = this._trackingPickCursor = null;
+      this.refreshOverlay(); this.render(); e.preventDefault(); return;
+    }
     if (isNativeEditing(e)) return;
     if (this.menu && e.key === 'Escape') {
       this._closeMenu();
@@ -603,7 +670,7 @@ export class EditMode {
   }
 
   _syncStageClasses() {
-    this.card._stage.classList.toggle('drawing', !!this.drawing || !!this.picking || this.doorMode || !!this.calibrating || this.colorPick || !!this.pivoting);
+    this.card._stage.classList.toggle('drawing', !!this.drawing || !!this.picking || this.doorMode || !!this.calibrating || this.colorPick || !!this.pivoting || !!this._trackingPlanPick());
     this.view.setPivotMarker(!!this.card._editing && this.tab === 'views');
     this.card._stage.classList.toggle('moving', this.overlayMove);
     const picking = !!this.card._editing && (this.tab === 'model' || this.tab === 'views') && !!this.view.model;
@@ -644,7 +711,9 @@ export class EditMode {
 
   // live values in the Mower tab, without re-rendering the panel
   onStates() {
+    if (this.tab === 'security') { this._securityEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'tracking') { this._trackingEditor.updatePreviews(this.panel); return; }
+    if (this.tab === 'environment') { this._weatherEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'cameras') { this._cameraEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'overlays') { this._overlayEditor.updatePreviews(this.panel); return; }
     if (this.tab !== 'mower') return;
@@ -776,6 +845,22 @@ export class EditMode {
       if (d.cursor) handle('cursor', 'cursor ' + d.cursor.kind, d.cursor.point[0], d.cursor.point[1], d.floorId);
     }
 
+    if (this.tab === 'tracking') {
+      const calibration = this._trackingEditor.calibrationOverlay?.();
+      if (calibration?.floorId && this.floors.some((floor) => floor.id === calibration.floorId)) {
+        const points = (calibration.points || []).filter((point) => [point.x, point.y].every(Number.isFinite));
+        if (points.length > 1) lines.push({ points: points.map((point) => [point.x, point.y]), closed: false, floorId: calibration.floorId, color });
+        for (const point of points) if ([point.x, point.y].every(Number.isFinite)) {
+          const element = handle('trk-cal-' + point.index, 'draw calibration', point.x, point.y, calibration.floorId);
+          element.textContent = point.label || String(point.index + 1); element.title = 'Draft calibration point ' + element.textContent;
+          element.setAttribute('aria-label', element.title); element.style.pointerEvents = 'none';
+        }
+        if (Array.isArray(calibration.mapped) && calibration.mapped.every(Number.isFinite)) handle('trk-mapped', 'cursor', calibration.mapped[0], calibration.mapped[1], calibration.floorId);
+      }
+      const trackingPick = this._trackingPlanPick();
+      if (trackingPick && this._trackingPickCursor) handle('trk-cursor', 'cursor', ...this._trackingPickCursor, trackingPick.floorId);
+    }
+
     for (const k of [...this._handles.keys()]) if (!used.has(k)) this._handles.delete(k);
     this.view.setOverlay({ lines, fills, handles });
   }
@@ -822,7 +907,7 @@ export class EditMode {
   markerDown(m, e) {
     if (e.button !== 0) return;
     e.stopPropagation();
-    if (this.drawing || this.doorMode || this.calibrating || this.colorPick) return;
+    if (this.tab === 'tracking' || this.drawing || this.doorMode || this.calibrating || this.colorPick || this._trackingPlanPick()) return;
     if (m.id === this.card._mowerMarkerId) {
       this.selectMarker(m.id); // positioned live, nothing to drag
       return;
@@ -975,13 +1060,15 @@ export class EditMode {
     this._renderedTab = this.tab;
     const hasObjects = this._hasObjects();
     if (this.tab === 'objects' && !hasObjects) this.tab = 'devices';
-    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ...(hasObjects ? [['objects', 'Objects']] : []), ['overlays', 'Overlays'], ['cameras', 'Cameras'], ['tracking', 'Tracking'], ['mower', 'Mower'], ['views', 'Views'], ['model', 'Model'], ['data', 'Data']];
+    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ...(hasObjects ? [['objects', 'Objects']] : []), ['overlays', 'Overlays'], ['cameras', 'Cameras'], ['tracking', 'Tracking'], ['security', 'Security'], ['environment', 'Environment'], ['mower', 'Mower'], ['views', 'Views'], ['model', 'Model'], ['data', 'Data']];
     const body = {
       rooms: () => this._roomsTab(), devices: () => this._devicesTab(), objects: () => this._objectsTab(), mower: () => this._mowerTab(), views: () => this._viewsTab(),
       model: () => this._modelTab(), data: () => this._dataTab(),
       overlays: () => this._overlayEditor.render(),
       cameras: () => this._cameraEditor.render(),
       tracking: () => this._trackingEditor.render(),
+      environment: () => this._weatherEditor.render(),
+      security: () => this._securityEditor.render(),
     }[this.tab]();
     const msg = this.message ? `<div class="msg ${this.message.error ? 'error' : this.message.warn ? 'warn' : ''}">${esc(this.message.text)}</div>` : '';
     this.panel.innerHTML = `
@@ -995,6 +1082,8 @@ export class EditMode {
       <div class="foot"><span class="save-state">${this._saveText()}</span><span>${esc(this._backendLabel())}</span></div>`;
     this.updateHistoryState();
     if (this.tab === 'tracking') this._trackingEditor.updatePreviews(this.panel);
+    if (this.tab === 'environment') this._weatherEditor.updatePreviews(this.panel);
+    if (this.tab === 'security') this._securityEditor.updatePreviews(this.panel);
     const newBody = this.panel.querySelector('.tab-body');
     if (newBody && scroll) newBody.scrollTop = scroll;
     if (focusKey) {
@@ -1378,6 +1467,12 @@ export class EditMode {
     this.vwSel = null;
     this._closeMenu();
     if (this.tab === 'views') this.render();
+    if (this.tab === 'tracking') {
+      this._trackingPlanPick(); // Cancel a capture as soon as its floor is no longer displayed.
+      this.refreshOverlay();
+      this._syncStageClasses();
+      this._trackingEditor.updatePreviews(this.panel);
+    }
   }
 
   _layoutRules(id) {
@@ -2040,6 +2135,8 @@ export class EditMode {
     if (this._overlayEditor.onClick(btn.dataset.act, btn)) return;
     if (this._cameraEditor.onClick(btn.dataset.act, btn)) return;
     if (this._trackingEditor.onClick(btn.dataset.act, btn)) return;
+    if (this._weatherEditor.onClick(btn.dataset.act, btn)) return;
+    if (this._securityEditor.onClick(btn.dataset.act, btn)) return;
     const sel = this.room(this.selectedRoom);
     this.message = null;
     // Views tab actions commit; the rebuild after the commit renders the panel once
@@ -2060,6 +2157,8 @@ export class EditMode {
         if (id !== this.tab) {
           if (this.tab === 'cameras') this._cameraEditor.cancel();
           if (this.tab === 'tracking') this._trackingEditor.cancel();
+          if (this.tab === 'environment') this._weatherEditor.reset();
+          if (this.tab === 'security') this._securityEditor.reset();
           this.picking = null;
           this.pivoting = false;
           this.modelPick = null;
@@ -2071,6 +2170,8 @@ export class EditMode {
         this.tab = id;
         this.card._syncCameraCoverage?.();
         this.card._syncTracking?.();
+        this.card._syncWeather?.();
+        this.card._syncSecurity?.();
         this._syncStageClasses();
         break;
       case 'obj-expand':
@@ -2197,6 +2298,8 @@ export class EditMode {
     if (this._overlayEditor.onChange(f, el)) return;
     if (this._cameraEditor.onChange(f, el)) return;
     if (this._trackingEditor.onChange(f, el)) return;
+    if (this._weatherEditor.onChange(f, el)) return;
+    if (this._securityEditor.onChange(f, el)) return;
     const sel = this.room(this.selectedRoom);
     if (f && f.startsWith('vw-')) this._viewsChange(f, el);
     else if (f === 'room-area' && sel) this.commit(E.upsertRoom(this.layout, { ...sel, area_id: el.value }));
@@ -2311,6 +2414,8 @@ export class EditMode {
     if (el.type === 'range') this._beginSlider();
     const f = el.dataset.field;
     if (this._trackingEditor.onInput(f, el)) return;
+    if (this._weatherEditor.onInput(f, el)) return;
+    if (this._securityEditor.onInput(f, el)) return;
     if (f?.startsWith('cov-') && this._cameraEditor.onChange(f, el)) return;
     if (f === 'screen-name') { this._panelNameDraft = el.value; return; }
     if (f === 'vw-sec-pos') {

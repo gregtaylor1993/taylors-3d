@@ -31,11 +31,11 @@ For each implementation, update its status, record the changed behavior, link it
 | F03 | General undo and redo | General session history and grouped gestures | Testing |
 | F04 | Full dashboard backup and restore | Layout JSON import/export | Needs input |
 | F05 | Temperature, power and energy views | Sensor readings, conversion, floor overlays and visual bindings | Testing |
-| F06 | Security doors/windows and animated doors | Contact/lock markers and room door points | Planned |
+| F06 | Security doors/windows and animated doors | Exact contacts, owned model outlines and explicit rigid hinge editor | In progress |
 | F07 | Camera coverage cones and live-feed popups | Native HA camera viewer, explicit approximate coverage and visual editor | Testing |
 | F08 | Presence: people/devices in rooms | Explicit room observations, anonymous activity and verified identity bindings | Testing |
 | F09 | Alert pulses at the affected location | Located, labelled smoke/leak/unlocked/custom alerts | Testing |
-| F10 | Actual sun plus rain, clouds and snow | Automatic sun/day/night and moon already exist | Planned |
+| F10 | Actual sun plus rain, clouds and snow | Strict sun/location evidence and opt-in bounded outdoor weather | Testing |
 | F11 | Hue colour/brightness lighting the rooms | Real coloured lamps and a bounded light pool | Planned |
 | F12 | Scene previews | HA device controls; no scene preview | Planned |
 | F13 | Ambient idle rotation and night dimming | Automatic night lighting; no idle rotation | Planned |
@@ -48,7 +48,7 @@ For each implementation, update its status, record the changed behavior, link it
 | F20 | Rich device control popups | HA more-info and supported object popups | Testing |
 | F21 | Persistent 2D mini-map | Full-card Top view | Testing |
 | F22 | Cars appearing on the drive | Maintained vehicle occupancy/counts and fixed-expiry sighting bindings | Testing |
-| F23 | Robot vacuums moving while running | Explicit measured-position/status implementation started separately | In progress |
+| F23 | Robot vacuums moving while running | Measured/status actors with visual calibration and separate source-age forms | Testing |
 | F24 | Horizontal split floors and vertical layers | Individual floors, All and section views | Planned |
 | F25 | Translations, preview, screenshots and bundle checks | English service strings, mock HA, screenshots and source/bundle gates | In progress |
 
@@ -133,6 +133,8 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 
 **Needs:** inspect Taylor's actual GLB for independently movable door parts and hinge/pivot geometry. Those pivots have not been verified.
 
+**Phase 5 implementation:** Edit → Security drafts exact contact/object/state settings and optional rigid target/pivot/axis/angle offsets. Outlines are owned helpers; unknown/restored/stale readings stay uncertain. Source material and hierarchy remain intact; geometry, picking, occlusion, shadows and attached anchors refresh only after actual movement. No inferred hinge or device command. The dedicated browser suite passes 30 checks, and the complete local regression passes. Online CI and actual household checks remain. F06 stays In progress because this pass covers model contacts/hinges; separate plan security displays and lock-specific bindings are unfinished. [Security guide](docs/SECURITY-AND-WEATHER-GUIDE.md).
+
 ### F07 — camera cones and live feeds
 
 **Want:** show each Ring camera's coverage cone, and tap a camera to open its live feed.
@@ -169,7 +171,9 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 
 **Want:** sun/shadows follow the real time, with rain, clouds or snow outside.
 
-**Already present:** Auto reads `sun.sun`, uses model north for sun/shadow direction, darkens through dusk and includes sun/moon visuals. Without sun data it falls back to Day. Weather effects are not implemented.
+**Already present:** Auto reads `sun.sun`, uses model north for sun/shadow direction, darkens through dusk and includes sun/moon visuals. Without valid sun data it falls back to Day.
+
+**Phase 5 implementation:** Edit → Environment chooses current weather, decorative intensity and static/low/medium/off quality. Bounded rain/snow/cloud geometry uses the existing scene; all indoor outlines mask outdoor precipitation, including hidden floors. Invalid masks fail closed. Edit/Section/hidden/offscreen/disconnect and reduced-motion states stop animation. Sun/location readers reject missing/coerced/restored evidence. The dedicated browser suite passes 31 checks, and the complete local regression passes. Online CI and actual household checks remain. F10 stays Testing for the actual sun orientation, weather source and wall panel.
 
 **Complete when:** existing sun behavior is verified with Taylor's HA location and model orientation; a selected weather entity drives rain/cloud/snow conditions outdoors. Effects have intensity/quality controls, sensible unavailable fallback and a lightweight/off setting for the wall panel. Indoor rooms are not filled with weather particles. Animations stop when the card is not visible or connected.
 
@@ -295,7 +299,7 @@ Navigation-only configuration changes preserve the selected viewing mode, tempor
 
 **Want:** robot vacuum models move around the appropriate floor while cleaning.
 
-**Current implementation:** separate vacuum actors use actual status plus an explicit fixed anchor, exact room observation or validated measured coordinates. The Tracking editor supports direct plan-metre X/Y sources; imported calibrated sources remain preserved. Source/evidence handling, floor/section visibility and controls are being verified. A visual calibration workflow for arbitrary vacuum map coordinates and actual household testing remain unfinished.
+**Current implementation:** separate vacuum actors use actual status plus an explicit fixed anchor, exact room observation or validated measured coordinates. Phase 4 evidence handling, floor/section visibility and controls are verified automatically. Phase 5 adds visual X/Y calibration, frozen real source captures and unsnapped plan clicks, imported GPS/unit preservation and independent status/coordinate freshness forms. The complete local regression passes. F23 stays Testing for online CI and actual household coordinates, mapping and wall-panel checks.
 
 **Complete when:** a vacuum with location/map data can be bound, calibrated to house coordinates, shown on the correct floor and updated while cleaning; docking, idle and unavailable states are clear. Multiple vacuums are distinguishable. Without actual coordinates, a stationary status marker is available; decorative movement, if chosen, is labelled simulated rather than presented as live location.
 
@@ -464,5 +468,13 @@ The Tracking editor, explicit observation adapters, per-actor geometry, mini-map
 **Remaining work:** provide a visual calibration workflow before arbitrary vacuum map coordinates can be configured entirely in the card; validate real presence/detection/coordinate sources, model positions and the wall panel using [the tracking guide's household checklist](docs/TRACKING-GUIDE.md#check-in-your-home-assistant). F08/F22 remain Testing and F23 remains In progress. No release tag has been published yet.
 
 The earlier local full-model regression run was stopped after its initial rendering/visibility/terrain/section/sky/merge checks passed, because its loaded script still expected the old default tap behavior. Those assertions now explicitly select Quick toggle. That local run remained partial; the final GitHub CI subsequently completed and passed the entire model suite.
+
+### Phase 5: calibration, contacts and outdoor weather
+
+The next source checkpoint connects visual vacuum calibration and independent source-age controls, explicit contact highlights/hinges and opt-in current-weather effects. [The tracking guide](docs/TRACKING-GUIDE.md) explains matching source coordinates to the house; [the security/weather guide](docs/SECURITY-AND-WEATHER-GUIDE.md) explains model prerequisites and household checks.
+
+**Local result:** all 1,704 JavaScript tests in 65 files, lint, build and both source/bundle freshness checks pass. The complete serial browser regression passes, including 71 calibration checks across source/bundle and drawn-plan/GLB scenarios, 30 security checks, 31 weather checks and every existing suite. The model suite passes without retry. The built frontend is `810f10172f0352b903a3976321a9196aae1b7aee5114877b953ec99ab6919236`. Online CI and exact-commit packaging remain before certification; the current manual installation zip remains the verified Phase 4 build.
+
+**Repairs included:** captured picks cancel immediately after a floor/context change; numbered calibration points remain visible above device badges without moving their coordinates. Untouched malformed imports remain invalid until deliberately repaired, and stale weather drafts cannot overwrite newer card settings. Malformed restored-data flags cannot become live coordinate/contact evidence. Clearing an already-empty mower trail no longer redraws the house. The weather idle fixture starts with its unrelated sensor already registered, so it measures reading updates separately from adding an entity.
 
 When starting work, add a row here and update the feature status above. When it is completed, record exactly what was tested and any unfinished part that remains.

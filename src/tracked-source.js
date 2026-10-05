@@ -30,6 +30,8 @@ const availability = (state) => {
   if (!plain(state)) return { status: 'missing', diagnostics: [diagnostic('missing', 'Entity is not available in Home Assistant.')] };
   if (state.state === 'unknown' || state.state === 'unavailable' || state.attributes?.restored === true)
     return { status: 'unavailable', diagnostics: [diagnostic('unavailable', 'A current reading is not available.')] };
+  if (state.attributes?.restored !== undefined && typeof state.attributes.restored !== 'boolean')
+    return { status: 'invalid', diagnostics: [diagnostic('restored', 'The restored-state flag is malformed. Wait for a valid current reading.')] };
   if (typeof state.state !== 'string' || !state.state.trim())
     return { status: 'invalid', diagnostics: [diagnostic('state', 'Entity state is not valid.')] };
   return null;
