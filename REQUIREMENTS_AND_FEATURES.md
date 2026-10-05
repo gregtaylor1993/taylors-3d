@@ -41,7 +41,7 @@ For each implementation, update its status, record the changed behavior, link it
 | F13 | Ambient idle rotation and night dimming | Automatic night lighting; no idle rotation | Planned |
 | F14 | Camera-aware cut-away and glass/faded walls | Side Section, opacity and authored glass | Planned |
 | F15 | Furniture packs and drag-and-drop placement | Furniture inside GLB models and layer visibility | Planned |
-| F16 | Baked shadows for wall panels | Authored AO/unlit materials; explicit shadow/lighting policy in development | In progress |
+| F16 | Baked shadows for wall panels | Saved shadow/lighting policy, authored texture diagnostics and external AO guide | Testing |
 | F17 | Deeper HA floors/areas/entity integration | Shared metadata, precision, filtered choices and missing-link diagnostics | In progress |
 | F18 | Room selection and room control panels | Edit-mode room/model picking | Testing |
 | F19 | Bottom bubble navigation bar | Top toolbar and view chips | Testing |
@@ -239,9 +239,11 @@ policy blocks sun and lamp shadow work while off, including model movement, ligh
 changes, reloads and theme/sky changes. Re-enable requests current maps once.
 Actual light states/controls and authored materials stay intact. The report reads
 actual AO/unlit/light-map/UV properties without claiming they prove a complete bake.
-All 1,992 local JavaScript tests, lint/build/bundle checks and 69 dedicated
-source/bundle browser assertions pass. Complete regression and GitHub validation
-are pending. The current installation zip remains the verified Phase 6 build.
+All 1,992 JavaScript tests, lint/build/bundle checks and 69 dedicated source/bundle
+browser assertions pass. Complete GitHub CI passes all 842 browser assertions and
+48 Home Assistant Python tests; HACS validation passes. The complete local browser
+regression also passes all 842 assertions. The exact-commit installation zip contains Phase 7 and
+matches GitHub's checked frontend byte for byte. Actual house/panel checks remain.
 [The model shading guide](docs/MODEL-SHADING-GUIDE.md) explains external Blender
 authoring, fixed baked-shadow limitations and model backups. Actual house/panel
 checks remain; the card does not create baked textures or rewrite a GLB.
@@ -414,7 +416,7 @@ A feature is Done only after its agreed behavior works, it persists where approp
 | 2026-10-05 | Phase 4 | Explicit presence/activity, parked vehicles, measured/status vacuum symbols, Tracking editor, source panels and mini-map bindings implemented. All 1,214 JS and 48 HA Python tests, lint/build/bundle checks, complete local/GitHub browser suites and HACS validation pass. Exact-commit manual package matches the GitHub frontend. Household checks and visual vacuum calibration remain. | `90c626a` |
 | 2026-10-05 | Phase 5 | Visual source/plan calibration, separate freshness controls, exact contacts/rigid hinge motion and bounded outdoor weather implemented. All 1,704 JS and 48 HA Python tests, lint/build/bundle checks, complete local/GitHub browser suites and HACS validation pass. All 659 browser assertions pass, including 71 calibration, 30 security and 31 weather checks. The model suite passes without retry. Exact-commit installation zip matches GitHub's frontend; actual household checks remain. | `ca64019` |
 | 2026-10-05 | Phase 6 | Validated light appearances, deliberate RGB/Kelvin controls and current-output lighting selection implemented. All 1,904 JS and 48 HA Python tests, lint/build/bundle checks, complete local/GitHub browser regressions and HACS validation pass. All 773 GitHub browser assertions pass, including 113 lighting checks and the 31-check passive expiry-observation fixture. Exact-commit manual package matches GitHub's frontend. Actual HA/Hue/model/panel checks remain. | `a6599cb` |
-| 2026-10-05 | Phase 7 | F16 saved model-shading choices, full sun/lamp shadow suppression, actual material/UV evidence and external AO-authoring guide implemented. All 1,992 JS tests, lint/build/bundle matching and 69 dedicated browser assertions pass. Complete regression/GitHub validation and packaging remain. Actual house/panel checks remain. | Pending checkpoint |
+| 2026-10-05 | Phase 7 | F16 saved model-shading choices, full sun/lamp shadow suppression, actual material/UV evidence and external AO-authoring guide implemented. All 1,992 JS and 48 HA Python tests, lint/build/bundle matching, complete local/GitHub regressions (842 browser assertions each) and HACS validation pass. Exact-commit manual zip matches GitHub's artifact. Actual house/panel checks remain. | `42c826e` |
 
 ### Phase 1: Taylor's Home Assistant check
 
@@ -493,7 +495,7 @@ Code checkpoint `ca640196fe109a01b3cbb7fa66809de4bf7e7e3c` connects visual vacuu
 
 **Verified result:** all 1,704 JavaScript tests in 65 files, all 48 Home Assistant Python tests, lint, build and both source/bundle freshness checks pass. The complete local and [GitHub browser regression](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37256847229) passes all 659 assertions, including 71 calibration checks across source/bundle and drawn-plan/GLB scenarios, 30 security checks, 31 weather checks and every existing suite. The model suite passes without retry locally and online. [HACS validation passes](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37256847036) for the same commit.
 
-**Historical exact package:** `taylors3d-phase5.zip` was built from that committed source snapshot. Its frontend matches the downloaded GitHub artifact byte for byte: `810f10172f0352b903a3976321a9196aae1b7aee5114877b953ec99ab6919236`. The zip SHA256 is `3f0f6efb3585624c026ba38f01601b3acf780684b64b65325aebf0747899f87b`. The current manual package contains the separately verified Phase 6 lighting additions. No release tag has been published. Actual household devices, model, streams and panel remain unverified.
+**Historical exact package:** `taylors3d-phase5.zip` was built from that committed source snapshot. Its frontend matches the downloaded GitHub artifact byte for byte: `810f10172f0352b903a3976321a9196aae1b7aee5114877b953ec99ab6919236`. The zip SHA256 is `3f0f6efb3585624c026ba38f01601b3acf780684b64b65325aebf0747899f87b`. The current manual package contains the separately verified Phase 7 shading additions. No release tag has been published. Actual household devices, model, streams and panel remain unverified.
 
 **Repairs included:** captured picks cancel immediately after a floor/context change; numbered calibration points remain visible above device badges without moving their coordinates. Untouched malformed imports remain invalid until deliberately repaired, and stale weather drafts cannot overwrite newer card settings. Malformed restored-data flags cannot become live coordinate/contact evidence. Clearing an already-empty mower trail no longer redraws the house. The weather idle fixture starts with its unrelated sensor already registered, so it measures reading updates separately from adding an entity.
 
@@ -527,11 +529,31 @@ all 1,904 JavaScript and 48 Home Assistant Python tests, lint/build/bundle match
 all 773 browser assertions, including the final 31 security observations. No browser
 errors or model retry. [HACS validation passes](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37260397272).
 
-**Exact package:** the current manual `taylors3d.zip` was built from that committed
+**Historical exact package:** `taylors3d-phase6.zip` was built from that committed
 source snapshot. Its frontend matches GitHub's downloaded artifact byte for byte:
 `c6fb8eaedc6da3d8bf472db37847ac1fcce2f28dc2ab38a6645aa5a203a721ba`.
 Zip SHA256: `a4dcecb454d7d37af9fef0709e0b93fe948b195fe643e9cbc04121846b179566`.
-Phase 5's package is preserved separately. Phase 7 model-shading drafts are excluded.
+Phase 5's package is preserved separately. The current manual package now contains
+the independently verified Phase 7 shading additions. F12 scene-preview drafts are excluded.
 No release tag has been published; actual household validation remains.
+
+### Phase 7: model shading and authored texture diagnostics
+
+Code checkpoint `42c826e563b04082badf42fcd63f865dd1c96319` passes
+[complete GitHub CI](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37262618827):
+all 1,992 JavaScript tests in 72 files, 48 Home Assistant Python tests, lint, build,
+source/bundle freshness and all 842 browser assertions. The 69 shading assertions
+sample actual AO/PBR/unlit pixels and check native settings/history, current shadow
+maps, unchanged updates, resource reuse and reload. No browser errors or model retry.
+[HACS validation passes](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37262618901).
+The complete local browser regression also passes all 842 assertions, with no browser
+errors or model retry. Actual household checks remain.
+
+The current manual `taylors3d.zip` was packaged from that exact source snapshot.
+Its frontend matches GitHub's artifact byte for byte:
+`2cec6495e4cc99c29d4aaa9df10e86b03da9c8c78747cd65d7a795cca06b401f`.
+Zip SHA256: `36ac0adfbdfdd4386b8b709e3f17925a1da847ff961764eb2c4c81d811bc18dd`.
+It is also preserved as `taylors3d-phase7.zip`. Unfinished F12 scene-preview drafts
+are excluded. No release tag has been published; HACS release download remains pending.
 
 When starting work, add a row here and update the feature status above. When it is completed, record exactly what was tested and any unfinished part that remains.
