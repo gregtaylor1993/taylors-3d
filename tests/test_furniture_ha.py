@@ -22,7 +22,7 @@ from aiohttp.multipart import BodyPartReader
 import pytest
 
 from homeassistant.components.http import auth as http_auth
-from homeassistant.components.http.const import DATA_SUPERVISOR_USER, KEY_SUPERVISOR_UNIX_SOCKET
+from homeassistant.components.http import const as http_const
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
@@ -31,6 +31,11 @@ from .test_furniture_pack import bundle, glb
 
 URL = furniture.FURNITURE_URL
 ABSENT_SHA = "0" * 64
+SUPERVISOR_SOCKET_AUTH_AVAILABLE = (
+    hasattr(http_const, "DATA_SUPERVISOR_USER")
+    and hasattr(http_const, "KEY_SUPERVISOR_UNIX_SOCKET")
+    and hasattr(http_auth, "is_supervisor_unix_socket_request")
+)
 
 
 def upload(data: bytes, *, field: str = "file", extra: bool = False) -> aiohttp.FormData:
@@ -196,6 +201,10 @@ async def test_furniture_revocation_while_real_executor_validates_cannot_stage_f
             await asyncio.gather(request, return_exceptions=True)
 
 
+@pytest.mark.skipif(
+    not SUPERVISOR_SOCKET_AUTH_AVAILABLE,
+    reason="Installed Home Assistant has no Supervisor Unix socket authentication API",
+)
 @pytest.mark.parametrize("stage", ["multipart", "validation"])
 async def test_furniture_tokenless_supervisor_user_removed_during_upload_cannot_publish(
     hass, furniture_library, hass_client_no_auth, hass_supervisor_user, monkeypatch, stage,
@@ -206,10 +215,10 @@ async def test_furniture_tokenless_supervisor_user_removed_during_upload_cannot_
     The actual auth middleware resolves the current Supervisor user, then the
     actual multipart reader/executor pauses while HA removes that account.
     """
-    hass.data[DATA_SUPERVISOR_USER] = hass_supervisor_user
+    hass.data[http_const.DATA_SUPERVISOR_USER] = hass_supervisor_user
 
     def supervisor_route(request):
-        request[KEY_SUPERVISOR_UNIX_SOCKET] = True
+        request[http_const.KEY_SUPERVISOR_UNIX_SOCKET] = True
         return True
 
     monkeypatch.setattr(http_auth, "is_supervisor_unix_socket_request", supervisor_route)
