@@ -1,0 +1,30 @@
+name: Furniture backend validation
+
+on:
+  push:
+    branches: [codex/furniture-backend-validation]
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install the actual Home Assistant test harness
+        run: |
+          pip install -r requirements-test.txt
+          FRONTEND=$(python -c "import json, importlib.resources as r; print(json.load(open(r.files('homeassistant') / 'components/frontend/manifest.json'))['requirements'][0])")
+          pip install "$FRONTEND"
+          pip freeze > furniture-test-environment.txt
+      - name: Check immutable packs, storage and real authenticated uploads
+        run: python -m pytest -q tests/test_furniture_pack.py tests/test_furniture.py tests/test_furniture_ha.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: furniture-test-environment
+          path: furniture-test-environment.txt
