@@ -36,7 +36,7 @@ For each implementation, update its status, record the changed behavior, link it
 | F08 | Presence: people/devices in rooms | Explicit room observations, anonymous activity and verified identity bindings | Testing |
 | F09 | Alert pulses at the affected location | Located, labelled smoke/leak/unlocked/custom alerts | Testing |
 | F10 | Actual sun plus rain, clouds and snow | Strict sun/location evidence and opt-in bounded outdoor weather | Testing |
-| F11 | Hue colour/brightness lighting the rooms | Real coloured lamps and a bounded light pool | Planned |
+| F11 | Hue colour/brightness lighting the rooms | Validated light readings, inline colour/white controls and a bounded pool | In progress |
 | F12 | Scene previews | HA device controls; no scene preview | Planned |
 | F13 | Ambient idle rotation and night dimming | Automatic night lighting; no idle rotation | Planned |
 | F14 | Camera-aware cut-away and glass/faded walls | Side Section, opacity and authored glass | Planned |
@@ -133,7 +133,7 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 
 **Needs:** inspect Taylor's actual GLB for independently movable door parts and hinge/pivot geometry. Those pivots have not been verified.
 
-**Phase 5 implementation:** Edit → Security drafts exact contact/object/state settings and optional rigid target/pivot/axis/angle offsets. Outlines are owned helpers; unknown/restored/stale readings stay uncertain. Source material and hierarchy remain intact; geometry, picking, occlusion, shadows and attached anchors refresh only after actual movement. No inferred hinge or device command. The dedicated browser suite passes 30 checks, and the complete local regression passes. Online CI and actual household checks remain. F06 stays In progress because this pass covers model contacts/hinges; separate plan security displays and lock-specific bindings are unfinished. [Security guide](docs/SECURITY-AND-WEATHER-GUIDE.md).
+**Phase 5 implementation:** Edit → Security drafts exact contact/object/state settings and optional rigid target/pivot/axis/angle offsets. Outlines are owned helpers; unknown/restored/stale readings stay uncertain. Source material and hierarchy remain intact; geometry, picking, occlusion, shadows and attached anchors refresh only after actual movement. No inferred hinge or device command. The dedicated browser suite passes 30 checks, and the complete local and GitHub regressions pass. Actual household checks remain. F06 stays In progress because this pass covers model contacts/hinges; separate plan security displays and lock-specific bindings are unfinished. [Security guide](docs/SECURITY-AND-WEATHER-GUIDE.md).
 
 ### F07 — camera cones and live feeds
 
@@ -173,7 +173,7 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 
 **Already present:** Auto reads `sun.sun`, uses model north for sun/shadow direction, darkens through dusk and includes sun/moon visuals. Without valid sun data it falls back to Day.
 
-**Phase 5 implementation:** Edit → Environment chooses current weather, decorative intensity and static/low/medium/off quality. Bounded rain/snow/cloud geometry uses the existing scene; all indoor outlines mask outdoor precipitation, including hidden floors. Invalid masks fail closed. Edit/Section/hidden/offscreen/disconnect and reduced-motion states stop animation. Sun/location readers reject missing/coerced/restored evidence. The dedicated browser suite passes 31 checks, and the complete local regression passes. Online CI and actual household checks remain. F10 stays Testing for the actual sun orientation, weather source and wall panel.
+**Phase 5 implementation:** Edit → Environment chooses current weather, decorative intensity and static/low/medium/off quality. Bounded rain/snow/cloud geometry uses the existing scene; all indoor outlines mask outdoor precipitation, including hidden floors. Invalid masks fail closed. Edit/Section/hidden/offscreen/disconnect and reduced-motion states stop animation. Sun/location readers reject missing/coerced/restored evidence. The dedicated browser suite passes 31 checks, and the complete local and GitHub regressions pass. F10 stays Testing for the actual sun orientation, weather source and wall panel.
 
 **Complete when:** existing sun behavior is verified with Taylor's HA location and model orientation; a selected weather entity drives rain/cloud/snow conditions outdoors. Effects have intensity/quality controls, sensible unavailable fallback and a lightweight/off setting for the wall panel. Indoor rooms are not filled with weather particles. Animations stop when the card is not visible or connected.
 
@@ -182,6 +182,8 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 **Want:** Hue brightness and colour illuminate the room's walls and floor, with the useful lights prioritized within the realtime budget.
 
 **Already present:** bound model lamps glow and use real point/spot lights with HA colour/brightness. The pool is 8 point lights plus 4 spot lights, with up to 4 shadow slots. Lit, visible fixtures are prioritized; other fixtures can retain glow. This is a light budget, not a limit of twelve rooms.
+
+**Work started:** share strict actual appearance/capability readers across model lamps, drawn floor glows and the device panel; add intentional RGB and bounded Kelvin controls; rank lighting slots by useful current output and avoid redraws for semantically unchanged readings. This separate draft is excluded from the verified Phase 5 package. Browser surface-colour, controls and regression checks remain before the next checkpoint.
 
 **Complete when:** Taylor's model lights and Hue entities are bound correctly; colour/brightness changes visibly affect nearby surfaces; off lights release their lighting slots; invisible rooms do not consume unnecessary slots. A low-power mode remains available. Materials, exposure and shadows are checked on the actual tablet/model rather than promising the same appearance on every device.
 
@@ -299,7 +301,7 @@ Navigation-only configuration changes preserve the selected viewing mode, tempor
 
 **Want:** robot vacuum models move around the appropriate floor while cleaning.
 
-**Current implementation:** separate vacuum actors use actual status plus an explicit fixed anchor, exact room observation or validated measured coordinates. Phase 4 evidence handling, floor/section visibility and controls are verified automatically. Phase 5 adds visual X/Y calibration, frozen real source captures and unsnapped plan clicks, imported GPS/unit preservation and independent status/coordinate freshness forms. The complete local regression passes. F23 stays Testing for online CI and actual household coordinates, mapping and wall-panel checks.
+**Current implementation:** separate vacuum actors use actual status plus an explicit fixed anchor, exact room observation or validated measured coordinates. Phase 4 evidence handling, floor/section visibility and controls are verified automatically. Phase 5 adds visual X/Y calibration, frozen real source captures and unsnapped plan clicks, imported GPS/unit preservation and independent status/coordinate freshness forms. The complete local and GitHub regressions pass. F23 stays Testing for actual household coordinates, mapping and wall-panel checks.
 
 **Complete when:** a vacuum with location/map data can be bound, calibrated to house coordinates, shown on the correct floor and updated while cleaning; docking, idle and unavailable states are clear. Multiple vacuums are distinguishable. Without actual coordinates, a stationary status marker is available; decorative movement, if chosen, is labelled simulated rather than presented as live location.
 
@@ -397,6 +399,8 @@ A feature is Done only after its agreed behavior works, it persists where approp
 | 2026-10-05 | Phase 2 | Right-hand panels, individually addressed camera actions with acknowledgements/optional return, grouped Undo/Redo, and visual measurement/alert bindings implemented. All 668 JS and 48 HA Python tests pass, alongside lint/build/bundle gates and the complete GitHub browser suites. The model suite passes on its first attempt. Fixes retain named-view floors, scope keyboard Undo to the focused card and keep unrelated HA updates from redrawing the house. HACS validation passes; actual HA/house/panel checks remain. | `661e87f` |
 | 2026-10-05 | Phase 3 | Native camera views, explicitly configured approximate coverage and its editor, shared entity metadata/precision and missing-link preservation implemented. All 933 JS and 48 HA Python tests, lint/build/bundle gates, complete browser suites and HACS checks pass. The GitHub-built frontend matches the exact-commit manual package; household camera/model/panel checks remain. | `1a3e733` |
 | 2026-10-05 | Phase 4 | Explicit presence/activity, parked vehicles, measured/status vacuum symbols, Tracking editor, source panels and mini-map bindings implemented. All 1,214 JS and 48 HA Python tests, lint/build/bundle checks, complete local/GitHub browser suites and HACS validation pass. Exact-commit manual package matches the GitHub frontend. Household checks and visual vacuum calibration remain. | `90c626a` |
+| 2026-10-05 | Phase 5 | Visual source/plan calibration, separate freshness controls, exact contacts/rigid hinge motion and bounded outdoor weather implemented. All 1,704 JS and 48 HA Python tests, lint/build/bundle checks, complete local/GitHub browser suites and HACS validation pass. All 659 browser assertions pass, including 71 calibration, 30 security and 31 weather checks. The model suite passes without retry. Exact-commit installation zip matches GitHub's frontend; actual household checks remain. | `ca64019` |
+| 2026-10-05 | Lighting started | F11 reader, panel and lighting work started separately. Invalid readings, current-output budget, RGB/Kelvin controls and equal-reading redraws are being checked. This draft is excluded from Phase 5's installation zip. | Uncommitted draft |
 
 ### Phase 1: Taylor's Home Assistant check
 
@@ -457,7 +461,7 @@ F07 remains Testing for these household checks. F17 remains In progress as each 
 
 ### Phase 4: room observations, driveway vehicles and vacuums
 
-The Tracking editor, explicit observation adapters, per-actor geometry, mini-map symbols and source-specific control panels are connected. [The tracking guide](docs/TRACKING-GUIDE.md) explains sources, locations and the meaning of each observation. The current manual package contains this verified Phase 4 checkpoint; the earlier Phase 3 package is preserved separately.
+The Tracking editor, explicit observation adapters, per-actor geometry, mini-map symbols and source-specific control panels are connected. [The tracking guide](docs/TRACKING-GUIDE.md) explains sources, locations and the meaning of each observation. This historical checkpoint is preserved in `taylors3d-phase4.zip`; the current manual package contains the separately verified Phase 5 additions.
 
 **Final automated result:** code commit `90c626adbbac25a564218e9a5cefe17fb2d4e921` passes [complete GitHub CI](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37252425200) and [HACS validation](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37252425209). All 1,214 JavaScript tests in 51 files, all 48 Home Assistant Python tests, lint/build/bundle gates and every browser suite pass. The complete final local regression also passes; the model suite passes without retry locally and online. The manual package rebuilt from this exact commit matches the downloaded GitHub frontend byte for byte (`f392743dc587546c756fae4416220f5994f75b911ac9719f635d21719da13be9`). Later calibration, security and weather drafts are excluded from that package.
 
@@ -465,15 +469,17 @@ The Tracking editor, explicit observation adapters, per-actor geometry, mini-map
 
 **Performance evidence:** in the final local tracking fixture, ten unrelated updates keep frames at 10, shadow passes at 8 and shadow-light work at 13. The same parked actor/geometry remains, with zero tracking timers or HA service calls. Overlay-off and unchanged-temperature regressions also cause zero extra frames/shadows. The complete local and GitHub model runs retain their strict idle, geometry, lighting, occlusion and editing checks.
 
-**Remaining work:** provide a visual calibration workflow before arbitrary vacuum map coordinates can be configured entirely in the card; validate real presence/detection/coordinate sources, model positions and the wall panel using [the tracking guide's household checklist](docs/TRACKING-GUIDE.md#check-in-your-home-assistant). F08/F22 remain Testing and F23 remains In progress. No release tag has been published yet.
+**Work remaining at this historical checkpoint:** visual vacuum calibration and real presence/detection/coordinate sources, model positions and wall-panel checks. Phase 5 subsequently implements the calibration workflow; the household checks remain in [the tracking guide](docs/TRACKING-GUIDE.md#check-in-your-home-assistant). F08/F22/F23 are now Testing. No release tag has been published yet.
 
 The earlier local full-model regression run was stopped after its initial rendering/visibility/terrain/section/sky/merge checks passed, because its loaded script still expected the old default tap behavior. Those assertions now explicitly select Quick toggle. That local run remained partial; the final GitHub CI subsequently completed and passed the entire model suite.
 
 ### Phase 5: calibration, contacts and outdoor weather
 
-The next source checkpoint connects visual vacuum calibration and independent source-age controls, explicit contact highlights/hinges and opt-in current-weather effects. [The tracking guide](docs/TRACKING-GUIDE.md) explains matching source coordinates to the house; [the security/weather guide](docs/SECURITY-AND-WEATHER-GUIDE.md) explains model prerequisites and household checks.
+Code checkpoint `ca640196fe109a01b3cbb7fa66809de4bf7e7e3c` connects visual vacuum calibration and independent source-age controls, explicit contact highlights/hinges and opt-in current-weather effects. [The tracking guide](docs/TRACKING-GUIDE.md) explains matching source coordinates to the house; [the security/weather guide](docs/SECURITY-AND-WEATHER-GUIDE.md) explains model prerequisites and household checks.
 
-**Local result:** all 1,704 JavaScript tests in 65 files, lint, build and both source/bundle freshness checks pass. The complete serial browser regression passes, including 71 calibration checks across source/bundle and drawn-plan/GLB scenarios, 30 security checks, 31 weather checks and every existing suite. The model suite passes without retry. The built frontend is `810f10172f0352b903a3976321a9196aae1b7aee5114877b953ec99ab6919236`. Online CI and exact-commit packaging remain before certification; the current manual installation zip remains the verified Phase 4 build.
+**Verified result:** all 1,704 JavaScript tests in 65 files, all 48 Home Assistant Python tests, lint, build and both source/bundle freshness checks pass. The complete local and [GitHub browser regression](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37256847229) passes all 659 assertions, including 71 calibration checks across source/bundle and drawn-plan/GLB scenarios, 30 security checks, 31 weather checks and every existing suite. The model suite passes without retry locally and online. [HACS validation passes](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37256847036) for the same commit.
+
+**Exact package:** the current `taylors3d.zip` was built from that committed source snapshot. Its frontend matches the downloaded GitHub artifact byte for byte: `810f10172f0352b903a3976321a9196aae1b7aee5114877b953ec99ab6919236`. The zip SHA256 is `3f0f6efb3585624c026ba38f01601b3acf780684b64b65325aebf0747899f87b`. Phase 4's zip is preserved separately. New lighting drafts are excluded; no release tag has been published. Actual household devices, model, streams and panel remain unverified.
 
 **Repairs included:** captured picks cancel immediately after a floor/context change; numbered calibration points remain visible above device badges without moving their coordinates. Untouched malformed imports remain invalid until deliberately repaired, and stale weather drafts cannot overwrite newer card settings. Malformed restored-data flags cannot become live coordinate/contact evidence. Clearing an already-empty mower trail no longer redraws the house. The weather idle fixture starts with its unrelated sensor already registered, so it measures reading updates separately from adding an entity.
 
