@@ -37,8 +37,8 @@ For each implementation, update its status, record the changed behavior, link it
 | F09 | Alert pulses at the affected location | Located, labelled smoke/leak/unlocked/custom alerts | Testing |
 | F10 | Actual sun plus rain, clouds and snow | Strict sun/location evidence and opt-in bounded outdoor weather | Testing |
 | F11 | Hue colour/brightness lighting the rooms | Validated light readings, inline colour/white controls and a bounded pool | Testing |
-| F12 | Scene previews | Explicit light targets, current-light capture, editor and saved-bar controls implemented; final verification running | In progress |
-| F13 | Ambient idle rotation and night dimming | Automatic night lighting; no idle rotation | Planned |
+| F12 | Scene previews | Explicit light targets, current-light capture, editor and saved-bar controls verified; household checks remain | Testing |
+| F13 | Ambient idle rotation and night dimming | Optional delay/rotation and sun/quiet-hours picture dimming pass dedicated native checks; full regression remains | In progress |
 | F14 | Camera-aware cut-away and glass/faded walls | Side Section, opacity and authored glass | Planned |
 | F15 | Furniture packs and drag-and-drop placement | Furniture inside GLB models and layer visibility | Planned |
 | F16 | Baked shadows for wall panels | Saved shadow/lighting policy, authored texture diagnostics and external AO guide | Testing |
@@ -193,17 +193,20 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 
 **Already present:** device controls, but no scene-preview system.
 
-**Phase 8 implementation (verification running):** Edit → Scenes drafts explicit light targets and can
+**Phase 8 implementation:** Edit → Scenes drafts explicit light targets and can
 capture the selected lights' current appearance. Saved previews have mouse hover
 and touch/keyboard Preview/Stop controls in the bubble bar. A separate Activate
 uses the exact saved HA scene. Only the existing model/floor light rendering is
 overridden; real states, controls, security, tracking and readings stay actual.
 Stop uses the latest actual readings. Default is disabled; the optional demo
-labels Movie/Bedtime as simulations. All 2,276 JavaScript tests in 80 files and
-lint/build/bundle checks pass. Native checks verify actual lighting pixels,
+labels Movie/Bedtime as simulations. All 2,276 JavaScript tests in 80 files,
+48 Home Assistant Python tests, lint/build/bundle checks, HACS validation and
+complete local/GitHub browser regressions pass. Both full browser runs pass
+985 assertions without browser errors or model retry; the dedicated local scenes
+check passes 143 assertions. Native checks verify actual lighting pixels,
 separate deliberate activation, history/reload, focused colour captions and the
-scrolling narrow list. Complete regression, GitHub checks and the exact-commit
-package remain. The current install zip is verified Phase 7.
+scrolling narrow list. The current install zip contains this exact committed
+Phase 8 build and matches GitHub's frontend byte for byte. Household checks remain.
 [Scene preview guide](docs/SCENE-PREVIEW-GUIDE.md).
 
 **Complete when:** hover or a touch Preview action temporarily changes only the local visual appearance; leaving/cancelling restores the live appearance. Preview makes no HA service calls. A separate intentional Activate action applies the actual scene. Scene mappings are visible and editable; missing target state data is reported rather than guessed.
@@ -220,6 +223,22 @@ scenes, entity permissions, materials and wall-panel checks remain.
 **Want:** slowly rotate the house when the wall panel is untouched, and dim it at night.
 
 **Already present:** automatic scene darkening, but no idle rotation.
+
+**Phase 9 implementation (verification running):** Edit → Idle saves opt-in delay,
+rotation speed and picture brightness with Save/Cancel/Undo. The existing animation
+loop owns rotation and exact camera restoration. A wake tap cannot select a device at
+its old rotated position. Device/room panels, editing, previews, actual alerts, camera
+flights, hidden/offscreen/disconnected states and reduced motion pause idle effects.
+Actual sun or explicit quiet hours in Home Assistant's time zone control visual
+dimming; manual Day/Night does not supply that evidence. Dim-only changes scene CSS
+and preserves its previous filter, without a renderer or HA action. All 2,508
+JavaScript tests in 85 files, full lint/build/bundle matching and 105 dedicated
+native source/bundle assertions pass. Actual rendering, exact wake restoration,
+hidden-label work, current readings, priority guards, dim-only CSS, native policy
+history, focused fields and 320px controls are checked. Complete local/GitHub
+regressions and the exact-commit package remain.
+[Idle mode guide](docs/AMBIENT-IDLE-GUIDE.md). Unfinished Phase 9 work is outside the
+uploaded Phase 8 checkpoint and the current verified manual package.
 
 **Complete when:** idle delay, speed, night dimming and quiet hours are configurable; touch, editing or an alert stops idle motion immediately; the camera returns predictably to its normal state. Reduced-motion and low-power settings can disable rotation. Dimming the card is supported without claiming to change the physical tablet backlight.
 
@@ -435,6 +454,7 @@ A feature is Done only after its agreed behavior works, it persists where approp
 | 2026-10-05 | Phase 5 | Visual source/plan calibration, separate freshness controls, exact contacts/rigid hinge motion and bounded outdoor weather implemented. All 1,704 JS and 48 HA Python tests, lint/build/bundle checks, complete local/GitHub browser suites and HACS validation pass. All 659 browser assertions pass, including 71 calibration, 30 security and 31 weather checks. The model suite passes without retry. Exact-commit installation zip matches GitHub's frontend; actual household checks remain. | `ca64019` |
 | 2026-10-05 | Phase 6 | Validated light appearances, deliberate RGB/Kelvin controls and current-output lighting selection implemented. All 1,904 JS and 48 HA Python tests, lint/build/bundle checks, complete local/GitHub browser regressions and HACS validation pass. All 773 GitHub browser assertions pass, including 113 lighting checks and the 31-check passive expiry-observation fixture. Exact-commit manual package matches GitHub's frontend. Actual HA/Hue/model/panel checks remain. | `a6599cb` |
 | 2026-10-05 | Phase 7 | F16 saved model-shading choices, full sun/lamp shadow suppression, actual material/UV evidence and external AO-authoring guide implemented. All 1,992 JS and 48 HA Python tests, lint/build/bundle matching, complete local/GitHub regressions (842 browser assertions each) and HACS validation pass. Exact-commit manual zip matches GitHub's artifact. Actual house/panel checks remain. | `42c826e` |
+| 2026-10-05 | Phase 8 | F12 explicit light previews, current-light capture and separate deliberate scene activation implemented. All 2,276 JS and 48 HA Python tests, lint/build/bundle matching, complete local/GitHub regressions (985 browser assertions each) and HACS validation pass. Dedicated local scenes checks pass 143 assertions. Exact-commit manual zip matches GitHub's artifact; actual household checks remain. | `eac07d6` |
 
 ### Phase 1: Taylor's Home Assistant check
 
@@ -552,7 +572,7 @@ source snapshot. Its frontend matches GitHub's downloaded artifact byte for byte
 `c6fb8eaedc6da3d8bf472db37847ac1fcce2f28dc2ab38a6645aa5a203a721ba`.
 Zip SHA256: `a4dcecb454d7d37af9fef0709e0b93fe948b195fe643e9cbc04121846b179566`.
 Phase 5's package is preserved separately. The current manual package now contains
-the independently verified Phase 7 shading additions. F12 scene-preview drafts are excluded.
+the independently verified Phase 8 scene-preview additions.
 No release tag has been published; actual household validation remains.
 
 ### Phase 7: model shading and authored texture diagnostics
@@ -567,11 +587,29 @@ maps, unchanged updates, resource reuse and reload. No browser errors or model r
 The complete local browser regression also passes all 842 assertions, with no browser
 errors or model retry. Actual household checks remain.
 
-The current manual `taylors3d.zip` was packaged from that exact source snapshot.
+The historical manual `taylors3d-phase7.zip` was packaged from that exact source snapshot.
 Its frontend matches GitHub's artifact byte for byte:
 `2cec6495e4cc99c29d4aaa9df10e86b03da9c8c78747cd65d7a795cca06b401f`.
 Zip SHA256: `36ac0adfbdfdd4386b8b709e3f17925a1da847ff961764eb2c4c81d811bc18dd`.
-It is also preserved as `taylors3d-phase7.zip`. Unfinished F12 scene-preview drafts
-are excluded. No release tag has been published; HACS release download remains pending.
+This checkpoint predates the separately verified Phase 8 scene previews.
+No release tag has been published; HACS release download remains pending.
+
+### Phase 8: explicit scene-light previews and intentional activation
+
+Code checkpoint `eac07d6b7d317bb4c319d086ce8f3345db70270e` passes
+[complete GitHub CI](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37265847024):
+all 2,276 JavaScript tests in 80 files, 48 Home Assistant Python tests, lint,
+build, source/bundle freshness and all 985 browser assertions. The complete local
+regression from the same committed snapshot also passes all 985 assertions with
+no browser errors or model retry. The dedicated local scenes run passes 143
+assertions, including actual pixels, native controls and current permissions.
+[HACS validation passes](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37265846996).
+
+The current manual `taylors3d.zip`, also preserved as `taylors3d-phase8.zip`,
+contains that exact build. Its frontend matches GitHub's downloaded artifact:
+`c7d3d5ae05a64f0895db81e7fd0c25056a818e9d9e9c1d77cab977ff7692b922`.
+Zip SHA256: `c8c935d90f95edbf4d3c27efd47bc7d8c2d894effb26905d837c994b74801904`.
+Unfinished Phase 9 idle-mode work is excluded. No release tag has been published;
+HACS release download and actual household scene/model/panel checks remain.
 
 When starting work, add a row here and update the feature status above. When it is completed, record exactly what was tested and any unfinished part that remains.

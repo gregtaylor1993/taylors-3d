@@ -325,6 +325,7 @@ export class FloorplanView {
     this.size = { w: 1, h: 1 };
     this.dirty = true;
     this._raf = null;
+    this._ambientCamera = null; // private exact pose/controls baseline, owned by an idle-session token
     this._zoomTo = 'center'; // zoom pivot: 'center' (controls target) or 'cursor'
     this.pivotMarker = null; // edit mode: small cross at the rotation centre
     this._onWheel = () => { this.dirty = true; };
@@ -333,6 +334,7 @@ export class FloorplanView {
   }
 
   _makeControls() {
+    if (this._ambientCamera) this.endAmbientCamera(this._ambientCamera);
     const prevTarget = this.controls && this.controls.target.clone();
     if (this.controls) this.controls.dispose();
     const c = new OrbitControls(this.camera, this.renderer.domElement);
@@ -351,10 +353,12 @@ export class FloorplanView {
     }
     c.addEventListener('change', () => {
       this.dirty = true;
+      if (this._ambientCamera) return; // passive orbit never schedules occlusion work each frame
       this._camMovedAt = performance.now();
       this._scheduleOcclusion();
     });
-    c.addEventListener('start', () => { this._tween = null; });
+    c.addEventListener('start', () => { this._tween = null; this.onCameraInteraction?.('start'); });
+    c.addEventListener('end', () => this.onCameraInteraction?.('end'));
     if (this.controls) c.enabled = this.controls.enabled;
     if (prevTarget) c.target.copy(prevTarget);
     this.controls = c;
@@ -768,6 +772,7 @@ export class FloorplanView {
   }
 
   _disposeModel() {
+    if (this._ambientCamera) this.endAmbientCamera({ ...this._ambientCamera, restore: false });
     this._modelId = null;
     this._modelVisibility = null;
     this._motionKeys = new WeakMap();
@@ -1419,6 +1424,7 @@ export class FloorplanView {
   // model materials turn double-sided so cut walls read solid; markers and glows on the removed side
   // are hidden. null restores everything.
   setSection(plane) {
+    if (plane && this._ambientCamera) this.endAmbientCamera(this._ambientCamera);
     if (plane) {
       if (!this.sectionClip) this.sectionClip = new THREE.Plane();
       this.sectionClip.normal.set(...plane.normal);
@@ -1499,6 +1505,93 @@ export class FloorplanView {
     return { position: r(this.persp.position), target: r(this.controls.target) };
   }
 
+  // Saved views intentionally round coordinates; this private idle baseline
+  // keeps the exact current pose and drains the preceding gesture's inertia.
+  beginAmbientCamera({ token, generation, speed } = {}) {
+    const controls = this.controls, camera = this.camera, labels = this.labelRenderer?.domElement;
+    if (!token || generation === undefined || generation === null || !Number.isFinite(speed) || speed <= 0 || speed > 6
+      || this._disposed || this.mode !== '3d' || this.sectionClip || this._tween || this._modelMotionMoving
+      || !controls || controls.enabled === false || controls.enableRotate === false || controls.object !== camera
+      || camera !== this.persp || !camera?.isPerspectiveCamera) return false;
+    if (![...camera.position.toArray(), ...camera.quaternion.toArray(), ...camera.up.toArray(), ...controls.target.toArray(), camera.zoom].every(Number.isFinite)
+      || camera.zoom <= 0 || camera.up.lengthSq() === 0 || camera.quaternion.lengthSq() === 0 || camera.position.equals(controls.target)) return false;
+    if (this._ambientCamera) return this._ambientCamera.token === token && this._ambientCamera.generation === generation
+      && this._ambientCurrent(this._ambientCamera) && this._ambientCamera.speed === speed;
+    const focus = labels?.getRootNode?.().activeElement || labels?.ownerDocument?.activeElement;
+    if (focus && labels?.contains(focus)) return false;
+    const flags = Object.fromEntries(['enabled', 'enableRotate', 'enablePan', 'enableZoom', 'enableDamping', 'dampingFactor',
+      'screenSpacePanning', 'zoomToCursor', 'autoRotate', 'autoRotateSpeed', 'minDistance', 'maxDistance', 'minZoom', 'maxZoom',
+      'minPolarAngle', 'maxPolarAngle', 'minAzimuthAngle', 'maxAzimuthAngle', 'minTargetRadius', 'maxTargetRadius']
+      .filter((key) => key in controls).map((key) => [key, controls[key]]));
+    const session = { token, generation, speed, controls, camera, modelRoot: this.model?.root || null,
+      position: camera.position.clone(), quaternion: camera.quaternion.clone(), up: camera.up.clone(), zoom: camera.zoom,
+      target: controls.target.clone(), flags, labels, labelDisplay: labels?.style.display, labelsSkipped: false,
+      previousPosition: new THREE.Vector3(), previousQuaternion: new THREE.Quaternion() };
+    const dirty = this.dirty;
+    this._ambientCamera = session; // guards change callbacks before the public flush
+    this._cancelOcclusion();
+    controls.autoRotate = false;
+    this.stopCameraMotion();
+    this._restoreAmbientPose(session);
+    controls.autoRotate = true; controls.autoRotateSpeed = speed / 6; controls.enableDamping = false;
+    if (labels) labels.style.display = 'none'; // child pointer-events:auto cannot bypass a hidden ancestor
+    this.dirty = dirty; // CSS-only label hiding needs no scene frame until the first actual orbit step
+    return true;
+  }
+
+  _ambientCurrent(session) {
+    return !this._disposed && this.mode === '3d' && !this.sectionClip && session.controls === this.controls
+      && session.camera === this.camera && session.camera === this.persp && session.modelRoot === (this.model?.root || null);
+  }
+
+  _restoreAmbientPose(session) {
+    const camera = session.camera;
+    camera.position.copy(session.position); camera.quaternion.copy(session.quaternion); camera.up.copy(session.up); camera.zoom = session.zoom;
+    session.controls.target.copy(session.target); camera.updateProjectionMatrix(); camera.updateMatrixWorld(true);
+  }
+
+  // Root passes its existing RAF's bounded delta. Ordinary controls.update is
+  // skipped for the rotating session, leaving exactly one public update(delta).
+  advanceAmbientCamera({ token, generation, deltaSeconds } = {}) {
+    const session = this._ambientCamera;
+    if (!session || session.token !== token || session.generation !== generation || !this._ambientCurrent(session)
+      || this._tween || this._modelMotionMoving || session.controls.enabled === false
+      || !Number.isFinite(deltaSeconds) || deltaSeconds <= 0) return false;
+    session.previousPosition.copy(session.camera.position); session.previousQuaternion.copy(session.camera.quaternion);
+    session.controls.update(Math.min(0.05, deltaSeconds));
+    const changed = !session.camera.position.equals(session.previousPosition) || !session.camera.quaternion.equals(session.previousQuaternion);
+    if (changed) this.dirty = true;
+    return changed;
+  }
+
+  // Stale callbacks cannot restore or clear a current owner. A current token can
+  // discard an old root/control baseline without touching the replacement pose.
+  endAmbientCamera({ token, generation, restore = true } = {}) {
+    const session = this._ambientCamera;
+    if (!session || session.token !== token || session.generation !== generation) return false;
+    const current = this._ambientCurrent(session), dirty = this.dirty;
+    session.previousPosition.copy(session.camera.position); session.previousQuaternion.copy(session.camera.quaternion);
+    const targetChanged = !session.controls.target.equals(session.target), zoomChanged = session.camera.zoom !== session.zoom;
+    session.controls.autoRotate = false; // before any flush/update, otherwise a second implicit orbit step survives
+    if (restore && current) {
+      this.stopCameraMotion();
+      Object.assign(session.controls, session.flags, { autoRotate: false, enableDamping: false });
+      this._restoreAmbientPose(session);
+      session.controls.update(); // sync public control caches to the inertia-free baseline
+      this._restoreAmbientPose(session); // retain full precision, including quaternion/up/zoom
+    }
+    Object.assign(session.controls, session.flags);
+    if (session.labels && session.labels.style.display === 'none') session.labels.style.display = session.labelDisplay || '';
+    this._ambientCamera = null;
+    const changed = !!(restore && current && (targetChanged || zoomChanged || !session.camera.position.equals(session.previousPosition)
+      || !session.camera.quaternion.equals(session.previousQuaternion)));
+    // A hidden dirty frame may have changed/added real HA labels even without
+    // an orbit step. Refresh the current owned label root once when it wakes.
+    this.dirty = dirty || changed || !!(session.labelsSkipped && session.labels === this.labelRenderer?.domElement);
+    if (restore && current) this._scheduleOcclusion(); // one settled wake pass; actual user motion keeps normal debounce
+    return changed;
+  }
+
   // Top view: ortho centre in plan metres + zoom (1 = 10 m half height), or null outside top mode.
   getTopCamera() {
     if (this.mode !== 'top') return null;
@@ -1551,6 +1644,7 @@ export class FloorplanView {
 
   setCamera(cam, { instant = false } = {}) {
     if (this.mode !== '3d' || !cam) return;
+    if (this._ambientCamera) this.endAmbientCamera(this._ambientCamera);
     const pos = new THREE.Vector3(...cam.position), target = new THREE.Vector3(...cam.target);
     // saved cameras must not be clamped by the zoom limits; relaxed until the next fit()
     const d = pos.distanceTo(target);
@@ -1796,6 +1890,7 @@ export class FloorplanView {
 
   setMode(mode) {
     if (mode === this.mode) return;
+    if (this._ambientCamera) this.endAmbientCamera(this._ambientCamera);
     if (this.mode === '3d') {
       // An initially-Top card has not framed its perspective camera yet.
       const camera = this.getCamera();
@@ -1811,6 +1906,7 @@ export class FloorplanView {
 
   // Frame the rooms of the visible floor(s); the model when there are no rooms (or asked to).
   fit({ model = false, instant = false } = {}) {
+    if (this._ambientCamera) this.endAmbientCamera(this._ambientCamera);
     const box = new THREE.Box3();
     if (!model) {
       // rooms as data (independent of fills/outlines/walls flags), on the visible floors
@@ -1951,7 +2047,7 @@ export class FloorplanView {
   // id: only that marker (a moving live marker); a pending or running full pass already covers it.
   // Nothing runs while the card is detached (start() schedules a full pass again).
   _scheduleOcclusion(delay = OCCLUSION_DELAY_MS, id = null) {
-    if (this._disposed || !this._raf || this._modelMotionMoving) return;
+    if (this._disposed || !this._raf || this._modelMotionMoving || this._ambientCamera) return;
     if (id !== null) {
       if (this._occFull) return;
       (this._occIds = this._occIds || new Set()).add(id);
@@ -2019,7 +2115,7 @@ export class FloorplanView {
 
   _runOcclusion() {
     this._occTimer = null;
-    if (this._disposed) return;
+    if (this._disposed || this._ambientCamera) return;
     const full = this._occFull, ids = this._occIds;
     if (!this._occlusion || this.mode !== '3d' || !this.model || (this.model.opacity ?? 1) < 0.6) {
       this._occFull = false;
@@ -2052,7 +2148,7 @@ export class FloorplanView {
     let i = 0;
     const slice = () => {
       this._occTimer = null;
-      if (this._disposed || gen !== this._occGen) return; // cancelled (camera, view, model, dispose)
+      if (this._disposed || this._ambientCamera || gen !== this._occGen) return; // cancelled (camera, view, model, dispose)
       const t0 = performance.now();
       for (; i < markers.length; i++) {
         if (performance.now() - t0 > OCCLUSION_SLICE_MS) { this._occTimer = setTimeout(slice, 0); return; }
@@ -2130,7 +2226,7 @@ export class FloorplanView {
     const loop = () => {
       this._raf = requestAnimationFrame(loop);
       if (this._tween) this._stepTween(performance.now());
-      if (this.controls.update()) this.dirty = true; // damping still moving
+      if (!this._ambientCamera && this.controls.update()) this.dirty = true; // ambient owns its one explicit-delta update
       if (this.onFrame?.(performance.now())) this.dirty = true;
       if (this.pivotMarker && !this.pivotMarker.position.equals(this.controls.target)) {
         this.pivotMarker.position.copy(this.controls.target);
@@ -2147,7 +2243,8 @@ export class FloorplanView {
       this._placeSkyBodies();
       this.labelRenderer.domElement.classList.toggle('compact', this.pixelsPerMetre() < COMPACT_PPM);
       this.renderer.render(this.scene, this.camera);
-      this.labelRenderer.render(this.scene, this.camera);
+      if (this._ambientCamera) this._ambientCamera.labelsSkipped = true; // the owned label root is hidden
+      else this.labelRenderer.render(this.scene, this.camera);
       if (this.onRender) this.onRender(); // e.g. the object popup follows its anchor
     };
     this._raf = requestAnimationFrame(loop);
@@ -2155,6 +2252,7 @@ export class FloorplanView {
   }
 
   stop() {
+    if (this._ambientCamera) this.endAmbientCamera(this._ambientCamera);
     if (this._raf) cancelAnimationFrame(this._raf);
     this._raf = null;
     this._modelMotionMoving = false;

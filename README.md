@@ -12,6 +12,7 @@ See the [security and weather guide](docs/SECURITY-AND-WEATHER-GUIDE.md) for con
 See the [lighting guide](docs/LIGHTING-GUIDE.md) for Hue colour, warm/cool white and the realtime light budget.
 See the [model shading guide](docs/MODEL-SHADING-GUIDE.md) for lighter display settings and preparing AO textures in Blender.
 See the [scene preview guide](docs/SCENE-PREVIEW-GUIDE.md) to try a lighting look before deliberately activating its Home Assistant scene.
+See the [idle mode guide](docs/AMBIENT-IDLE-GUIDE.md) for optional gentle rotation and picture dimming on a wall panel.
 
 A Lovelace card that shows your home as a 3D floorplan with every device on it. Draw each room
 once and link it to a Home Assistant area. After that, every device assigned to the area appears
@@ -55,6 +56,9 @@ position over its map.
 - Edit → Scenes saves explicit light previews such as Movie or Bedtime. The bottom bar
   offers Preview, Stop and a separate Activate action. Previews change the model lights;
   actual Home Assistant readings and device controls stay current
+- Edit → Idle sets an optional idle delay, gentle rotation and picture brightness.
+  Actual sun readings or quiet hours in Home Assistant's time zone can dim the drawing;
+  touch, menus, editing, alerts and camera flights take priority
 - Edit mode for admins: draw rooms, doors, floors, pin and hide devices, import/export
 - One layout shared by every user and device (stored by the companion integration)
 - Robot mower: live position, trail, map image or camera overlay, point calibration

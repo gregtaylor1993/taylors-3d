@@ -36,6 +36,7 @@ import { SecurityLayer } from './security.js';
 import { readModelRendering } from './model-rendering.js';
 import { ScenePreviewController } from './scene-preview.js';
 import { ScenePreviewBar } from './scene-preview-bar.js';
+import { AmbientIdleController } from './ambient-idle.js';
 
 const VERSION = '0.1.0';
 const NONE = Object.freeze({}); // stable stand-in for a missing layout.objects / groups (binding cache key)
@@ -389,6 +390,52 @@ class Taylors3dCard extends HTMLElement {
       onPreview: (overrides, metadata) => this.previewSceneLights(overrides, metadata),
       onStatus: (status) => { this._scenePreviewStatus = status; this._scenePreviewBar?.update(); },
     });
+    this._ambientPointers = new Set();
+    this._ambientKeys = new Set();
+    this._ambientWakeEvents = new WeakSet();
+    this._ambientWindowActive = true;
+    this._ambientController = new AmbientIdleController({
+      getContext: () => this._ambientContext(),
+      onBegin: (reading) => {
+        if (!reading.policy.rotate || reading.policy.rotation_degrees_per_second === 0) return true;
+        const view = this._view;
+        if (!view?.beginAmbientCamera?.({ ...reading, speed: reading.policy.rotation_degrees_per_second })) return false;
+        this._ambientCameraOwner = { view, token: reading.token, generation: reading.generation };
+        return true;
+      },
+      onAdvance: (reading) => {
+        const owner = this._ambientCameraOwner;
+        return !!(owner?.view === this._view && owner.token === reading.token && owner.generation === reading.generation
+          && owner.view.advanceAmbientCamera(reading));
+      },
+      onEnd: (reading) => {
+        const owner = this._ambientCameraOwner;
+        if (!owner || owner.token !== reading.token) return false;
+        this._ambientCameraOwner = null;
+        return owner.view.endAmbientCamera({ ...reading,
+          restore: reading.restore && owner.view === this._view && owner.generation === this._ambientGeneration() });
+      },
+      onDim: (reading) => this._applyAmbientDim(reading.brightness),
+    });
+    this._onAmbientInput = (event) => this._ambientActivity(event);
+    this._onAmbientRelease = (event) => {
+      const held = event.type === 'keyup' ? this._ambientKeys : this._ambientPointers;
+      const id = event.type === 'keyup' ? event.code || event.key : event.pointerId;
+      if (!held.delete(id)) return;
+      this._ambientActivity();
+    };
+    this._onAmbientBlur = () => {
+      this._ambientWindowActive = false;
+      this._ambientControlsGesture = false;
+      this._ambientPointers.clear(); this._ambientKeys.clear();
+      this._suspendAmbient('window focus lost');
+    };
+    this._onAmbientFocus = () => { this._ambientWindowActive = true; this._syncAmbient(); };
+    this._onAmbientPreference = () => this._syncAmbient();
+    this._onAmbientCameraInteraction = (phase) => {
+      this._ambientControlsGesture = phase === 'start';
+      this._ambientActivity();
+    };
     this._trackingMemory = { presence: {}, vehicles: {}, vacuums: {} };
     this._trackingSourceKeys = new Map();
     this._trackingData = { records: [], diagnostics: [], miniMap: [], nextExpiry: null };
@@ -403,6 +450,7 @@ class Taylors3dCard extends HTMLElement {
     this._weatherInView = true; // Older browsers without IntersectionObserver retain the normal card lifecycle.
     this._onWeatherVisibility = () => {
       this._syncWeatherVisibility();
+      this._syncAmbient();
       if (this.isConnected && !document.hidden) { this._syncWeather(); this._applySky(false); }
     };
     this._panelName = readPanelName();
@@ -410,8 +458,7 @@ class Taylors3dCard extends HTMLElement {
       getTarget: () => ({ layout_key: this._config?.layout_key, panel: this._panelName || this._config?.automation_panel,
         card_id: this._config?.automation_card_id }),
       getViews: () => this._views,
-      getCurrent: () => ({ id: this._viewId, mode: this._mode, camera: this._view?.getCamera(),
-        topCamera: this._view?.getTopCamera() }),
+      getCurrent: () => this._currentPresetCamera(),
       onSelect: (view, options) => this._selectPreset(view, options),
       onError: (error) => { this._presetError = String(error?.message || error); this._showNotice(); },
     });
@@ -437,6 +484,7 @@ class Taylors3dCard extends HTMLElement {
 
   setConfig(config) {
     const previous = this._config;
+    if (previous) this._suspendAmbient('card settings changed');
     this._config = { layout_key: 'default', height: '520px', group_by: 'device', wall_height: 1.0, view: '3d',
       show_bubble_bar: true, mini_map: true, mini_map_size: 180, mini_map_position: 'top-right', device_tap_action: 'popup',
       control_panel: 'right', ...config };
@@ -526,7 +574,10 @@ class Taylors3dCard extends HTMLElement {
     const prevModel = this._view.model;
     const modelSource = opts && (opts.id || opts.url);
     const requestedModel = modelSource && opts.merge === false ? modelSource + '#nomerge' : modelSource;
-    if (reload || (requestedModel || null) !== (prevModel?.id || null)) this._stopScenePreview('model loading');
+    if (reload || (requestedModel || null) !== (prevModel?.id || null)) {
+      this._suspendAmbient('model loading');
+      this._stopScenePreview('model loading');
+    }
     this._view.setModel(opts).then((err) => {
       if (this._view.model !== prevModel) this._stopScenePreview('model changed');
       if (this._view.model !== prevModel && this._section) this._dropSection();
@@ -644,6 +695,9 @@ class Taylors3dCard extends HTMLElement {
   }
 
   set hass(hass) {
+    if (this._hass && (this._hass.connection !== hass?.connection || this._hass.user?.id !== hass?.user?.id)) {
+      this._suspendAmbient('Home Assistant session changed');
+    }
     if (this._hass?.connection && this._hass.connection !== hass?.connection) {
       // Reconnecting to HA is not a new observation. Keep each unchanged source's
       // accepted event/deadline, but replace cached readings and the old timer.
@@ -652,6 +706,7 @@ class Taylors3dCard extends HTMLElement {
     }
     this._hass = hass;
     this._syncScenePreviews();
+    this._syncAmbient();
     if (this.isConnected) this._presetEvents.setHass(hass);
     if (this._view && this._view.model && this._skyMode === 'auto') this._applySky(false);
     if (!this._layout && !this._loading) this._load();
@@ -664,6 +719,9 @@ class Taylors3dCard extends HTMLElement {
 
   connectedCallback() {
     if (!this._config) return; // setConfig renders once it arrives
+    this._ambientPointers.clear(); this._ambientKeys.clear();
+    this._ambientControlsGesture = false;
+    this._ambientWindowActive = typeof document.hasFocus !== 'function' || document.hasFocus();
     if (!this._view) this._render();
     else if (this._editing) this._edit.attach();
     this._view.start();
@@ -672,6 +730,12 @@ class Taylors3dCard extends HTMLElement {
     window.addEventListener('storage', this._onPanelName);
     document.addEventListener('visibilitychange', this._onTrackingVisibility);
     document.addEventListener('visibilitychange', this._onWeatherVisibility);
+    window.addEventListener('pointerup', this._onAmbientRelease, true);
+    window.addEventListener('pointercancel', this._onAmbientRelease, true);
+    window.addEventListener('keyup', this._onAmbientRelease, true);
+    window.addEventListener('blur', this._onAmbientBlur);
+    window.addEventListener('focus', this._onAmbientFocus);
+    this._watchAmbientPreference();
     this._watchWeatherVisibility();
     this._syncWeather();
     this._trackingInputKey = null;
@@ -683,9 +747,19 @@ class Taylors3dCard extends HTMLElement {
     this._ro.observe(this._scene);
     this._ro.observe(this._toolbar);
     this._schedule();
+    this._syncAmbient();
   }
 
   disconnectedCallback() {
+    this._suspendAmbient('disconnected');
+    this._ambientPointers.clear(); this._ambientKeys.clear();
+    this._ambientControlsGesture = false;
+    window.removeEventListener('pointerup', this._onAmbientRelease, true);
+    window.removeEventListener('pointercancel', this._onAmbientRelease, true);
+    window.removeEventListener('keyup', this._onAmbientRelease, true);
+    window.removeEventListener('blur', this._onAmbientBlur);
+    window.removeEventListener('focus', this._onAmbientFocus);
+    this._unwatchAmbientPreference();
     this._stopScenePreview('disconnected');
     window.removeEventListener('taylors3d-panel-change', this._onPanelName);
     window.removeEventListener('storage', this._onPanelName);
@@ -712,6 +786,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   async _load() {
+    this._suspendAmbient('layout loading');
     this._stopScenePreview('layout loading');
     this._edit?.cancelHistoryGestures?.();
     this._resetTracking();
@@ -734,6 +809,9 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _render() {
+    this._suspendAmbient('renderer replaced');
+    this._unwatchAmbientPreference();
+    this._unbindAmbientInput();
     this._scenePreviewBar?.dispose();
     this._stopScenePreview('renderer replaced');
     this._securityLayer?.dispose();
@@ -818,7 +896,9 @@ class Taylors3dCard extends HTMLElement {
       returnFocus: () => this._stage,
     });
     this._reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    this._watchAmbientPreference();
     this._view.onFrame = (now) => this._animateFeatures(now);
+    this._view.onCameraInteraction = this._onAmbientCameraInteraction;
     this._objects = new ObjectLayer(this._view);
     this._view.onObjectsInvalidate = () => this._updateObjects(); // view, section or placement changed
     this._popup = new ObjectPopup(this._stage, {
@@ -836,6 +916,7 @@ class Taylors3dCard extends HTMLElement {
       onMoreInfo: (entityId) => this._moreInfo(entityId),
       placement: this._config.control_panel,
       onVisibilityChange: (open, placement) => {
+        if (open) this._suspendAmbient('device controls opened');
         if (open) this._stopScenePreview('device controls opened');
         this._stage.classList.toggle('controls-open', open && placement === 'right');
         requestAnimationFrame(() => this.isConnected && this._resize());
@@ -858,6 +939,7 @@ class Taylors3dCard extends HTMLElement {
         suspended: !this._scenePreviewAvailable(false), contextKey: this._scenePreviewKey(), status: this._scenePreviewStatus }),
     });
     const canvas = this._view.renderer.domElement;
+    this._bindAmbientInput();
     this._stage.addEventListener('pointerdown', (e) => {
       this._scenePreviewInteraction(e);
       this._presetEvents.interrupt();
@@ -876,6 +958,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _toggleEdit() {
+    this._suspendAmbient('editing changed');
     this._stopScenePreview('editing changed');
     this._presetEvents.interrupt();
     this._view.stopCameraMotion();
@@ -905,6 +988,7 @@ class Taylors3dCard extends HTMLElement {
 
   // Apply an edited layout: rebuild the plan and save it.
   _commit(layout) {
+    this._suspendAmbient('layout edit');
     if (!this._history.current && this._layout) this.resetHistory();
     this._layout = layout;
     if (!this._historyReplaying) this._recordHistory('Layout edit');
@@ -1076,6 +1160,7 @@ class Taylors3dCard extends HTMLElement {
         const entry = entries.find((candidate) => candidate.target === target);
         if (!entry) return;
         this._weatherInView = entry.isIntersecting === true;
+        this._syncAmbient();
         this._syncWeatherVisibility();
       });
       this._weatherObserver = observer;
@@ -1115,7 +1200,8 @@ class Taylors3dCard extends HTMLElement {
     const weather = this._weatherLayer?.update(now, options) || false;
     const security = this._securityLayer?.update(now, options) || false;
     if (this._refreshSecurityMotion()) this._syncMiniMap();
-    return alerts || tracking || weather || security; // Evaluate every animation before combining render requests.
+    const ambient = this._ambientController.tick(now).cameraChanged;
+    return alerts || tracking || weather || security || ambient; // Evaluate every animation before combining render requests.
   }
 
   securityBindings() { return this._layout?.security_bindings ?? this._config?.security_bindings ?? []; }
@@ -1313,6 +1399,7 @@ class Taylors3dCard extends HTMLElement {
     this._acknowledgedAlerts = new Set([id]);
     this._statusRefs = null;
     this._syncStatus();
+    this._syncAmbient();
   }
 
   _showNotice() {
@@ -1384,12 +1471,14 @@ class Taylors3dCard extends HTMLElement {
 
   _restoreHistory(snapshot) {
     if (!snapshot) return;
+    this._suspendAmbient('history changed');
     this._stopScenePreview('history changed');
     this._markerRenderKey = null;
     this._edit?._cameraEditor?.reset();
     this._edit?._trackingEditor?.reset();
     this._edit?._modelRenderingEditor?.reset();
     this._edit?._scenePreviewEditor?.reset();
+    this._edit?._ambientIdleEditor?.reset();
     this._cameraCoveragePreview = null;
     this._historyReplaying = true;
     try {
@@ -1500,6 +1589,7 @@ class Taylors3dCard extends HTMLElement {
     this._devicePopup.update(h);
     this._syncMiniMap();
     this._syncStatus();
+    this._syncAmbient();
     if ((markers || viewRefreshed) && this._editing) this._edit.afterUpdate();
     else if (this._editing) this._edit.onStates();
   }
@@ -1964,6 +2054,7 @@ class Taylors3dCard extends HTMLElement {
 
   // Chip switch. The camera moves only for a view with its own camera (no model: frame the floor, as before).
   _setView(id, { instant = false } = {}) {
+    this._suspendAmbient('view changed');
     if (!this._selectingPreset) { this._presetEvents.interrupt(); this._view.stopCameraMotion(); }
     const v = this._views.find((x) => x.id === id);
     if (!v) return;
@@ -1992,6 +2083,7 @@ class Taylors3dCard extends HTMLElement {
 
   _selectPreset(view, { mode, source, restore } = {}) {
     if (!this._view || !this._layout || this._loading || this._editing || !this._views.some((v) => v.id === view.id)) return false;
+    this._suspendAmbient('camera preset');
     this._selectingPreset = true;
     try {
       this._view.stopCameraMotion();
@@ -2010,6 +2102,7 @@ class Taylors3dCard extends HTMLElement {
   // First view after load / model change: its saved camera, else frame it.
   _initialCamera() {
     if (this._view.size.w <= 1) return; // _resize retries once the card has a size
+    this._suspendAmbient('initial camera');
     this._fitted = true;
     const v = this.currentView();
     if (v && v.camera && this._mode === '3d') this._view.setCamera(this.viewCamera(v), { instant: true });
@@ -2021,6 +2114,7 @@ class Taylors3dCard extends HTMLElement {
 
   // Reset view: the view's saved camera (3D incl. its rotation centre; top: camera_top), else frame it.
   _resetCamera() {
+    this._suspendAmbient('camera reset');
     this._stopScenePreview('camera reset');
     if (!this._selectingPreset) this._presetEvents.interrupt();
     if (this._section) this.setSection(false, { camera: false });
@@ -2079,6 +2173,7 @@ class Taylors3dCard extends HTMLElement {
 
   // Toggle the side section. Off returns to the view's visibility and (camera: true) its camera.
   setSection(on, { camera = true } = {}) {
+    this._suspendAmbient('section changed');
     this._stopScenePreview('section changed');
     if (this._popup) this._popup.close();
     if (this._devicePopup) this._devicePopup.close();
@@ -2148,6 +2243,118 @@ class Taylors3dCard extends HTMLElement {
   }
 
   // Shared saved presentation takes precedence over the card's fallback settings.
+  _ambientGeneration() {
+    const config = this._config || {}, layout = this._layout || {}, view = this._view;
+    const refs = [view, view?.camera, view?.controls, view?.model?.root, layout.rooms, layout.floors,
+      layout.model, layout.views, this._viewState, this._viewId, this._mode, this._floor, this._floorOnly,
+      config.layout_key, config.model, config.model_rotation, config.model_scale,
+      ...(Array.isArray(config.model_position) ? config.model_position : [config.model_position]),
+      layout.model?.rotation, layout.model?.scale,
+      ...(Array.isArray(layout.model?.position) ? layout.model.position : [layout.model?.position]),
+      this._hass?.connection, this._hass?.user?.id];
+    if (!this._ambientGenerationRefs || refs.some((value, index) => value !== this._ambientGenerationRefs[index])
+      || refs.length !== this._ambientGenerationRefs.length) {
+      this._ambientGenerationRefs = refs;
+      this._ambientGenerationToken = Object.freeze({});
+    }
+    return this._ambientGenerationToken;
+  }
+
+  _ambientContext() {
+    const view = this._view, active = this.shadowRoot?.activeElement || document.activeElement;
+    const labelFocused = !!(active && view?.labelRenderer?.domElement?.contains(active));
+    const settled = !view?._camMovedAt || performance.now() - view._camMovedAt >= 150;
+    const sun = readSunState(this._hass);
+    return { policy: this._layout?.ambient_idle ?? this._config?.ambient_idle,
+      generation: this._ambientGeneration(), reducedMotion: !!this._reducedMotion?.matches,
+      eligible: !!(this.isConnected && !document.hidden && this._weatherInView !== false && this._ambientWindowActive
+        && this._hass?.connection?.connected === true && this._hass?.user?.id && this._layout && this._config
+        && view?.size?.w > 1 && view?.size?.h > 1 && (view.model || this._roomList?.length)
+        && !this._loading && !this._editing && !this._section && !view.sectionClip
+        && this._mode === '3d' && view.mode === '3d' && view.controls?.enabled !== false && settled
+        && !view._tween && !view._modelMotionMoving && !this._gesture && !this._ambientControlsGesture && !labelFocused
+        && !this._ambientPointers.size && !this._ambientKeys.size && !this._lightPreview
+        && !this._popup?.isOpen && !this._devicePopup?.isOpen && !(this._alertData?.stats?.active > 0)),
+      sun: sun.status === 'ready' ? { status: 'ready', nightFactor: nightFactor(sun.elevation) } : { status: sun.status },
+      wallTime: Date.now(), timeZone: this._hass?.config?.time_zone };
+  }
+
+  _syncAmbient() {
+    const reading = this._ambientController?.revalidate(performance.now());
+    if (reading?.cameraChanged && this._view) this._view.dirty = true;
+    return reading;
+  }
+
+  _suspendAmbient(reason) {
+    const reading = this._ambientController?.suspend(performance.now(), reason);
+    if (reading?.cameraChanged && this._view) this._view.dirty = true;
+    return reading;
+  }
+
+  _ambientActivity(event) {
+    if (event?.type === 'pointerdown') this._ambientPointers.add(event.pointerId);
+    if (event?.type === 'keydown') this._ambientKeys.add(event.code || event.key);
+    const reading = this._ambientController.activity(performance.now());
+    if (reading.cameraChanged && this._view) {
+      this._view.dirty = true;
+      // A rotating surface moved under this tap. Wake before OrbitControls, but
+      // do not apply a device/room action at the old projected coordinate.
+      if (event?.type === 'pointerdown') this._ambientWakeEvents.add(event);
+    }
+    return reading;
+  }
+
+  _bindAmbientInput() {
+    if (!this._body || this._ambientInputBody === this._body) return;
+    this._unbindAmbientInput();
+    this._ambientInputBody = this._body;
+    for (const type of ['pointerdown', 'pointermove', 'keydown', 'focusin']) this._body.addEventListener(type, this._onAmbientInput, true);
+    this._body.addEventListener('wheel', this._onAmbientInput, { capture: true, passive: true });
+  }
+
+  _unbindAmbientInput() {
+    if (!this._ambientInputBody) return;
+    for (const type of ['pointerdown', 'pointermove', 'keydown', 'focusin', 'wheel']) this._ambientInputBody.removeEventListener(type, this._onAmbientInput, true);
+    this._ambientInputBody = null;
+  }
+
+  _watchAmbientPreference() {
+    if (!this.isConnected || !this._reducedMotion || this._ambientPreference?.media === this._reducedMotion) return;
+    this._unwatchAmbientPreference();
+    const media = this._reducedMotion;
+    if (media.addEventListener) { media.addEventListener('change', this._onAmbientPreference); this._ambientPreference = { media }; }
+    else if (media.addListener) { media.addListener(this._onAmbientPreference); this._ambientPreference = { media, legacy: true }; }
+  }
+
+  _unwatchAmbientPreference() {
+    const watch = this._ambientPreference;
+    if (watch?.legacy) watch.media.removeListener(this._onAmbientPreference);
+    else watch?.media.removeEventListener('change', this._onAmbientPreference);
+    this._ambientPreference = null;
+  }
+
+  _applyAmbientDim(brightness) {
+    const owned = this._ambientDimStyle;
+    if (owned && (brightness === 1 || owned.node !== this._scene)) {
+      if (owned.value) owned.node.style.setProperty('filter', owned.value, owned.priority);
+      else owned.node.style.removeProperty('filter');
+      this._ambientDimStyle = null;
+    }
+    if (brightness === 1 || !this._scene) return;
+    if (!this._ambientDimStyle) this._ambientDimStyle = { node: this._scene,
+      value: this._scene.style.getPropertyValue('filter'), priority: this._scene.style.getPropertyPriority('filter') };
+    const base = this._ambientDimStyle.value;
+    const value = `${base && base !== 'none' ? base + ' ' : ''}brightness(${brightness})`;
+    if (this._scene.style.getPropertyValue('filter') !== value) this._scene.style.setProperty('filter', value, this._ambientDimStyle.priority);
+  }
+
+  _currentPresetCamera() {
+    // PresetEventController captures its return position before selecting the
+    // destination. Restore idle first without interrupting that request.
+    this._suspendAmbient('automation camera capture');
+    return { id: this._viewId, mode: this._mode, camera: this._view?.getCamera(), topCamera: this._view?.getTopCamera() };
+  }
+
   _scenePreviewSettings() { return this._layout?.scene_previews ?? this._config?.scene_previews; }
 
   _scenePreviewAvailable(draft) {
@@ -2184,6 +2391,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   previewSceneLights(overrides, metadata = {}) {
+    if (overrides instanceof Map) this._suspendAmbient('scene preview');
     if (!metadata.token) return false;
     if (overrides instanceof Map) {
       if (!this._scenePreviewAvailable(metadata.draft === true)) {
@@ -2271,6 +2479,7 @@ class Taylors3dCard extends HTMLElement {
 
   // Tap = moved < 5 px; hold 500 ms (not moved) = hold action. Orbit still starts from the canvas.
   _objectDown(e, canvas) {
+    if (this._ambientWakeEvents.has(e)) return;
     if (this._gesture) { this._endGesture(); return; } // a second finger: pinch / orbit, no tap
     const path = e.composedPath();
     if (this._popup.closedBy === e || this._devicePopup.closedBy === e) { // a dismissing tap never activates a device
@@ -2542,6 +2751,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _moreInfo(entityId) {
+    this._suspendAmbient('device details opened');
     this._stopScenePreview('device details opened');
     this._popup.close();
     this._devicePopup.close();
@@ -2571,6 +2781,7 @@ class Taylors3dCard extends HTMLElement {
 
   // A stationary tap on room geometry opens controls; orbiting and device taps do not.
   _roomDown(e) {
+    if (this._ambientWakeEvents.has(e)) return;
     if (!this._layout || this._editing || this._gesture || e.button !== 0 || !e.isPrimary || this._devicePopup.closedBy === e || this._popup.closedBy === e) return;
     const g = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
     g.move = (ev) => { if (ev.pointerId === g.pointerId && Math.hypot(ev.clientX - g.x, ev.clientY - g.y) >= CLICK_SLOP_PX) this._endGesture(); };
@@ -2616,6 +2827,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _focusPlan(point) {
+    this._suspendAmbient('map selected');
     this._presetEvents.interrupt();
     if (this._editing || !this._view) return;
     this._stopScenePreview('map selected');
@@ -2683,6 +2895,7 @@ class Taylors3dCard extends HTMLElement {
   // One HA floor (edit mode): the view linked to just that floor, else that floor on its own
   // with the model's level rules. Frames the floor.
   _setFloor(id) {
+    this._suspendAmbient('floor changed');
     this._stopScenePreview('floor changed');
     const vis = this._views.filter((v) => !v.hidden);
     // a storey view linked to just that floor wins over an overview (Exterior) linked to it
@@ -2706,6 +2919,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _setMode(mode) {
+    this._suspendAmbient('mode changed');
     this._stopScenePreview('mode changed');
     if (!this._selectingPreset) this._presetEvents.interrupt();
     this._popup.close();

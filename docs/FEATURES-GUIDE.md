@@ -18,6 +18,11 @@ You choose the lights and desired settings explicitly. A preview changes the hou
 **Activate** runs the real saved Home Assistant scene and can also affect its other devices.
 The device menus continue to show actual readings during a preview.
 
+For a wall panel that gently moves when untouched, open **Edit → Idle** and read the
+[idle mode guide](AMBIENT-IDLE-GUIDE.md). Rotation and night picture dimming are optional.
+An interaction restores the pre-idle camera; the first tap on a rotating surface wakes
+the house, and a fresh tap can select a room or device. These effects use no device actions.
+
 ## Room and device controls
 
 Tap a room's floor to see its devices and readings on the right. Tap a device to see its own
