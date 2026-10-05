@@ -16,6 +16,9 @@ import { moonLight, moonLitRight, domeRadius, SUN_MIN_Y, SUN_DISC_M, MOON_DISC_M
 import { readModelRendering } from './model-rendering.js';
 import { WallPresentationLayer } from './wall-presentation-rendering.js';
 import { wallTargetReport } from './wall-presentation.js';
+import { FloorPresentationLayer } from './floor-presentation-rendering.js';
+import { readFloorPresentation, compileFloorPresentation, sourceWorldToDisplay as floorToDisplay,
+  displayWorldToSource as floorToSource } from './floor-presentation.js';
 import {
   castsShadow, shadowInfo, isCoplanarOverlay, depthRange, depthChanged, isOccluded, sunDirection, ghostMaterial, pickable,
 } from './render-rules.js';
@@ -329,6 +332,7 @@ export class FloorplanView {
     this._raf = null;
     this._ambientCamera = null; // private exact pose/controls baseline, owned by an idle-session token
     this._wallPresentation = null; // lazy, opt-in material owner; no default renderer writes
+    this._floorPresentation = null; // explicit reversible level owner; SOURCE data remains canonical
     this._zoomTo = 'center'; // zoom pivot: 'center' (controls target) or 'cursor'
     this.pivotMarker = null; // edit mode: small cross at the rotation centre
     this._onWheel = () => { this.dirty = true; };
@@ -434,7 +438,7 @@ export class FloorplanView {
 
   // Screen position (client px) of a plan point, the inverse of planPoint.
   screenPoint(x, y, z, floorId) {
-    const v = planToWorld(x, y, z, this.floorElevation(floorId)).project(this.camera);
+    const v = this._displayWorld(planToWorld(x, y, z, this.floorElevation(floorId)), floorId).project(this.camera);
     const r = this.renderer.domElement.getBoundingClientRect();
     return [r.left + ((v.x + 1) / 2) * r.width, r.top + ((1 - v.y) / 2) * r.height];
   }
@@ -459,7 +463,7 @@ export class FloorplanView {
       const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
         color: f.color, transparent: true, opacity: f.opacity ?? 0.18, depthTest: false, side: THREE.DoubleSide,
       }));
-      mesh.position.y = this.floorElevation(f.floorId) + 0.02;
+      this._placeFloorObject(mesh, new THREE.Vector3(0, this.floorElevation(f.floorId) + 0.02, 0), f.floorId);
       mesh.renderOrder = 9;
       mesh.userData.floorId = f.floorId;
       mesh.userData.helper = true;
@@ -471,7 +475,7 @@ export class FloorplanView {
       const geo = new THREE.BufferGeometry().setFromPoints(pts);
       const mat = new THREE.LineBasicMaterial({ color: l.color, depthTest: false, transparent: true });
       const line = l.closed ? new THREE.LineLoop(geo, mat) : new THREE.Line(geo, mat);
-      line.position.y = this.floorElevation(l.floorId) + 0.03;
+      this._placeFloorObject(line, new THREE.Vector3(0, this.floorElevation(l.floorId) + 0.03, 0), l.floorId);
       line.renderOrder = 10;
       line.userData.floorId = l.floorId;
       line.userData.helper = true;
@@ -480,7 +484,7 @@ export class FloorplanView {
     for (const h of handles) {
       const obj = new CSS2DObject(h.element);
       if (h.element.classList.contains('calibration')) obj.renderOrder = 30; // Numbered measured points stay readable above nearer device badges.
-      obj.position.copy(planToWorld(h.x, h.y, 0.03, this.floorElevation(h.floorId)));
+      this._placeFloorObject(obj, planToWorld(h.x, h.y, 0.03, this.floorElevation(h.floorId)), h.floorId);
       this.overlayGroup.add(obj);
       this.cssObjects.push({ obj, floorId: h.floorId, kind: 'handle' });
     }
@@ -520,6 +524,7 @@ export class FloorplanView {
           }
         });
         this.model.opacity = opacity;
+        this._refreshFloorPresentation(); // alignment changes remeasure SOURCE bounds after restoring owned offsets
         this._refreshWallPresentation(); // compose the current global ghost over owned wall materials
         this._occBoxes = null; // placement changed
         this._bounds = this._sceneBounds();
@@ -645,6 +650,7 @@ export class FloorplanView {
 
   // Merge the loaded model's static meshes (keep: view rule selectors; the model's own views are added).
   _mergeModel(keep, unitScale) {
+    this._releaseFloorPresentation(); // never bake DISPLAY translations into merged source geometry
     const { root, manifest } = this.model;
     this._restoreModelVisibility(); // hidden by a view: still merged (the card re-applies visibility after)
     const before = this._modelStats();
@@ -662,6 +668,7 @@ export class FloorplanView {
   // Caches that hold model meshes, after a merge on a placed model.
   _afterMerge() {
     this._wallIndexModel = null; this._wallIndex = null;
+    this._refreshFloorPresentation();
     this._occBoxes = null;
     this._applyFloorVisibility(); // floor-only mode covers the merged meshes too
     this._bounds = this._sceneBounds();
@@ -705,6 +712,171 @@ export class FloorplanView {
     return this.model ? this.model.manifest : null;
   }
 
+  // Targets/background are exact current nodes supplied by the resolved saved
+  // level bindings. Drawn plans instead supply explicit source-world bounds.
+  setFloorPresentation(raw, { floors, targets = [], backgroundNodes = [], transformWriters = new Set(), bounds,
+    enabled = true } = {}) {
+    this._floorRaw = raw;
+    this._floorOptions = { floors, targets, backgroundNodes, transformWriters, bounds, enabled };
+    this._refreshFloorPresentation();
+    return this.floorPresentationReport();
+  }
+
+  get floorPresentationRevision() { return this._floorDisplayRevision || 0; }
+  get floorPresentationActive() { return !!this._floorCompiled?.valid && this._floorCompiled.mode !== 'assembled'; }
+
+  floorPresentationReport() {
+    const report = this._floorPresentation && this.model ? this._floorPresentation.report()
+      : this._floorCompiled || compileFloorPresentation(this._floorRaw, { floors: this.floors });
+    return { ...report, rows: report.rows.map((row) => ({ ...row, offset: row.offset.slice(), bounds: row.bounds
+      ? { min: row.bounds.min.slice(), max: row.bounds.max.slice() } : null })),
+    diagnostics: report.diagnostics.map((entry) => ({ ...entry })),
+    suspended: !!this._floorSuspended, suspension: this._floorSuspended || null };
+  }
+
+  _identityFloorMapping() { return compileFloorPresentation(undefined, { floors: this._floorOptions?.floors || this.floors }); }
+
+  sourceWorldToDisplay(point, floorId) {
+    const compiled = this._floorCompiled;
+    if (this.floorPresentationActive && compiled.rows.some((row) => row.floor_id === floorId))
+      return this._floorPresentation && this.model ? this._floorPresentation.sourceWorldToDisplay(point, floorId) : floorToDisplay(point, floorId, compiled);
+    // Known unselected floors stay in their canonical location, never disappear.
+    return floorToDisplay(point, floorId, this._identityFloorMapping());
+  }
+
+  displayWorldToSource(point, floorId) {
+    const compiled = this._floorCompiled;
+    if (this.floorPresentationActive && compiled.rows.some((row) => row.floor_id === floorId))
+      return this._floorPresentation && this.model ? this._floorPresentation.displayWorldToSource(point, floorId) : floorToSource(point, floorId, compiled);
+    return floorToSource(point, floorId, this._identityFloorMapping());
+  }
+
+  _displayWorld(point, floorId) {
+    if (!this.floorPresentationActive) return point;
+    const display = this.sourceWorldToDisplay(point.toArray(), floorId);
+    return display.ok ? new THREE.Vector3(...display.point) : point;
+  }
+
+  displayFloorElevation(floorId) {
+    const offset = this.floorPresentationActive ? this._floorCompiled.rows.find((row) => row.floor_id === floorId)?.offset[1] || 0 : 0;
+    return this.floorElevation(floorId) + offset;
+  }
+
+  floorForModelNode(node) {
+    if (!node?.isObject3D || !this.model) return null;
+    const within = (child, ancestor) => { for (let current = child; current; current = current.parent) if (current === ancestor) return true; return false; };
+    if (!within(node, this.model.root)) return null;
+    if (this.floorPresentationActive) return this._floorPresentation?.floorForNode(node) || null;
+    const options = this._floorOptions, floors = options?.floors || this.floors;
+    const found = (options?.targets || []).filter((target) => target.node?.isObject3D && within(target.node, this.model.root)
+      && within(node, target.node) && floors.filter((floor) => floor.id === target.floor_id && Number.isFinite(floor.elevation)
+        && (!Object.hasOwn(floor, 'stale') || floor.stale === false)).length === 1);
+    return found.length === 1 ? found[0].floor_id : null;
+  }
+
+  // Existing planPoint takes a SOURCE height. This explicit display counterpart
+  // intersects a selected displayed floor and returns canonical saved plan metres.
+  displayPlanPoint(clientX, clientY, floorId, z = 0) {
+    const planePoint = this.sourceWorldToDisplay([0, this.floorElevation(floorId) + z, 0], floorId);
+    if (!planePoint.ok) return null;
+    const point = this.planPoint(clientX, clientY, planePoint.point[1]);
+    if (!point) return null;
+    const source = this.displayWorldToSource([point[0], planePoint.point[1], -point[1]], floorId);
+    return source.ok ? [source.point[0], -source.point[2]] : null;
+  }
+
+  // This adapter removes floor DISPLAY offsets only. Other live appearance/motion
+  // owners retain their current state; shared resources must never be disposed.
+  sourceModelRootForExport() {
+    if (!this.model) return { ok: false, root: null, diagnostics: [{ code: 'missing_model', message: 'No model is loaded.' }] };
+    if (!this._floorPresentation || !this.floorPresentationActive) return { ok: true, root: this.model.root, diagnostics: [] };
+    const result = this._floorPresentation.cloneSourceRoot();
+    if (result.ok && this.objectLayer?.sourcePosesForExport(result.root) === false) return { ok: false, root: null,
+      diagnostics: [{ code: 'source_pose_export', message: 'A live measured object could not be converted safely on the source export clone.' }] };
+    return result;
+  }
+
+  _placeFloorObject(node, source, floorId) {
+    if (this.floorPresentationActive || node.userData.floorSourcePosition) {
+      node.userData.floorSourcePosition = source.clone(); node.userData.floorId = floorId;
+    }
+    node.position.copy(this._displayWorld(source, floorId));
+  }
+
+  _refreshFloorParticipants() {
+    const place = (node, floorId) => {
+      node.userData.floorSourcePosition ||= node.position.clone();
+      node.position.copy(this._displayWorld(node.userData.floorSourcePosition, floorId));
+    };
+    for (const group of this.staticGroup?.children || []) place(group, group.userData.floorId);
+    for (const entry of this.markerObjects?.values() || []) place(entry.obj, entry.floorId);
+    for (const entry of this.glows?.values() || []) place(entry.mesh, entry.floorId);
+    for (const node of this.overlayGroup?.children || []) if (!node.isCSS2DObject) place(node, node.userData.floorId);
+    for (const entry of this.cssObjects || []) if (entry.kind === 'handle') place(entry.obj, entry.floorId);
+    if (this.mapPlane) place(this.mapPlane, this.mapPlane.userData.floorId);
+    if (this.trail) place(this.trail, this.trail.userData.floorId);
+    for (const [id, entry] of this.markerObjects || []) this._placeStem(id, entry.obj.position, entry.floorId);
+  }
+
+  // Restore owned display transforms before source merge/teardown. Keep the saved
+  // policy; a subsequent current root must prove its own exact target identities.
+  _releaseFloorPresentation() {
+    const active = this.floorPresentationActive;
+    this._floorPresentation?.dispose(); this._floorPresentation = null;
+    this._floorCompiled = null; this._floorDisplaySig = '';
+    if (active) {
+      this._floorDisplayRevision = (this._floorDisplayRevision || 0) + 1;
+      this._refreshFloorParticipants();
+      this.objectLayer?.refreshFloorPresentation?.({ requestShadows: false, markDirty: false });
+    }
+  }
+
+  _refreshFloorPresentation() {
+    if (this._floorRefreshing || !this._floorPresentation && this._floorRaw === undefined && !this._floorCompiled) return;
+    this._floorRefreshing = true;
+    try {
+      const policy = readFloorPresentation(this._floorRaw), options = this._floorOptions || {};
+      const floors = options.floors || this.floors;
+      const enabled = options.enabled !== false && !this.sectionClip && !this._disposed;
+      this._floorSuspended = policy.mode !== 'assembled' && (!enabled) ? this.sectionClip ? 'section' : 'ineligible' : null;
+      let changedTargets = [];
+      if (this.model && (policy.mode !== 'assembled' || this._floorPresentation)) {
+        this._floorPresentation ||= new FloorPresentationLayer();
+        const result = this._floorPresentation.setData({ raw: this._floorRaw, modelRoot: this.model.root, floors,
+          targets: options.targets, backgroundNodes: options.backgroundNodes, transformWriters: options.transformWriters,
+          sourceWorldPositions: this.objectLayer?.sourcePosePositions?.(floors), enabled });
+        changedTargets = result.changedTargets; this._floorCompiled = this._floorPresentation.report();
+      } else this._floorCompiled = compileFloorPresentation(enabled ? this._floorRaw : undefined,
+        { floors, bounds: options.bounds || [], model: { present: false } });
+      const compiled = this._floorCompiled;
+      const sig = compiled.valid && compiled.mode !== 'assembled' ? compiled.mode + '|' + compiled.rows
+        .map((row) => row.floor_id + ':' + row.offset.join(',')).join(';') : '';
+      const mappingChanged = sig !== (this._floorDisplaySig || ''); this._floorDisplaySig = sig;
+      if (!mappingChanged && !changedTargets.length) return;
+      if (this._ambientCamera) this.endAmbientCamera(this._ambientCamera);
+      this._floorDisplayRevision = (this._floorDisplayRevision || 0) + 1;
+      this._refreshFloorParticipants();
+      this._updateFloorClip();
+      this.objectLayer?.refreshFloorPresentation?.({ requestShadows: false, markDirty: false });
+      const motion = changedTargets.length ? this.modelMotionChanged(changedTargets, { preserveSourceAnchors: true }) : null;
+      if (!motion?.changed) {
+        this._occBoxes = null; this._bounds = this._sceneBounds(); this._wallCameraDirty = true;
+        this._fitShadow({ invalidate: false }); this._scheduleOcclusion(0); this.markDirty();
+      }
+      this._refreshWallPresentation();
+      this._applyFloorVisibility();
+      this._objectsInvalid();
+    } finally { this._floorRefreshing = false; }
+  }
+
+  _updateFloorClip() {
+    if (!this.model) return;
+    const vf = this.floors.find((floor) => floor.id === this.visibleFloor);
+    const cut = this.visibleFloor === 'all' || this.isTagged() ? 1e6 : this.floorElevation(this.visibleFloor) + (vf?.height || 2.7);
+    // Independent displayed levels replace the assembled storey-height cut.
+    this.modelClip.constant = this.floorPresentationActive ? 1e6 : this._cutOverride === undefined ? cut : (this._cutOverride ?? 1e6);
+  }
+
   setWallPresentation(raw, { index, floors, materialWriters, enabled = true, reducedMotion = false } = {}) {
     this._wallRaw = raw;
     this._wallOptions = { index, floors, materialWriters, enabled, reducedMotion };
@@ -716,7 +888,16 @@ export class FloorplanView {
     if (!this._wallPresentation && this._wallRaw === undefined) return;
     this._wallPresentation ||= new WallPresentationLayer();
     const options = this._wallOptions || {};
-    this._wallPresentation.setData({ raw: this._wallRaw, index: options.index || this._wallNodeIndex(), floors: options.floors || this.floors,
+    const sourceFloors = options.floors || this.floors;
+    let floors = sourceFloors;
+    if (this.floorPresentationActive) {
+      if (this._wallDisplayFloorsSource !== sourceFloors || this._wallDisplayFloorsRevision !== this.floorPresentationRevision) {
+        this._wallDisplayFloorsSource = sourceFloors; this._wallDisplayFloorsRevision = this.floorPresentationRevision;
+        this._wallDisplayFloors = sourceFloors.map((floor) => ({ ...floor, elevation: this.displayFloorElevation(floor.id) }));
+      }
+      floors = this._wallDisplayFloors;
+    }
+    this._wallPresentation.setData({ raw: this._wallRaw, index: options.index || this._wallNodeIndex(), floors,
       modelRoot: this.model?.root || null, modelOpacity: this.model?.opacity ?? 1, section: this.sectionClip,
       materialWriters: options.materialWriters, eligible: options.enabled !== false && !!this.model && this.mode === '3d' && !this._disposed,
       reducedMotion: !!options.reducedMotion, freezeCameraSide: !!this._ambientCamera });
@@ -893,6 +1074,7 @@ export class FloorplanView {
 
   _disposeModel() {
     if (this._ambientCamera) this.endAmbientCamera({ ...this._ambientCamera, restore: false });
+    this._releaseFloorPresentation(); // before any authored owner or geometry is torn down
     this._wallPresentation?.dispose(); this._wallPresentation = null;
     this._wallIndexModel = null; this._wallIndex = null;
     this._wallShadowRevision = 0; this._wallOcclusionRevision = 0;
@@ -1218,7 +1400,7 @@ export class FloorplanView {
     if (sig === plane.userData.sig) return;
     plane.userData.sig = sig;
     plane.userData.floorId = o.floorId;
-    plane.position.copy(planToWorld(o.x || 0, o.y || 0, 0.015, this.floorElevation(o.floorId)));
+    this._placeFloorObject(plane, planToWorld(o.x || 0, o.y || 0, 0.015, this.floorElevation(o.floorId)), o.floorId);
     plane.rotation.y = ((o.rotation || 0) * Math.PI) / 180;
     plane.material.opacity = o.opacity ?? 0.6;
     const aspect = plane.userData.aspect || 1;
@@ -1259,7 +1441,7 @@ export class FloorplanView {
       const geo = new THREE.BufferGeometry().setFromPoints(points.map(([x, y]) => new THREE.Vector3(x, 0, -y)));
       const color = this.theme.primary || 0x03a9f4;
       this.trail = new THREE.Line(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.8, depthTest: false }));
-      this.trail.position.y = this.floorElevation(floorId) + 0.04;
+      this._placeFloorObject(this.trail, new THREE.Vector3(0, this.floorElevation(floorId) + 0.04, 0), floorId);
       this.trail.renderOrder = 3;
       this.trail.userData.floorId = floorId;
       this.trail.userData.helper = true;
@@ -1272,19 +1454,20 @@ export class FloorplanView {
   // Move one handle without rebuilding the overlay (vertex drag).
   moveHandle(element, x, y, floorId) {
     const c = this.cssObjects.find((o) => o.kind === 'handle' && o.obj.element === element);
-    if (c) c.obj.position.copy(planToWorld(x, y, 0.03, this.floorElevation(floorId)));
+    if (c) { c.floorId = floorId; this._placeFloorObject(c.obj, planToWorld(x, y, 0.03, this.floorElevation(floorId)), floorId); }
     this.dirty = true;
   }
 
   moveMarker(id, x, y, z, floorId) {
     const m = this.markerObjects.get(id);
     if (!m) return;
-    m.obj.position.copy(planToWorld(x, y, z, this.floorElevation(floorId)));
+    m.floorId = floorId;
+    this._placeFloorObject(m.obj, planToWorld(x, y, z, this.floorElevation(floorId)), floorId);
     const g = this.glows.get(id);
-    if (g) g.mesh.position.copy(planToWorld(x, y, 0.03, this.floorElevation(floorId)));
+    if (g) { g.floorId = floorId; this._placeFloorObject(g.mesh, planToWorld(x, y, 0.03, this.floorElevation(floorId)), floorId); }
     // only this marker: visibility (it may have crossed the section cut) and its own occlusion
     const c = this.cssObjects.find((o) => o.kind === 'marker' && o.id === id);
-    if (c) c.obj.visible = this._markerVisible(c);
+    if (c) { c.floorId = floorId; c.obj.visible = this._markerVisible(c); }
     if (g) g.mesh.visible = this._glowVisible(id, g);
     const st = this.stems.get(id);
     if (st) st.disc.visible = m.obj.visible;
@@ -1321,7 +1504,7 @@ export class FloorplanView {
     for (const f of floors) {
       const group = new THREE.Group();
       group.userData.floorId = f.id;
-      group.position.y = f.elevation;
+      this._placeFloorObject(group, new THREE.Vector3(0, f.elevation, 0), f.id);
       const own = rooms.filter((r) => r.floorId === f.id);
       for (const { room, label } of own) {
         if (!room.polygon || room.polygon.length < 3) continue;
@@ -1364,6 +1547,7 @@ export class FloorplanView {
       }
       this.staticGroup.add(group);
     }
+    this._refreshFloorPresentation();
     this._bounds = this._sceneBounds();
     this._applyFloorVisibility();
     this.dirty = true;
@@ -1376,7 +1560,7 @@ export class FloorplanView {
     this.cssObjects = this.cssObjects.filter((c) => c.kind !== 'marker');
     for (const m of markers) {
       const obj = new CSS2DObject(m.element);
-      obj.position.copy(planToWorld(m.x, m.y, m.z, this.floorElevation(m.floorId)));
+      this._placeFloorObject(obj, planToWorld(m.x, m.y, m.z, this.floorElevation(m.floorId)), m.floorId);
       this.markerGroup.add(obj);
       this.markerObjects.set(m.id, { obj, floorId: m.floorId });
       this.cssObjects.push({ obj, floorId: m.floorId, kind: 'marker', id: m.id });
@@ -1431,7 +1615,7 @@ export class FloorplanView {
   _placeStem(id, world, floorId) {
     const st = this.stems.get(id);
     if (!st) return;
-    const floor = this.floorElevation(floorId);
+    const floor = this.displayFloorElevation(floorId);
     const h = Math.max(world.y - floor, 0);
     st.line.position.set(world.x, floor, world.z);
     st.line.scale.set(1, Math.max(h, 1e-4), 1);
@@ -1474,7 +1658,7 @@ export class FloorplanView {
       entry.sig = sig;
       changed = true;
       entry.floorId = g.floorId;
-      mesh.position.copy(planToWorld(g.x, g.y, 0.03, this.floorElevation(g.floorId)));
+      this._placeFloorObject(mesh, planToWorld(g.x, g.y, 0.03, this.floorElevation(g.floorId)), g.floorId);
       mesh.visible = this._glowVisible(g.id, entry); // glows cast no shadow and hide no marker
       const r = GLOW_RADIUS * (0.6 + 0.4 * g.strength) * 2;
       mesh.scale.set(r, 1, r);
@@ -1558,6 +1742,7 @@ export class FloorplanView {
       this.sectionClip = null;
       this.renderer.clippingPlanes = [];
     }
+    this._refreshFloorPresentation(); // Section cuts canonical assembled geometry; clearing resumes the saved split.
     this._sectionMaterials();
     this._refreshWallPresentation();
     this._placeSkyBodies();
@@ -1627,6 +1812,55 @@ export class FloorplanView {
     if (this.mode === 'top' && this._lastCam3d) return this._lastCam3d;
     const r = (a) => a.toArray().map((x) => Math.round(x * 100) / 100);
     return { position: r(this.persp.position), target: r(this.controls.target) };
+  }
+
+  // Raw transient frame for a reversible presentation change, never persisted
+  // as a rounded named view. Identity guards belong here; root also guards intent.
+  captureCameraFrame() {
+    const camera = this.camera, controls = this.controls;
+    if (this._disposed || !camera || controls?.object !== camera) return null;
+    const frame = { camera, controls, modelRoot: this.model?.root || null, mode: this.mode,
+      position: camera.position.toArray(), quaternion: camera.quaternion.toArray(), up: camera.up.toArray(),
+      zoom: camera.zoom, target: controls.target.toArray(),
+      framing: { minDistance: controls.minDistance, maxDistance: controls.maxDistance, minZoom: controls.minZoom, maxZoom: controls.maxZoom,
+        minDistanceForFit: this._minDistance, ...(this.mode === 'top' ? { orthoHalf: this._orthoHalf } : {}) } };
+    return [...frame.position, ...frame.quaternion, ...frame.up, frame.zoom, ...frame.target].every(Number.isFinite) ? frame : null;
+  }
+
+  restoreCameraFrame(frame) {
+    if (!frame || this._disposed || this._ambientCamera || frame.camera !== this.camera || frame.controls !== this.controls
+      || frame.mode !== this.mode || frame.modelRoot !== (this.model?.root || null)
+      || ![frame.position, frame.target, frame.up].every((array) => Array.isArray(array) && array.length === 3)
+      || !Array.isArray(frame.quaternion) || frame.quaternion.length !== 4
+      || ![...frame.position, ...frame.quaternion, ...frame.up, frame.zoom, ...frame.target].every(Number.isFinite)
+      || frame.zoom <= 0 || Math.hypot(...frame.up) === 0 || Math.hypot(...frame.quaternion) === 0) return false;
+    const framing = frame.framing;
+    if (Object.hasOwn(frame, 'framing') && (!framing || typeof framing !== 'object' || Array.isArray(framing))) return false;
+    if (framing && (!['minDistance', 'minZoom'].every((key) => Number.isFinite(framing[key]) && framing[key] >= 0)
+      || ![['maxDistance', 'minDistance'], ['maxZoom', 'minZoom']].every(([max, min]) => (Number.isFinite(framing[max]) || framing[max] === Infinity) && framing[max] >= framing[min])
+      || framing.minDistanceForFit !== undefined && (!Number.isFinite(framing.minDistanceForFit) || framing.minDistanceForFit < 0)
+      || Object.hasOwn(framing, 'orthoHalf') && framing.orthoHalf !== undefined && (!Number.isFinite(framing.orthoHalf) || framing.orthoHalf <= 0))) return false;
+    const before = this.captureCameraFrame(), controls = this.controls, camera = this.camera;
+    const autoRotate = controls.autoRotate, damping = controls.enableDamping;
+    const apply = () => {
+      camera.position.fromArray(frame.position); camera.quaternion.fromArray(frame.quaternion); camera.up.fromArray(frame.up); camera.zoom = frame.zoom;
+      controls.target.fromArray(frame.target); camera.updateProjectionMatrix(); camera.updateMatrixWorld(true);
+    };
+    this._tween = null;
+    try {
+      controls.autoRotate = false; controls.enableDamping = false;
+      controls.update(); // drain preceding inertia before writing the exact restored pose
+      if (framing) {
+        for (const key of ['minDistance', 'maxDistance', 'minZoom', 'maxZoom']) controls[key] = framing[key];
+        this._minDistance = framing.minDistanceForFit;
+        if (frame.mode === 'top' && Object.hasOwn(framing, 'orthoHalf')) { this._orthoHalf = framing.orthoHalf; this._updateOrtho(); }
+      }
+      apply(); controls.update(); apply();
+    } finally { controls.autoRotate = autoRotate; controls.enableDamping = damping; }
+    const changed = !before || ['position', 'target', 'quaternion', 'up'].some((key) => before[key].some((value, i) => value !== frame[key][i])) || before.zoom !== frame.zoom
+      || frame.mode === 'top' && framing && before.framing.orthoHalf !== framing.orthoHalf;
+    if (changed) { this._wallCameraDirty = true; this._scheduleOcclusion(); this.markDirty(); }
+    return true;
   }
 
   // Saved views intentionally round coordinates; this private idle baseline
@@ -1804,9 +2038,11 @@ export class FloorplanView {
     mesh.updateWorldMatrix(true, false);
     const pos = g.attributes.position, idx = g.index, out = [], v = new THREE.Vector3();
     const n = idx ? idx.count : pos.count;
+    const floorId = this.floorForModelNode(mesh);
     for (let i = 0; i < n; i++) {
       v.fromBufferAttribute(pos, idx ? idx.getX(i) : i).applyMatrix4(mesh.matrixWorld);
-      out.push(v.x, v.y, v.z);
+      const source = this.floorPresentationActive ? this.displayWorldToSource(v.toArray(), floorId) : null;
+      out.push(...(source?.ok ? source.point : v.toArray()));
     }
     return out;
   }
@@ -1814,6 +2050,10 @@ export class FloorplanView {
   // Plan-space bounding rectangle of a mesh (fallback when its floor cannot be traced).
   meshPlanRect(mesh) {
     const b = new THREE.Box3().setFromObject(mesh);
+    if (this.floorPresentationActive) {
+      const floorId = this.floorForModelNode(mesh), min = this.displayWorldToSource(b.min.toArray(), floorId), max = this.displayWorldToSource(b.max.toArray(), floorId);
+      if (min.ok && max.ok) { b.min.fromArray(min.point); b.max.fromArray(max.point); }
+    }
     const x0 = b.min.x, x1 = b.max.x, y0 = -b.max.z, y1 = -b.min.z;
     const r = (v) => Math.round(v / 0.05) * 0.05;
     return [[r(x0), r(y0)], [r(x1), r(y0)], [r(x1), r(y1)], [r(x0), r(y1)]].map((q) => q.map((v) => Math.round(v * 1000) / 1000));
@@ -1850,9 +2090,7 @@ export class FloorplanView {
       }
       // everything above the cut-away height of the selected floor is clipped (roof, upper floors)
       // untagged: the top of the selected storey (wall_height is for drawn walls only)
-      const vf = this.floors.find((f) => f.id === this.visibleFloor);
-      const cut = this.visibleFloor === 'all' || this.isTagged() ? 1e6 : this.floorElevation(this.visibleFloor) + ((vf && vf.height) || 2.7);
-      this.modelClip.constant = this._cutOverride === undefined ? cut : (this._cutOverride ?? 1e6);
+      this._updateFloorClip();
       if (this.pickHelper) this.pickHelper.update();
     }
     // "top" = the highest floor that actually has markers (an empty attic must not fade everything)
@@ -1901,7 +2139,8 @@ export class FloorplanView {
       : this.model.manifest.levels.map((l) => (l.node.visible ? 1 : 0)).join('');
     const s = this.sectionClip;
     return [this.model.id, vis, this.modelClip.constant, s ? [...s.normal.toArray(), s.constant].map((v) => v.toFixed(4)).join() : '',
-      this._modelMotionRevision || 0, this._wallShadowRevision || 0].join('|');
+      this._modelMotionRevision || 0, this._wallShadowRevision || 0].join('|')
+      + (this.floorPresentationRevision ? '|floors:' + this.floorPresentationRevision : '');
   }
 
   // Capture after model placement/merge, without changing authored local transforms.
@@ -1917,7 +2156,7 @@ export class FloorplanView {
   // A model layer reports actual moved targets once. Geometry changes invalidate the
   // same existing renderer's bounds/picks/shadows; unchanged targets are completely idle.
   // Occlusion slices are cancelled during flight and recomputed once after settling.
-  modelMotionChanged(targets, { moving = false } = {}) {
+  modelMotionChanged(targets, { moving = false, preserveSourceAnchors = false } = {}) {
     const result = { changed: false, objectIds: new Set(), roots: new Set(), anchors: [] };
     if (this._disposed || !this.model) return result;
     if (this._motionModel !== this.model) { this._motionKeys = new WeakMap(); this._motionModel = this.model; this._modelMotionRevision = 0; }
@@ -1940,7 +2179,7 @@ export class FloorplanView {
       this._occBoxes = null;
       this._wallCameraDirty = true;
       this._bounds = this._sceneBounds();
-      const refreshed = this.objectLayer?.refreshAnchors(new Set(changed), { requestShadows: false, markDirty: false });
+      const refreshed = this.objectLayer?.refreshAnchors(new Set(changed), { requestShadows: false, markDirty: false, displayOnly: preserveSourceAnchors });
       if (refreshed) { result.objectIds = refreshed.objectIds; result.roots = refreshed.roots; result.anchors = refreshed.anchors; }
       this.pickHelper?.update();
       this._fitShadow({ invalidate: false });
@@ -2042,8 +2281,8 @@ export class FloorplanView {
         const f = this.floors.find((x) => x.id === floorId);
         const y0 = f ? f.elevation : 0, y1 = y0 + ((f && f.height) || 2.7);
         for (const [x, y] of room.polygon) {
-          box.expandByPoint(new THREE.Vector3(x, y0, -y));
-          box.expandByPoint(new THREE.Vector3(x, y1, -y));
+          box.expandByPoint(this._displayWorld(new THREE.Vector3(x, y0, -y), floorId));
+          box.expandByPoint(this._displayWorld(new THREE.Vector3(x, y1, -y), floorId));
         }
       }
     }
@@ -2076,7 +2315,7 @@ export class FloorplanView {
     const target = center.clone();
     this._minDistance = Math.max(size.x, size.z) < 10 ? 1 : 4;
     if (this.mode === '3d') { this.controls.minDistance = this._minDistance; this.controls.maxDistance = 130; }
-    if (this.visibleFloor !== 'all') target.y = this.floorElevation(this.visibleFloor);
+    if (this.visibleFloor !== 'all') target.y = this.displayFloorElevation(this.visibleFloor);
 
     if (this.mode === 'top') {
       const { h } = this.size;
@@ -2128,7 +2367,8 @@ export class FloorplanView {
       if (!room.polygon || room.polygon.length < 3) continue;
       const f = this.floors.find((x) => x.id === floorId);
       const y0 = f ? f.elevation : 0, y1 = y0 + ((f && f.height) || 2.7);
-      for (const [x, y] of room.polygon) house.expandByPoint(new THREE.Vector3(x, y0, -y)).expandByPoint(new THREE.Vector3(x, y1, -y));
+      for (const [x, y] of room.polygon) house.expandByPoint(this._displayWorld(new THREE.Vector3(x, y0, -y), floorId))
+        .expandByPoint(this._displayWorld(new THREE.Vector3(x, y1, -y), floorId));
     }
     full.union(house);
     if (this.model) {

@@ -49,7 +49,7 @@ const matsOf = (mesh) => (Array.isArray(mesh.material) ? mesh.material : [mesh.m
 
 // The anchor in the model root's frame: glow centre, else fp anchor (node frame), else node box centre; + hints.offset.
 // Only the node's ancestors and subtree are brought up to date (not the whole model).
-function anchorOf(obj, glow, root, offset) {
+function anchorOf(obj, glow, root, offset, view, floorId) {
   if (obj.node) obj.node.updateWorldMatrix(true, true);
   else root.updateWorldMatrix(true, false);
   const p = new THREE.Vector3();
@@ -58,6 +58,9 @@ function anchorOf(obj, glow, root, offset) {
   else if (Array.isArray(obj.anchor)) obj.node.localToWorld(p.set(obj.anchor[0], obj.anchor[1], obj.anchor[2] || 0));
   else if (!box.setFromObject(obj.node).isEmpty()) box.getCenter(p);
   else obj.node.getWorldPosition(p);
+  const floor = floorId ?? view?.floorForModelNode?.(obj.node);
+  const source = floor && view?.displayWorldToSource?.(p.toArray(), floor);
+  if (source?.ok) p.fromArray(source.point);
   root.worldToLocal(p);
   if (offset) p.add(new THREE.Vector3(...offset));
   return p;
@@ -90,12 +93,12 @@ function claimGlow(part, glow) {
   entry.owners.add(part);
 }
 
-function prepareLight(obj, { root }, pool) {
+function prepareLight(obj, { root, view }, pool) {
   const hints = hintDefaults(obj.hints);
   const glow = obj.node ? findGlow(obj.node, obj.glow || 'glow') : null;
-  const part = { obj, glow, hints, pool, level: 0, output: 0, color: null, anchor: null, appearance: null };
+  const part = { obj, glow, hints, pool, level: 0, output: 0, color: null, anchor: null, appearance: null, root, view };
   claimGlow(part, glow);
-  part.anchor = obj.node ? anchorOf(obj, glow, root, hints.offset) : new THREE.Vector3();
+  part.anchor = obj.node ? anchorOf(obj, glow, root, hints.offset, view) : new THREE.Vector3();
   return part;
 }
 
@@ -208,7 +211,7 @@ function prepareStatus(obj, ctx, glowName, withLabel) {
   const glow = obj.node ? findGlow(obj.node, glowName) : null;
   const part = { obj, glow, hints: hintDefaults(obj.hints), pool: false, level: 0, color: null, anchor: null, root: ctx.root, view: ctx.view, levels: ctx.levels || [], label: null, text: null };
   claimGlow(part, glow);
-  part.anchor = obj.node ? anchorOf(obj, glow, ctx.root, part.hints.offset) : new THREE.Vector3();
+  part.anchor = obj.node ? anchorOf(obj, glow, ctx.root, part.hints.offset, ctx.view) : new THREE.Vector3();
   if (withLabel && ctx.view && typeof document !== 'undefined') {
     const el = document.createElement('div');
     el.className = 'fp-room-label fp-obj-label';
@@ -242,7 +245,13 @@ function setLabel(part, text) {
 
 // The model moved: labels follow their anchor.
 function relayout(part) {
-  if (part.label && part.root) part.label.position.copy(part.root.localToWorld(part.anchor.clone()));
+  if (part.label && part.root) {
+    const world = part.root.localToWorld(part.anchor.clone());
+    const floor = part.displayFloorId ?? part.view?.floorForModelNode?.(part.obj.node);
+    const display = floor && part.view?.sourceWorldToDisplay?.(world.toArray(), floor);
+    if (display?.ok) world.fromArray(display.point);
+    part.label.position.copy(world);
+  }
 }
 
 function disposeStatus(part) {
@@ -268,13 +277,19 @@ function placeMower(part, pose) {
     node.updateWorldMatrix(true, false);
     const lv = part.levels.find((l) => l.id === part.obj.level);
     const base = lv && Number.isFinite(lv.elevation) ? lv.elevation : 0; // elevation of the floor the node stands on
-    part.origin = { position: node.position.clone(), quaternion: node.quaternion.clone(), localY: node.getWorldPosition(new THREE.Vector3()).y - base };
+    const world = node.getWorldPosition(new THREE.Vector3()), floor = part.view?.floorForModelNode?.(node);
+    const source = floor && part.view?.displayWorldToSource?.(world.toArray(), floor);
+    if (source?.ok) world.fromArray(source.point);
+    part.origin = { position: node.position.clone(), quaternion: node.quaternion.clone(), localY: world.y - base };
   }
   if (!pose) { restoreMower(part); return; }
   const parent = node.parent;
   parent.updateWorldMatrix(true, false);
   const elev = part.view ? part.view.floorElevation(pose.floorId) : 0;
   const world = new THREE.Vector3(pose.x, elev + part.origin.localY, -pose.y);
+  const display = part.view?.sourceWorldToDisplay?.(world.toArray(), pose.floorId);
+  if (display?.ok) world.fromArray(display.point);
+  part.displayFloorId = pose.floorId;
   node.position.copy(parent.worldToLocal(world));
   if (Number.isFinite(pose.heading)) {
     // heading is an absolute plan angle: the node's own forward (+x of the model) turns to it, whatever the model alignment
@@ -284,7 +299,7 @@ function placeMower(part, pose) {
     node.quaternion.copy(pq.clone().invert().multiply(yaw).multiply(rq.invert()).multiply(pq).multiply(part.origin.quaternion));
   }
   node.updateMatrixWorld(true);
-  part.anchor = anchorOf(part.obj, part.glow, part.root, part.hints.offset);
+  part.anchor = anchorOf(part.obj, part.glow, part.root, part.hints.offset, part.view, pose.floorId);
 }
 
 function restoreMower(part) {
@@ -294,7 +309,8 @@ function restoreMower(part) {
   node.quaternion.copy(part.origin.quaternion);
   node.updateMatrixWorld(true);
   part.origin = null;
-  part.anchor = anchorOf(part.obj, part.glow, part.root, part.hints.offset);
+  delete part.displayFloorId;
+  part.anchor = anchorOf(part.obj, part.glow, part.root, part.hints.offset, part.view);
 }
 
 function disposeMower(part) {
@@ -303,7 +319,8 @@ function disposeMower(part) {
 }
 
 const generic = {
-  prepare: (obj, ctx) => ({ obj, glow: null, hints: hintDefaults(obj.hints), pool: false, anchor: obj.node ? anchorOf(obj, null, ctx.root, null) : new THREE.Vector3() }),
+  prepare: (obj, ctx) => ({ obj, glow: null, hints: hintDefaults(obj.hints), pool: false, root: ctx.root, view: ctx.view,
+    anchor: obj.node ? anchorOf(obj, null, ctx.root, null, ctx.view) : new THREE.Vector3() }),
   update: () => ({ lit: false, level: 0, color: null }),
   dispose: () => {},
   defaults: { tap: 'more-info', hold: 'popup', popup: ['state'] },

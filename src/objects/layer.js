@@ -26,6 +26,9 @@ function currentAnchor(p, root) {
   else if (Array.isArray(obj.anchor)) obj.node.localToWorld(world.set(obj.anchor[0], obj.anchor[1], obj.anchor[2] || 0));
   else if (!box.setFromObject(obj.node).isEmpty()) box.getCenter(world);
   else obj.node.getWorldPosition(world);
+  const floor = part.displayFloorId ?? part.view?.floorForModelNode?.(obj.node);
+  const source = floor && part.view?.displayWorldToSource?.(world.toArray(), floor);
+  if (source?.ok) world.fromArray(source.point);
   root.worldToLocal(world);
   // Generic prepare deliberately ignores hints.offset; retain that existing behavior.
   if (p.type !== typeOf('generic') && part.hints?.offset) world.add(new THREE.Vector3(...part.hints.offset));
@@ -88,7 +91,9 @@ export class ObjectLayer {
         const type = typeOf(obj.type);
         try {
           const part = type.prepare(obj, ctx);
-          this.parts.set(obj.id, { obj, type, part, anchorWorld: model.root.localToWorld(part.anchor.clone()), chain: null, result: null, inputs: null });
+          const prepared = { obj, type, part, anchorWorld: model.root.localToWorld(part.anchor.clone()), chain: null, result: null, inputs: null };
+          prepared.anchorDisplayWorld = this._displayWorld(prepared, prepared.anchorWorld);
+          this.parts.set(obj.id, prepared);
         } catch (e) {
           console.warn('taylors3d: object', obj.id, e);
         }
@@ -98,6 +103,12 @@ export class ObjectLayer {
     this._showLights();
     this._applyPose();
     this.view.markDirty();
+  }
+
+  _displayWorld(p, source) {
+    const floor = p.part.displayFloorId ?? this.view.floorForModelNode?.(p.obj.node);
+    const display = floor && this.view.sourceWorldToDisplay?.(source.toArray(), floor);
+    return display?.ok ? new THREE.Vector3(...display.point) : source.clone();
   }
 
   // The pool joins the scene only with a model and lights on (a change recompiles the shaders once).
@@ -209,11 +220,13 @@ export class ObjectLayer {
     const root = this.model.root;
     root.updateWorldMatrix(true, false);
     const placeSig = root.matrixWorld.elements.map((v) => v.toFixed(5)).join();
+    const displaySig = placeSig + (this.view.floorPresentationRevision ? '|floors:' + this.view.floorPresentationRevision : '');
     if (this._pose && placeSig !== this._poseSig) this._applyPose(); // the model was re-aligned
-    if (placeSig !== this._labelSig) {
-      this._labelSig = placeSig;
+    if (displaySig !== this._labelSig) {
+      this._labelSig = displaySig;
       for (const p of this.parts.values()) {
         p.anchorWorld = root.localToWorld(p.part.anchor.clone());
+        p.anchorDisplayWorld = this._displayWorld(p, p.anchorWorld);
         if (p.type.relayout) p.type.relayout(p.part);
       }
     }
@@ -221,6 +234,8 @@ export class ObjectLayer {
     // Selected IDs/roles drive assignment, not state identity or brightness ranking order.
     const selection = [...budget.real].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
       .map(([id, pick]) => `${id}:${pick.kind}:${pick.factor}:${budget.shadows.has(id)}`).join(';');
+    // The floor owner already moves existing physical slots in place. Only
+    // actual source alignment/selection changes need another pool assignment.
     const sig = placeSig + '|' + selection;
     if (sig !== this._budgetSig) {
       this._budgetSig = sig;
@@ -305,13 +320,13 @@ export class ObjectLayer {
     for (const [id, slot] of this._slots) {
       const p = this.parts.get(id);
       const h = p.part.hints, l = slot.light;
-      l.position.copy(root.localToWorld(p.part.anchor.clone()));
+      l.position.copy(this._displayWorld(p, root.localToWorld(p.part.anchor.clone())));
       l.distance = h.distance;
       l.decay = h.decay;
       if (l.isSpotLight) {
         l.angle = h.angle * DEG;
         l.penumbra = h.penumbra;
-        if (h.target) l.target.position.copy(root.localToWorld(new THREE.Vector3(...h.target)));
+        if (h.target) l.target.position.copy(this._displayWorld(p, root.localToWorld(new THREE.Vector3(...h.target))));
         else l.target.position.copy(l.position).y -= 1;
         l.target.updateMatrixWorld();
       }
@@ -361,7 +376,7 @@ export class ObjectLayer {
   // Moving model targets may contain objects OR change an enclosing object's box centre.
   // Recompute only related anchors. Root consumes exact changed IDs for tracking/map/popups.
   // Already assigned light slots move in place; no pool allocation or HA state evaluation.
-  refreshAnchors(targets, { requestShadows = true, markDirty = true } = {}) {
+  refreshAnchors(targets, { requestShadows = true, markDirty = true, displayOnly = false } = {}) {
     const result = { changed: false, objectIds: new Set(), roots: new Set(), anchors: [] };
     if (!this.model) return result;
     const root = this.model.root;
@@ -371,19 +386,21 @@ export class ObjectLayer {
     const movedShadows = new Set();
     for (const [id, p] of this.parts) {
       if (!p.obj.node || !nodes.some((target) => within(p.obj.node, target) || within(target, p.obj.node))) continue;
-      const anchor = currentAnchor(p, root);
+      const anchor = displayOnly ? p.part.anchor.clone() : currentAnchor(p, root);
       const world = root.localToWorld(anchor.clone());
-      if (p.part.anchor.equals(anchor) && p.anchorWorld?.equals(world)) continue;
+      const display = this._displayWorld(p, world);
+      if (p.part.anchor.equals(anchor) && p.anchorWorld?.equals(world) && p.anchorDisplayWorld?.equals(display)) continue;
       p.part.anchor.copy(anchor); result.changed = true; result.objectIds.add(id); result.roots.add(p.obj.node);
       p.anchorWorld = world.clone(); result.anchors.push({ id, world });
+      p.anchorDisplayWorld = display.clone();
       if (p.type.relayout) p.type.relayout(p.part);
       const slot = this._slots.get(id);
       if (slot) {
         const light = slot.light, hints = p.part.hints, before = light.position.clone();
-        light.position.copy(world);
+        light.position.copy(display);
         if (light.isSpotLight) {
-          if (hints.target) light.target.position.copy(root.localToWorld(new THREE.Vector3(...hints.target)));
-          else light.target.position.copy(world).y -= 1;
+          if (hints.target) light.target.position.copy(this._displayWorld(p, root.localToWorld(new THREE.Vector3(...hints.target))));
+          else light.target.position.copy(display).y -= 1;
           light.target.updateMatrixWorld();
         }
         light.updateMatrixWorld();
@@ -408,6 +425,76 @@ export class ObjectLayer {
     if (!p) return null;
     this.model.root.updateWorldMatrix(true, false);
     return this.model.root.localToWorld(p.part.anchor.clone());
+  }
+
+  // SOURCE anchors stay public/canonical; these explicit counterparts are for
+  // physical pool lights, popups and labels in a separated-floor presentation.
+  displayAnchorOf(id) {
+    const p = this.model && this.parts.get(id), source = p && this.anchorOf(id);
+    return p && source ? this._displayWorld(p, source) : null;
+  }
+
+  displayAnchors() {
+    return this.anchors().map(({ id, world }) => ({ id, world: this._displayWorld(this.parts.get(id), world) }));
+  }
+
+  refreshFloorPresentation({ requestShadows = false, markDirty = false } = {}) {
+    if (!this.model) return { changed: false, objectIds: new Set(), roots: new Set(), anchors: [] };
+    if (this._pose) this._applyPose();
+    const result = this.refreshAnchors([this.model.root], { requestShadows, markDirty, displayOnly: true });
+    if (this._labelSig !== undefined) {
+      const placeSig = this.model.root.matrixWorld.elements.map((value) => value.toFixed(5)).join();
+      this._labelSig = placeSig + (this.view.floorPresentationRevision ? '|floors:' + this.view.floorPresentationRevision : '');
+    }
+    return result;
+  }
+
+  // Canonical measured origins for read-only SOURCE geometry measurement. Never
+  // derive these from a node's compensated DISPLAY position or move the live node.
+  // null marks a current mover whose floor/evidence is invalid, so the floor owner
+  // diagnoses and assembles rather than silently measuring misleading geometry.
+  sourcePosePositions(floors = this.view.floors) {
+    const positions = new Map();
+    if (!this.model || !this._pose) return positions;
+    for (const { obj, part, type } of this.parts.values()) {
+      if (!type.place || !part.origin || part.displayFloorId === undefined) continue;
+      const pose = this._pose, matches = Array.isArray(floors) ? floors.filter((floor) => floor?.id === pose.floorId) : [];
+      const floor = matches.length === 1 ? matches[0] : null;
+      const valid = typeof pose.floorId === 'string' && !!pose.floorId.trim() && part.displayFloorId === pose.floorId
+        && floor && typeof floor.elevation === 'number' && Number.isFinite(floor.elevation)
+        && (!Object.hasOwn(floor, 'stale') || floor.stale === false)
+        && [pose.x, pose.y, part.origin.localY].every((value) => typeof value === 'number' && Number.isFinite(value));
+      positions.set(obj.node, valid ? [pose.x, floor.elevation + part.origin.localY, -pose.y] : null);
+    }
+    return positions;
+  }
+
+  // A live measured mower can stand on another floor than its authored parent.
+  // Its local DISPLAY compensation must also be removed on the export clone.
+  // Touch only clone positions; live geometry, materials, poses and HA stay real.
+  sourcePosesForExport(cloneRoot) {
+    const root = this.model?.root;
+    if (!root || !cloneRoot?.isObject3D || cloneRoot === root) return false;
+    root.updateWorldMatrix(true, false); cloneRoot.updateWorldMatrix(true, true);
+    for (const p of this.parts.values()) {
+      const { part, obj } = p;
+      if (obj.type !== 'mower' || !part.origin || part.displayFloorId === undefined) continue;
+      const path = [];
+      for (let node = obj.node; node !== root; node = node.parent) {
+        if (!node?.parent) return false;
+        path.unshift(node.parent.children.indexOf(node));
+      }
+      let clone = cloneRoot;
+      for (const index of path) { clone = clone.children[index]; if (!clone) return false; }
+      if (!clone.parent) return false;
+      const world = obj.node.getWorldPosition(new THREE.Vector3());
+      const source = this.view.displayWorldToSource?.(world.toArray(), part.displayFloorId);
+      if (!source?.ok) return false;
+      root.worldToLocal(world.fromArray(source.point));
+      cloneRoot.localToWorld(world); clone.position.copy(clone.parent.worldToLocal(world));
+      clone.updateMatrixWorld(true);
+    }
+    return true;
   }
 
   objectAt(id) {

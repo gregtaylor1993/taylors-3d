@@ -62,6 +62,9 @@ position over its map.
 - Edit → Model → Wall presentation saves exact wall selections with normal, faded,
   glass-like or cut-away appearance. Camera-side walls can expose the interior;
   authored materials and manual Section remain available. See the [wall guide](docs/WALL-PRESENTATION-GUIDE.md)
+- Edit → Model → Floor presentation separates up to four explicitly linked floors
+  side by side or into stacked layers in the existing house view. Real positions,
+  calibrations and the mini-map keep their source coordinates. See the [floor guide](docs/FLOOR-PRESENTATION-GUIDE.md)
 - Edit mode for admins: draw rooms, doors, floors, pin and hide devices, import/export
 - One layout shared by every user and device (stored by the companion integration)
 - Robot mower: live position, trail, map image or camera overlay, point calibration

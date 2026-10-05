@@ -184,10 +184,11 @@ function keyedSvg(layer, values, keyAttribute, create, update) {
 }
 
 export class MiniMap {
-  constructor(stage, { onFocus, onRoom, onMarker, onVisibilityChange, returnFocus, corner = 'top-right', size = 180, visible = true } = {}) {
+  constructor(stage, { onFocus, onRoom, onMarker, onVisibilityChange, returnFocus, cameraForFloor, corner = 'top-right', size = 180, visible = true } = {}) {
     this.callbacks = { onFocus, onRoom, onMarker, onVisibilityChange };
     this.stage = stage;
     this.returnFocus = returnFocus;
+    this.cameraForFloor = cameraForFloor;
     this.visible = visible !== false;
     this.disposed = false;
     this._listeners = [];
@@ -287,7 +288,7 @@ export class MiniMap {
   // Called by the main render loop. Only the small camera indicator changes, never room or device DOM.
   updateCamera(snapshot = {}) {
     if (this.disposed) return;
-    this._camera = miniMapCamera(snapshot);
+    this._camera = miniMapCamera(this.cameraForFloor ? this.cameraForFloor(snapshot, this.scene?.floorId) : snapshot);
     const transform = this.scene?.transform;
     if (!transform || !this._camera) { this.cameraLayer.setAttribute('visibility', 'hidden'); return; }
     const raw = transform.toSvg(this._camera.focus);

@@ -24,6 +24,7 @@ import { ModelRenderingEditor } from './model-rendering-editor.js';
 import { ScenePreviewEditor } from './scene-preview-editor.js';
 import { AmbientIdleEditor } from './ambient-idle-editor.js';
 import { WallPresentationEditor } from './wall-presentation-editor.js';
+import { FloorPresentationEditor } from './floor-presentation-editor.js';
 import { entityChoices, registryIssues } from './entity-metadata.js';
 
 const DENSE_TRIS = 150000;
@@ -63,6 +64,7 @@ export class EditMode {
     this._modelRenderingEditor = new ModelRenderingEditor(card, () => this.render());
     this._scenePreviewEditor = new ScenePreviewEditor(card, () => this.render());
     this._ambientIdleEditor = new AmbientIdleEditor(card, () => this.render());
+    this._floorPresentationEditor = new FloorPresentationEditor(card, () => this.render());
     this._wallPresentationEditor = new WallPresentationEditor(card, () => this.render(), {
       onBeginPick: (pick) => this.beginWallSurfacePick(pick),
       onCancelPick: () => this.beginWallSurfacePick(null),
@@ -161,7 +163,7 @@ export class EditMode {
     this._modelRenderingEditor.reset();
     this._scenePreviewEditor.reset();
     this._ambientIdleEditor.reset();
-    this._wallPresentationEditor.reset();
+    this._wallPresentationEditor.reset(); this._floorPresentationEditor.reset();
     activeEditors.delete(this);
     window.removeEventListener('keydown', this._onKey);
     window.removeEventListener('pointerup', this._onSliderRelease);
@@ -181,7 +183,7 @@ export class EditMode {
     this._modelRenderingEditor.dispose();
     this._scenePreviewEditor.dispose();
     this._ambientIdleEditor.dispose();
-    this._wallPresentationEditor.dispose();
+    this._wallPresentationEditor.dispose(); this._floorPresentationEditor.dispose();
   }
 
   attach() {
@@ -236,15 +238,22 @@ export class EditMode {
       return;
     }
     if (this.tab === 'model' && this.panel.contains(active)
-      && (active?.dataset?.field?.startsWith('wall-presentation-') || active?.dataset?.act?.startsWith('wall-presentation-'))) {
+      && (active?.dataset?.field?.startsWith('floor-presentation-') || active?.dataset?.act?.startsWith('floor-presentation-'))) {
+      this._floorPresentationEditor.updatePreviews(this.panel);
+      this._modelRenderingEditor.updatePreviews(this.panel);
       this._wallPresentationEditor.updatePreviews(this.panel);
+      return;
+    }
+    if (this.tab === 'model' && this.panel.contains(active)
+      && (active?.dataset?.field?.startsWith('wall-presentation-') || active?.dataset?.act?.startsWith('wall-presentation-'))) {
+      this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel);
       this._modelRenderingEditor.updatePreviews(this.panel);
       this._syncStageClasses();
       return;
     }
     if (this.tab === 'model' && this.panel.contains(active) && active?.dataset?.field?.startsWith('model-rendering-')) {
       this._modelRenderingEditor.updatePreviews(this.panel);
-      this._wallPresentationEditor.updatePreviews(this.panel);
+      this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel);
       return;
     }
     if (this.tab === 'scenes' && this.panel.contains(active)
@@ -308,7 +317,7 @@ export class EditMode {
     this._modelRenderingEditor.reset();
     this._scenePreviewEditor.reset();
     this._ambientIdleEditor.reset();
-    this._wallPresentationEditor.reset();
+    this._wallPresentationEditor.reset(); this._floorPresentationEditor.reset();
     this._closeMenu();
     this.view?.setOverlay?.({}); this.view?.highlightModelNode?.(null);
     this.card._applyMarkerSelection?.(null);
@@ -344,7 +353,7 @@ export class EditMode {
     this._modelRenderingEditor.reset();
     this._scenePreviewEditor.reset();
     this._ambientIdleEditor.reset();
-    this._wallPresentationEditor.reset();
+    this._wallPresentationEditor.reset(); this._floorPresentationEditor.reset();
     this.card[method]();
     this.updateHistoryState();
     return true;
@@ -458,7 +467,7 @@ export class EditMode {
       const hit = this.view.captureWallSurfacePick?.(e.clientX, e.clientY);
       if (hit) this._wallPresentationEditor.receiveSurfacePick({ ...hit, token: wallPick.token, floor_id: wallPick.floor_id });
       else this._wallPresentationEditor.message = 'Choose an exposed face on one exact, separately selectable wall mesh.';
-      this._wallPresentationEditor.updatePreviews(this.panel); this._syncStageClasses(); return;
+      this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel); this._syncStageClasses(); return;
     }
     const trackingPick = this._trackingPlanPick();
     if (trackingPick) {
@@ -734,7 +743,7 @@ export class EditMode {
     }
     if (e.key === 'Escape' && this._wallSurfacePick() && this._ownsHistoryShortcut(e)) {
       this._wallPresentationEditor.cancelSurfacePick(); this._wallPickContext = null;
-      this._syncStageClasses(); this._wallPresentationEditor.updatePreviews(this.panel); e.preventDefault(); return;
+      this._syncStageClasses(); this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel); e.preventDefault(); return;
     }
     if (e.key === 'Escape' && this.tab === 'scenes' && this._scenePreviewEditor.previewToken !== null && this._ownsHistoryShortcut(e)) {
       this._scenePreviewEditor.onClick('scene-preview-stop'); e.preventDefault(); return;
@@ -819,7 +828,7 @@ export class EditMode {
   onStates() {
     if (this.tab === 'idle') { this._ambientIdleEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'scenes') { this._scenePreviewEditor.updatePreviews(this.panel); return; }
-    if (this.tab === 'model') { this._modelRenderingEditor.updatePreviews(this.panel); this._wallPresentationEditor.updatePreviews(this.panel); this._syncStageClasses(); return; }
+    if (this.tab === 'model') { this._modelRenderingEditor.updatePreviews(this.panel); this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel); this._syncStageClasses(); return; }
     if (this.tab === 'security') { this._securityEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'tracking') { this._trackingEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'environment') { this._weatherEditor.updatePreviews(this.panel); return; }
@@ -1198,7 +1207,7 @@ export class EditMode {
     if (this.tab === 'tracking') this._trackingEditor.updatePreviews(this.panel);
     if (this.tab === 'environment') this._weatherEditor.updatePreviews(this.panel);
     if (this.tab === 'security') this._securityEditor.updatePreviews(this.panel);
-    if (this.tab === 'model') { this._modelRenderingEditor.updatePreviews(this.panel); this._wallPresentationEditor.updatePreviews(this.panel); this._syncStageClasses(); }
+    if (this.tab === 'model') { this._modelRenderingEditor.updatePreviews(this.panel); this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel); this._syncStageClasses(); }
     if (this.tab === 'scenes') this._scenePreviewEditor.updatePreviews(this.panel);
     if (this.tab === 'idle') this._ambientIdleEditor.updatePreviews(this.panel);
     const newBody = this.panel.querySelector('.tab-body');
@@ -1586,7 +1595,7 @@ export class EditMode {
     this._closeMenu();
     if (this.tab === 'views') this.render();
     if (this.tab === 'idle') this._ambientIdleEditor.updatePreviews(this.panel);
-    if (this.tab === 'model') { this._wallSurfacePick(); this._wallPresentationEditor.updatePreviews(this.panel); this._syncStageClasses(); }
+    if (this.tab === 'model') { this._wallSurfacePick(); this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel); this._syncStageClasses(); }
     if (this.tab === 'tracking') {
       this._trackingPlanPick(); // Cancel a capture as soon as its floor is no longer displayed.
       this.refreshOverlay();
@@ -2106,7 +2115,7 @@ export class EditMode {
   _modelTab() {
     const c = this.card._config;
     // Display settings work independently of the model upload/storage route.
-    const rendering = this._modelRenderingEditor.render() + this._wallPresentationEditor.render();
+    const rendering = this._modelRenderingEditor.render() + this._wallPresentationEditor.render() + this._floorPresentationEditor.render();
     if (c.model) {
       return rendering + `<p class="note warn">This card shows <b>${esc(c.model)}</b> from its YAML (<code>model:</code>).
         Remove <code>model</code> and the <code>model_*</code> options from the card YAML to upload and align the model here.</p>`
@@ -2263,6 +2272,7 @@ export class EditMode {
     if (this._scenePreviewEditor.onClick(btn.dataset.act, btn)) return;
     if (this._ambientIdleEditor.onClick(btn.dataset.act, btn)) return;
     if (this._wallPresentationEditor.onClick(btn.dataset.act, btn)) return;
+    if (this._floorPresentationEditor.onClick(btn.dataset.act, btn)) return;
     const sel = this.room(this.selectedRoom);
     this.message = null;
     // Views tab actions commit; the rebuild after the commit renders the panel once
@@ -2285,7 +2295,7 @@ export class EditMode {
           if (this.tab === 'tracking') this._trackingEditor.cancel();
           if (this.tab === 'environment') this._weatherEditor.reset();
           if (this.tab === 'security') this._securityEditor.reset();
-          if (this.tab === 'model') { this._modelRenderingEditor.reset(); this._wallPresentationEditor.reset(); }
+          if (this.tab === 'model') { this._modelRenderingEditor.reset(); this._wallPresentationEditor.reset(); this._floorPresentationEditor.reset(); }
           if (this.tab === 'scenes') this._scenePreviewEditor.reset();
           if (this.tab === 'idle') this._ambientIdleEditor.reset();
           this.picking = null;
@@ -2449,6 +2459,7 @@ export class EditMode {
     if (this._scenePreviewEditor.onChange(f, el)) return;
     if (this._ambientIdleEditor.onChange(f, el)) return;
     if (this._wallPresentationEditor.onChange(f, el)) return;
+    if (this._floorPresentationEditor.onChange(f, el)) return;
     const sel = this.room(this.selectedRoom);
     if (f && f.startsWith('vw-')) this._viewsChange(f, el);
     else if (f === 'room-area' && sel) this.commit(E.upsertRoom(this.layout, { ...sel, area_id: el.value }));
@@ -2569,6 +2580,7 @@ export class EditMode {
     if (this._scenePreviewEditor.onInput(f, el)) return;
     if (this._ambientIdleEditor.onInput(f, el)) return;
     if (this._wallPresentationEditor.onInput(f, el)) return;
+    if (this._floorPresentationEditor.onInput(f, el)) return;
     if (f?.startsWith('cov-') && this._cameraEditor.onChange(f, el)) return;
     if (f === 'screen-name') { this._panelNameDraft = el.value; return; }
     if (f === 'vw-sec-pos') {

@@ -30,6 +30,11 @@ read the [wall guide](WALL-PRESENTATION-GUIDE.md). Select actual wall meshes and
 side you want to fade. Glass is a lightweight transparent look; cut-away removes
 the upper section at a chosen height above that wall's floor. Changes apply on Save.
 
+For separate storeys, open **Edit → Model → Floor presentation**. Choose Side by
+side or Stacked layers, then save and leave Edit. The [floor guide](FLOOR-PRESENTATION-GUIDE.md)
+explains explicit model links, spacing, camera restoration and the source-coordinate
+mini-map. This uses one house view; it does not add independent camera panels.
+
 Tap a room's floor to see its devices and readings on the right. Tap a device to see its own
 controls. Opening the panel only reads device states. **Turn on**, **Turn off** or changing
 brightness sends a command to the actual device. **All controls** opens Home Assistant's own

@@ -4,6 +4,8 @@ This is Taylor's ideas and progress log. It records what we want the app to do, 
 
 Created: 4 October 2026. Starting point: version `0.1.0`, base commit `055e30f2e46062a01dd83b4bbec4b793c477f75a`.
 
+**First installable release:** [v0.1.0](https://github.com/gregtaylor1993/taylors-3d/releases/tag/v0.1.0) contains verified checkpoint `93ab558`, including the chosen navigation group and later verified features through ambient idle mode. The published HACS zip's frontend matches the tested build byte for byte. Wall, furniture and separated-floor work is recorded separately below. Later historical notes describe their checkpoint dates; this release is now available.
+
 The aim is a realistic, useful Home Assistant house dashboard that is comfortable to use on a wall panel. Taylor should be able to configure it visually, see what is happening at home, and reach the relevant controls by tapping a room or device.
 
 ## How we track work
@@ -19,6 +21,8 @@ Every idea has a permanent number, such as **F01**, so we can discuss it without
 | Done | Meets its completion checklist, with evidence recorded. |
 
 Taylor chose the first group: **bubble bar, room/device popups and 2D mini-map**. F18–F21 have a first implementation and are **Testing**, including checks against the actual Home Assistant/wall panel still to do. Further deliveries add right-hand controls, editing history, targeted camera automations, room measurements/alerts, physical-camera views and coverage settings. Other requested additions remain visible below. Existing foundations do not mean the complete requested feature is finished.
+
+Taylor's 5 October desktop/phone references add the [visual direction](docs/DESIGN-DIRECTION.md): a large house view, right-hand room/device controls on wide screens, a bottom sheet on phones, rounded theme-aware panels, amber light controls and teal accents. The reference's example readings/devices are not household evidence. Matching this presentation remains part of F18–F21/F25, separately from their already tested behavior.
 
 For each implementation, update its status, record the changed behavior, link its commit or pull request, and record the checks performed. Keep unfinished parts visible instead of marking a whole feature Done early.
 
@@ -39,7 +43,7 @@ For each implementation, update its status, record the changed behavior, link it
 | F11 | Hue colour/brightness lighting the rooms | Validated light readings, inline colour/white controls and a bounded pool | Testing |
 | F12 | Scene previews | Explicit light targets, current-light capture, editor and saved-bar controls verified; household checks remain | Testing |
 | F13 | Ambient idle rotation and night dimming | Optional delay/rotation and sun/quiet-hours picture dimming verified locally and by CI; household checks remain | Testing |
-| F14 | Camera-aware cut-away and glass/faded walls | Exact wall drafts, owned material copies and composed clipping pass dedicated browser checks; complete checkpoint and household checks remain | Testing |
+| F14 | Camera-aware cut-away and glass/faded walls | Exact wall drafts, owned material copies and composed clipping pass full local/GitHub checks; actual-house checks remain | Testing |
 | F15 | Furniture packs and drag-and-drop placement | Furniture inside GLB models and layer visibility | Planned |
 | F16 | Baked shadows for wall panels | Saved shadow/lighting policy, authored texture diagnostics and external AO guide | Testing |
 | F17 | Deeper HA floors/areas/entity integration | Shared metadata, precision, filtered choices and missing-link diagnostics | In progress |
@@ -49,7 +53,7 @@ For each implementation, update its status, record the changed behavior, link it
 | F21 | Persistent 2D mini-map | Full-card Top view | Testing |
 | F22 | Cars appearing on the drive | Maintained vehicle occupancy/counts and fixed-expiry sighting bindings | Testing |
 | F23 | Robot vacuums moving while running | Measured/status actors with visual calibration and separate source-age forms | Testing |
-| F24 | Horizontal split floors and vertical layers | Individual floors, All and section views | Planned |
+| F24 | Horizontal split floors and vertical layers | Explicit side-by-side/stacked display, canonical coordinates and visual drafts | In progress |
 | F25 | Translations, preview, screenshots and bundle checks | English service strings, mock HA, screenshots and source/bundle gates | In progress |
 
 ## Proposed build order
@@ -261,7 +265,7 @@ is excluded. Actual house and wall-panel checks remain.
 
 **Already present:** a vertical Side Section clipping plane, storey clipping for some models, global opacity and authored glass materials. Automatic camera-side wall fading is new work.
 
-**Phase 10 implementation (dedicated browser checks passed):** Edit → Model has wall
+**Phase 10 implementation (full checkpoint checks passed):** Edit → Model has wall
 drafts for normal, fade, glass-like alpha and cut-away presentation. A deliberate
 clean administrator action temporarily loads original separate mesh pieces;
 clicking a real wall records its exact path and viewed node-local face. Choose
@@ -282,8 +286,14 @@ pixels, camera-side hysteresis, picking, Section/floor clipping, shared textures
 material restoration, permission changes, Save/Undo/Redo and 320px controls.
 Two earlier failed runs are retained. Their input fixtures were corrected to
 click the actual device anchor and wake inside the card; production code and
-strict expectations did not change. Full checkpoint regression, GitHub/HACS
-and actual-house checks remain. See the
+strict expectations did not change. Checkpoint `30de3a3` passes all 2,784 JavaScript
+tests, 48 Home Assistant Python tests and 1,231 GitHub browser assertions, with
+HACS validation passing and no model retry. The unchanged full local regression
+also passes all 1,231 assertions. An earlier local Section-readiness timeout
+was not reproduced by a passive diagnostic or that unchanged repeat; its cause
+remains unconfirmed and the original log is retained. The manual Phase 10 package
+matches the pinned checkpoint and GitHub frontend; initial HACS v0.1.0 still points
+to the separately verified Phase 9. Actual-house checks remain. See the
 [wall guide](docs/WALL-PRESENTATION-GUIDE.md).
 
 **Complete when:** the user can choose normal, cut-away and faded/glass-wall presentation; suitable tagged walls fade/cut according to the camera without losing useful floors or interior objects. Picking and device popups still select the visible target. Fade state resets when disabled; authored transparent glass still behaves correctly. Keep a manual section fallback for models without usable wall separation.
@@ -401,9 +411,45 @@ Navigation-only configuration changes preserve the selected viewing mode, tempor
 
 **Already present:** single floor/storey views, an All view and a side section. Simultaneous split and separated-layer views are new work.
 
+**Phase 11 implementation under verification:** Edit → Model has Normal, Side by side and
+Stacked layers with explicit floor ordering, up to four floors, measured footprint
+spacing and Save/Cancel/Undo. It uses the existing single house view and fixed light
+pool. This first interpretation of horizontal split spreads floor geometry together;
+independent camera panels are not implemented.
+
+Current model groups must be explicitly linked to exact floors, with all remaining
+geometry explicitly owned as background. Missing, automatic, conflicting or
+unsupported links leave the house assembled with diagnostics. Source coordinates,
+calibration and mini-map plans remain unchanged; feature layers receive display
+copies. Section and Edit temporarily assemble the house. Camera restoration includes
+raw precision and framing limits; measured mower floors take precedence over their
+authored parent. Failing-first tests caught and fixed those two boundary cases, an
+old single-floor camera being reused after an overview change, and unnecessary
+camera/preview cancellation for an unchanged default.
+
+The isolated floor checkpoint passed 3,143 JavaScript tests across 101 files,
+lint, build and bundle parity. Its dedicated browser run passed all 129 checks
+(64 source, 64 built card and the browser-error check). Tests cover actual native
+room/device clicks, source export, camera restoration, visual editing/history,
+narrow controls and unchanged idle rendering. Theme and furniture drafts are
+excluded from this checkpoint. Full exact-commit regression, GitHub CI and
+packaging are still being completed. The
+[floor guide](docs/FLOOR-PRESENTATION-GUIDE.md) explains use and household validation.
+
+The first native run also exposed a real source-coordinate defect: an animated
+mower's display offset could be measured as part of the house footprint after a
+door animation became active. Source measurement now uses the mover's canonical
+saved position and excludes runtime helper geometry; changing an allowed child
+animation rechecks ownership without repacking floors. Eighteen failing-first
+regressions protect that repair. Four earlier native logs are retained, including
+three test-fixture errors corrected without relaxing production behavior or room
+selection requirements. Actual household/model and wall-panel checks remain open.
+
 **Complete when:** horizontal panels can display selected floors at the same time; vertical layers can be spaced apart with a configurable gap. Devices, rooms, people/vacuums and alerts remain aligned with their floor. Selecting a floor focuses the right panel/layer and opens the right controls. Returning to the normal house restores its geometry/camera state. Total rendering/light cost remains bounded across views.
 
-**Needs:** confirm horizontal split means side-by-side panels rather than a geometric horizontal slice. Confirm the desired number of floors/panels, camera linking and vertical gap controls.
+**Needs:** validate Taylor's actual model groups/floor links and wall panel. If separate
+independent camera panels are wanted in addition to the current shared geometric
+view, record their camera linking and layout as a further implementation.
 
 ### F25 — polish, translations, preview and reliable bundles
 

@@ -38,6 +38,10 @@ import { ScenePreviewController } from './scene-preview.js';
 import { ScenePreviewBar } from './scene-preview-bar.js';
 import { AmbientIdleController } from './ambient-idle.js';
 import { wallKeepSelectors } from './wall-presentation.js';
+import { readFloorPresentation } from './floor-presentation.js';
+import { floorPresentationContext } from './floor-presentation-context.js';
+import { displayPlanPosition, displayFloorFootprint, displayLocatedRecords, displayCameraAnchors,
+  translateFloorCamera } from './floor-presentation-adapters.js';
 
 const VERSION = '0.1.0';
 const NONE = Object.freeze({}); // stable stand-in for a missing layout.objects / groups (binding cache key)
@@ -937,7 +941,7 @@ class Taylors3dCard extends HTMLElement {
     this._popup = new ObjectPopup(this._stage, {
       onAction: (domain, service, data) => this._hass && this._hass.callService(domain, service, data),
       project: (w) => this._view.projectWorld(w),
-      anchor: (id) => this._objects.anchorOf(id),
+      anchor: (id) => this._objects.displayAnchorOf ? this._objects.displayAnchorOf(id) : this._objects.anchorOf(id),
       resolve: (id) => {
         const o = this._objects.objectAt(id);
         if (!o || !this._hass || (o.binding && o.binding.hidden)) return null;
@@ -1087,7 +1091,8 @@ class Taylors3dCard extends HTMLElement {
     const editor = this._edit?._wallPresentationEditor;
     if (!this.isConnected || !this._editing || this._edit?.tab !== 'model'
       || this._hass?.user?.is_admin !== true || !this._wallSessionActive() || !this._layout || !this._view?.model
-      || this._loading || this._mode !== '3d' || editor?.dirty || this._edit?._modelRenderingEditor?.dirty || editor?.pendingSurfacePick) {
+      || this._loading || this._mode !== '3d' || editor?.dirty || this._edit?._modelRenderingEditor?.dirty
+      || this._edit?._floorPresentationEditor?.dirty || editor?.pendingSurfacePick) {
       throw new Error('Open Edit → Model as an administrator in 3D, then cancel unfinished changes before preparing exact wall meshes.');
     }
     const current = this._view.wallPresentationCandidates?.();
@@ -1154,10 +1159,11 @@ class Taylors3dCard extends HTMLElement {
       const metadata = entityMetadata(this._hass, entity);
       if (!metadata.hasState || metadata.hidden || metadata.disabled) continue;
       if (this._mb?.levels?.[object.obj.level]?.stale) continue;
-      const floorId = this._levels?.levelFloor[object.obj.level] || floorAtHeight(this._floors || [], anchor.world.y);
+      const floorId = this._sourceObjectFloor(object, anchor.world);
       if (!floorId) continue;
       const elevation = this._view.floorElevation(floorId);
-      const shown = !object.binding?.hidden && nodeShown(object.obj.node) && !this._view._cutAway?.(anchor.world);
+      const displayWorld = this._displayFeatureWorld(anchor.world, floorId);
+      const shown = !object.binding?.hidden && nodeShown(object.obj.node) && !!displayWorld && !this._view._cutAway?.(displayWorld);
       anchors.push({ id: `object:${anchor.id}`, entity, label: object.obj.label || metadata.name,
         position: { x: anchor.world.x, y: -anchor.world.z, z: anchor.world.y - elevation, elevation, floorId }, shown });
     }
@@ -1185,7 +1191,7 @@ class Taylors3dCard extends HTMLElement {
 
   _syncCameraCoverage() {
     if (!this._cameraCoverage || !this._layout || !this._hass) return;
-    this._cameraCoverage.setData({ anchors: this.cameraAnchors(),
+    this._cameraCoverage.setData({ anchors: displayCameraAnchors(this.cameraAnchors(), this._floorPresentationReportValue, this._floors || []),
       bindings: this._cameraCoveragePreview ?? this._layout.camera_coverage ?? this._config.camera_coverage ?? NONE,
       visibleFloors: this._navigationFloors() });
     this._cameraCoverage.setVisible(!this._editing || this._edit?.tab === 'cameras');
@@ -1203,11 +1209,11 @@ class Taylors3dCard extends HTMLElement {
       const entity = object.binding?.entity;
       const metadata = entity ? entityMetadata(this._hass, entity) : null;
       if (metadata?.hidden || metadata?.disabled) continue;
-      const mapped = this._levels?.levelFloor?.[object.obj.level];
-      const floorId = mapped || floorAtHeight(floors.map((floor) => ({ ...floor, elevation: this._view.floorElevation(floor.id) })), anchor.world.y);
+      const floorId = this._sourceObjectFloor(object, anchor.world);
       if (!validFloor(floorId)) continue;
       const elevation = this._view.floorElevation(floorId);
-      const shown = nodeShown(object.obj.node) && !this._view._cutAway?.(anchor.world);
+      const displayWorld = this._displayFeatureWorld(anchor.world, floorId);
+      const shown = nodeShown(object.obj.node) && !!displayWorld && !this._view._cutAway?.(displayWorld);
       anchors.push({ id: `object:${anchor.id}`, label: object.obj.label || metadata?.name || anchor.id,
         position: { x: anchor.world.x, y: -anchor.world.z, z: anchor.world.y - elevation, floorId, elevation, shown }, shown });
     }
@@ -1217,9 +1223,10 @@ class Taylors3dCard extends HTMLElement {
       const metadata = entityMetadata(this._hass, marker.entityId);
       if (metadata.hidden || metadata.disabled) continue;
       const elevation = this._view.floorElevation(position.floorId);
-      const shown = this._view._markerStates?.get(marker.id)?.shown !== false
+      const displayWorld = this._displayFeatureWorld({ x: position.x, y: elevation + (position.z ?? 0), z: -position.y }, position.floorId);
+      const shown = !!displayWorld && this._view._markerStates?.get(marker.id)?.shown !== false
         && this._view.markerObjects?.get(marker.id)?.obj?.visible !== false
-        && !this._view._cutAway?.({ x: position.x, y: elevation + (position.z ?? 0), z: -position.y });
+        && !this._view._cutAway?.(displayWorld);
       anchors.push({ id: marker.id, label: marker.name || metadata.name,
         position: { ...position, elevation, shown }, shown });
     }
@@ -1315,12 +1322,18 @@ class Taylors3dCard extends HTMLElement {
     const metadata = entityMetadata(this._hass, config?.entity);
     const refs = [config, metadata.state, metadata.hidden, metadata.disabled, metadata.category,
       this._roomList, this._floors, this._viewState, this._floorOnly, this._floor, this._section, this._mode, this._mb,
-      this._layout.model, this._config.model_position, this._config.model_rotation, this._config.model_scale,
+      this._layout.model, this._config.model_position, this._config.model_rotation, this._config.model_scale, this._floorPresentationRevision,
       !!this._reducedMotion?.matches];
     if (this._weatherRefs && this._weatherRefs.every((value, index) => value === refs[index])) return;
     this._weatherRefs = refs;
     this._weatherReading = readWeather(this._hass, config);
-    this._weatherLayer.setData({ weather: this._weatherReading, ...this.weatherFootprints(),
+    const footprints = this.weatherFootprints();
+    if (this._floorPresentationReportValue?.valid && this._floorPresentationReportValue.mode !== 'assembled') {
+      footprints.outdoors = footprints.outdoors.map((footprint) => displayFloorFootprint(footprint, this._floorPresentationReportValue, this._floors)).filter(Boolean);
+      // Missing indoor ownership must fail the weather mask closed.
+      footprints.indoors = footprints.indoors.map((footprint) => displayFloorFootprint(footprint, this._floorPresentationReportValue, this._floors) ?? { ...footprint, polygon: null });
+    }
+    this._weatherLayer.setData({ weather: this._weatherReading, ...footprints,
       reducedMotion: !!this._reducedMotion?.matches });
   }
 
@@ -1477,7 +1490,8 @@ class Taylors3dCard extends HTMLElement {
         memory: { ...this._trackingMemory, vehicles: memory }, ...config });
       for (const record of data.records) if (record.shown && record.location) {
         const p = record.location;
-        if (this._view._cutAway?.({ x: p.x, y: p.elevation + p.z, z: -p.y })) record.shown = false;
+        const displayWorld = this._displayFeatureWorld({ x: p.x, y: p.elevation + p.z, z: -p.y }, p.floorId);
+        if (!displayWorld || this._view._cutAway?.(displayWorld)) record.shown = false;
       }
       const byId = new Map(data.records.map((record) => [record.id, record]));
       data.miniMap = data.miniMap.filter((marker) => byId.get(marker.id)?.shown).map((marker) => {
@@ -1488,8 +1502,10 @@ class Taylors3dCard extends HTMLElement {
       this._trackingData = data;
       this._trackingInputKey = inputKey;
     }
-    this._trackingLayer.setData({ records: this._trackingData.records, now: performance.now(),
-      reducedMotion: !!this._reducedMotion?.matches, selectable: !this._editing });
+    const snap = this._trackingPresentationRevision !== this._floorPresentationRevision;
+    this._trackingPresentationRevision = this._floorPresentationRevision;
+    this._trackingLayer.setData({ records: displayLocatedRecords(this._trackingData.records, this._floorPresentationReportValue, this._floors || []), now: performance.now(),
+      reducedMotion: !!this._reducedMotion?.matches || snap, selectable: !this._editing });
     this._trackingLayer.setVisible(this.isConnected && (!this._editing || this._edit?.tab === 'tracking'));
     this._setTrackingTimer(this._trackingData.nextExpiry);
   }
@@ -1545,7 +1561,7 @@ class Taylors3dCard extends HTMLElement {
     const config = layout.room_overlays ?? this._config.room_overlays ?? NONE;
     const bindings = layout.alert_bindings ?? this._config.alert_bindings ?? null;
     const refs = [config, bindings, this._hass.states, this._hass.entities, this._roomList, this._floors,
-      this._positions, this._viewState, this._floorOnly, this._section, this._editing, layout.model];
+      this._positions, this._viewState, this._floorOnly, this._section, this._editing, layout.model, this._floorPresentationRevision];
     if (this._statusRefs && refs.every((value, i) => value === this._statusRefs[i])) return;
     this._statusRefs = refs;
     const floors = this._floors.map((floor) => ({ ...floor, elevation: this._view.floorElevation(floor.id) }));
@@ -1563,7 +1579,7 @@ class Taylors3dCard extends HTMLElement {
       const object = this._objects.objectAt(anchor.id);
       if (!object || object.binding?.hidden || !nodeShown(object.obj.node)) continue;
       const entity = actionTarget(object.obj, object.binding, this._groups, this._hass.states);
-      const floorId = this._levels?.levelFloor[object.obj.level] || floorAtHeight(floors, anchor.world.y);
+      const floorId = this._sourceObjectFloor(object, anchor.world);
       if (entity && floorId) positions.set(entity, { x: anchor.world.x, y: -anchor.world.z,
         z: anchor.world.y - this._view.floorElevation(floorId), floorId });
     }
@@ -1573,7 +1589,11 @@ class Taylors3dCard extends HTMLElement {
       previousLatches: this._alertLatches || {}, acknowledged: this._acknowledgedAlerts || [] });
     this._acknowledgedAlerts = null;
     this._alertLatches = this._alertData.nextLatches;
-    this._statusOverlays.setData({ rooms: this._roomOverlayData.rooms, alerts: this._alertData.alerts });
+    const overlayRooms = this._floorPresentationReportValue?.valid && this._floorPresentationReportValue.mode !== 'assembled'
+      ? this._roomOverlayData.rooms.map((room) => displayFloorFootprint(room, this._floorPresentationReportValue, this._floors)).filter(Boolean)
+      : this._roomOverlayData.rooms;
+    this._statusOverlays.setData({ rooms: overlayRooms,
+      alerts: displayLocatedRecords(this._alertData.alerts, this._floorPresentationReportValue, this._floors || []) });
     if (this._statusOverlays.group.visible === this._editing) {
       this._statusOverlays.group.visible = !this._editing;
       this._view.dirty = true;
@@ -1612,6 +1632,7 @@ class Taylors3dCard extends HTMLElement {
     this._edit?._scenePreviewEditor?.reset();
     this._edit?._ambientIdleEditor?.reset();
     this._edit?._wallPresentationEditor?.reset();
+    this._edit?._floorPresentationEditor?.reset();
     this._cameraCoveragePreview = null;
     this._historyReplaying = true;
     try {
@@ -2118,6 +2139,7 @@ class Taylors3dCard extends HTMLElement {
     const st = section ? this._sectionState() : this._viewState;
     if (section) this._applySectionPlane();
     else if (vw.sectionClip) vw.setSection(null);
+    this._syncFloorPresentation();
     if (!v || !st) {
       this._floor = 'all';
       vw.setVisibleFloors('all');
@@ -2179,11 +2201,23 @@ class Taylors3dCard extends HTMLElement {
 
   // A view's cameras in card world (model cameras follow the model alignment).
   viewCamera(v) {
-    return cameraToCard(v, this._view.model ? (p) => this._view.modelPointToWorld(p) : null);
+    const camera = cameraToCard(v, this._view.model ? (p) => this._view.modelPointToWorld(p) : null);
+    if (!this._floorPresentationActive()) return camera;
+    const floorId = this._cameraFloorForView(v);
+    return floorId ? translateFloorCamera(camera, this._floorPresentationReportValue, floorId, this._floors) : null;
   }
 
   viewTopCamera(v) {
-    return topCameraToCard(v, this._view.model ? this._modelAlign() : null);
+    const camera = topCameraToCard(v, this._view.model ? this._modelAlign() : null);
+    if (!this._floorPresentationActive()) return camera;
+    const floorId = this._cameraFloorForView(v);
+    return floorId ? translateFloorCamera(camera, this._floorPresentationReportValue, floorId, this._floors, { top: true }) : null;
+  }
+
+  _cameraFloorForView(v = this.currentView()) {
+    if (typeof this._floorOnly === 'string' && this._floorOnly !== 'all') return this._floorOnly;
+    const floors = v ? this._stateFor(v)?.floors : null;
+    return Array.isArray(floors) && floors.length === 1 ? floors[0] : null;
   }
 
   // Chip switch. The camera moves only for a view with its own camera (no model: frame the floor, as before).
@@ -2207,10 +2241,14 @@ class Taylors3dCard extends HTMLElement {
     this._applyZoomTo();
     if (this._mode === 'top') {
       // top view: its own camera when saved, else keep the current one (no model: frame the floor)
-      if (v.camera_top) this._view.setTopCamera(this.viewTopCamera(v), { instant });
-      else if (!this._view.model) this._view.fit({ instant });
-    } else if (v.camera) this._view.setCamera(this.viewCamera(v), { instant });
-    else if (!this._view.model || wasSection) this._view.fit({ instant });
+      const topCamera = v.camera_top ? this.viewTopCamera(v) : null;
+      if (topCamera) this._view.setTopCamera(topCamera, { instant });
+      else if (!this._view.model || this._floorPresentationActive()) this._view.fit({ instant });
+    } else {
+      const camera = v.camera ? this.viewCamera(v) : null;
+      if (camera) this._view.setCamera(camera, { instant });
+      else if (!this._view.model || wasSection || this._floorPresentationActive()) this._view.fit({ instant });
+    }
     this._syncToolbar();
     if (this._editing) this._edit.onViewChanged();
   }
@@ -2239,10 +2277,12 @@ class Taylors3dCard extends HTMLElement {
     this._suspendAmbient('initial camera');
     this._fitted = true;
     const v = this.currentView();
-    if (v && v.camera && this._mode === '3d') this._view.setCamera(this.viewCamera(v), { instant: true });
+    const camera = v?.camera && this._mode === '3d' ? this.viewCamera(v) : null;
+    if (camera) this._view.setCamera(camera, { instant: true });
     else {
       this._view.fit({ instant: true });
-      if (v && v.camera_top && this._mode === 'top') this._view.setTopCamera(this.viewTopCamera(v), { instant: true });
+      const topCamera = v?.camera_top && this._mode === 'top' ? this.viewTopCamera(v) : null;
+      if (topCamera) this._view.setTopCamera(topCamera, { instant: true });
     }
   }
 
@@ -2254,7 +2294,8 @@ class Taylors3dCard extends HTMLElement {
     if (this._section) this.setSection(false, { camera: false });
     const v = this.currentView();
     if (this._mode === 'top') {
-      if (v && v.camera_top) this._view.setTopCamera(this.viewTopCamera(v));
+      const camera = v?.camera_top ? this.viewTopCamera(v) : null;
+      if (camera) this._view.setTopCamera(camera);
       else this._view.fit();
     } else this._view.resetCamera(this.viewCamera(v));
   }
@@ -2573,7 +2614,144 @@ class Taylors3dCard extends HTMLElement {
     return new Set([...(this._objects?.parts?.values() || [])].map((part) => part.part?.glow).filter((node) => node?.isMesh));
   }
 
+  floorPresentationReport() {
+    if (this._floorPresentationReportValue) return this._floorPresentationReportValue;
+    const policy = readFloorPresentation(this._layout?.floor_presentation ?? this._config?.floor_presentation);
+    return { mode: 'assembled', requestedMode: policy.mode, valid: policy.valid, rows: [], diagnostics: policy.diagnostics };
+  }
+
+  _syncFloorPresentation() {
+    const view = this._view, raw = this._layout?.floor_presentation ?? this._config?.floor_presentation;
+    if (this._syncingFloorPresentation || !view?.setFloorPresentation) return;
+    // The unchanged default adds no geometry scan, coordinate copy or render work.
+    if (raw === undefined && !this._floorPresentationInputs) return;
+    const user = this._hass?.user;
+    const activeUser = typeof user?.id === 'string' && !!user.id.trim()
+      && (!Object.hasOwn(user, 'is_active') || user.is_active === true);
+    const enabled = !!(this.isConnected && activeUser && this._hass?.connection?.connected === true
+      && this._layout && this._config && !this._loading && !this._editing && !this._section && !view.sectionClip);
+    const writers = new Set([...this.securityMotionWriters(), ...[...(this._securityLayer?.parts?.values() || [])].map((part) => part.target).filter(Boolean)]);
+    const writerKey = [...writers].map((node) => node.uuid).sort().join('|');
+    const inputs = [view, raw, view.model?.root, view.model?.manifest, this._mb?.levels, this._floors,
+      this._roomList, enabled, writerKey, this._config?.layout_key];
+    if (this._floorPresentationInputs?.every((value, index) => value === inputs[index])) return;
+    this._syncingFloorPresentation = true;
+    try {
+      const policy = readFloorPresentation(raw);
+      const floors = (this._floors || []).map((floor) => ({ ...floor, elevation: view.floorElevation(floor.id) }));
+      const context = policy.valid && policy.mode !== 'assembled' ? floorPresentationContext({
+        modelRoot: view.model?.root, manifest: view.model?.manifest, bindings: this._mb?.levels,
+        floors, rooms: this._roomList,
+      }) : { valid: true, targets: [], backgroundNodes: [], bounds: [], diagnostics: [] };
+      const result = view.setFloorPresentation(raw, { floors, ...context, transformWriters: writers, enabled: enabled && context.valid });
+      const report = view.floorPresentationReport();
+      const suspended = !enabled && policy.mode !== 'assembled';
+      this._floorPresentationReportValue = { ...report, valid: report.valid && context.valid,
+        diagnostics: [...context.diagnostics, ...report.diagnostics,
+          ...(suspended ? [{ code: 'presentation_suspended', message: this._editing
+            ? 'Editing uses the assembled house coordinates. The saved floor view returns after editing.'
+            : this._section || view.sectionClip ? 'Section temporarily uses the assembled house; the saved floor view returns when Section closes.'
+              : 'The saved floor view waits for the current loaded Home Assistant session.' }] : [])] };
+      this._floorPresentationInputs = inputs;
+      const previous = this._floorPresentationAppliedReport;
+      const priorRevision = this._floorPresentationView === view ? this._floorPresentationRevision ?? 0 : 0;
+      const changed = result.changed || priorRevision !== view.floorPresentationRevision;
+      this._floorPresentationView = view;
+      this._floorPresentationRevision = view.floorPresentationRevision;
+      this._floorPresentationAppliedReport = this._floorPresentationReportValue;
+      if (changed) {
+        // The synchronous display adapter does not change the camera. Cancel
+        // motion only after it proves a real visual change; equal/default or
+        // rejected settings must leave live presets and previews untouched.
+        this._suspendAmbient('floor presentation changed');
+        this._stopScenePreview('floor presentation changed');
+        this._presetEvents?.interrupt();
+        view.stopCameraMotion?.();
+        const cameraFrame = view.captureCameraFrame?.();
+        this._floorPresentationCameraTransition(previous, this._floorPresentationReportValue, cameraFrame);
+        this._objects?.refreshFloorPresentation?.();
+        this._statusRefs = null; this._weatherRefs = null; this._trackingInputKey = null;
+      }
+    } finally { this._syncingFloorPresentation = false; }
+  }
+
+  _displayFeaturePosition(position) {
+    return displayPlanPosition(position, this._floorPresentationReportValue, this._floors || []);
+  }
+
+  _floorPresentationActive() {
+    return this._floorPresentationReportValue?.valid === true
+      && ['horizontal', 'vertical'].includes(this._floorPresentationReportValue.mode);
+  }
+
+  _floorCameraLife() {
+    return [this._view, this._view?.model?.root, this._config?.layout_key, this._hass?.connection,
+      this._hass?.user?.id, JSON.stringify(this._config?.model || this._layout?.model || null), JSON.stringify(this._modelAlign())];
+  }
+
+  _floorCameraScope() { return [this._mode, this._viewId, this._floorOnly]; }
+
+  _floorPresentationCameraTransition(previous, next, before) {
+    const view = this._view;
+    if (!view?.captureCameraFrame || !view?.restoreCameraFrame) return;
+    const wasActive = previous?.valid === true && previous.mode !== 'assembled';
+    const active = next?.valid === true && next.mode !== 'assembled';
+    if (!wasActive && !active) return;
+    const session = this._floorCameraSession, life = this._floorCameraLife(), scope = this._floorCameraScope();
+    const sameLife = session?.life.every((value, index) => value === life[index]);
+    const sameScope = sameLife && session.scope.every((value, index) => value === scope[index]);
+    const samePose = sameScope && before && session.applied && before.zoom === session.applied.zoom
+      && ['position', 'target', 'quaternion', 'up'].every((field) => before[field].every((value, index) => value === session.applied[field][index]));
+    let source = samePose ? session.source : !wasActive ? before : null;
+    const floorId = this._cameraFloorForView();
+    if (wasActive && sameLife && !source && before && floorId) {
+      const camera = translateFloorCamera(before, previous, floorId, this._floors, { toSource: true });
+      if (camera) source = { ...before, position: camera.position, target: camera.target };
+    }
+    if (!active) {
+      this._floorCameraSession = null;
+      // A changed house/account never restores an earlier house's camera.
+      if (!sameLife) return;
+      if (!source || !view.restoreCameraFrame(source)) view.fit({ instant: true });
+      return;
+    }
+    let placed = false;
+    if (source && floorId) {
+      const camera = translateFloorCamera(source, next, floorId, this._floors);
+      if (camera) placed = view.restoreCameraFrame({ ...source, position: camera.position, target: camera.target });
+    }
+    if (!placed) view.fit({ instant: true });
+    this._floorCameraSession = { source, life, scope, applied: view.captureCameraFrame() };
+  }
+
+  _sourceObjectFloor(object, world) {
+    // A live mower may be measured on another floor than its authored GLB
+    // parent. Its explicit current floor owns both source and display anchors.
+    if (object.part && Object.hasOwn(object.part, 'displayFloorId')) {
+      const id = object.part.displayFloorId, floors = (this._floors || []).filter((floor) => floor.id === id);
+      return typeof id === 'string' && id.trim() && floors.length === 1 && Number.isFinite(floors[0].elevation) ? id : null;
+    }
+    if (this._floorPresentationActive()) return this._view.floorForModelNode?.(object.obj.node) ?? null;
+    return this._levels?.levelFloor?.[object.obj.level]
+      || floorAtHeight((this._floors || []).map((floor) => ({ ...floor, elevation: this._view.floorElevation(floor.id) })), world.y);
+  }
+
+  _miniMapSourceCamera(snapshot, floorId) {
+    if (!this._floorPresentationActive()) return snapshot;
+    return { ...snapshot,
+      camera: translateFloorCamera(snapshot.camera, this._floorPresentationReportValue, floorId, this._floors, { toSource: true }),
+      topCamera: translateFloorCamera(snapshot.topCamera, this._floorPresentationReportValue, floorId, this._floors, { toSource: true, top: true }) };
+  }
+
+  _displayFeatureWorld(world, floorId) {
+    if (!world) return null;
+    if (!this._floorPresentationReportValue?.valid || this._floorPresentationReportValue.mode === 'assembled') return world;
+    const displayed = this._displayFeaturePosition({ x: world.x, y: -world.z, z: 0, elevation: world.y, floorId });
+    return displayed ? { x: displayed.x, y: displayed.elevation, z: -displayed.y } : null;
+  }
+
   _syncWallPresentation() {
+    this._syncFloorPresentation();
     const view = this._view;
     if (!view?.setWallPresentation) return;
     const index = this._built?.viewManifest === view.model?.manifest ? this._index : undefined;
@@ -2610,7 +2788,7 @@ class Taylors3dCard extends HTMLElement {
     const groups = this._groups || {};
     const levelShown = this._levelShown();
     const pts = [];
-    for (const a of layer.anchors()) {
+    for (const a of layer.displayAnchors ? layer.displayAnchors() : layer.anchors()) {
       const o = layer.objectAt(a.id);
       const b = o && o.binding;
       if (!all && (!b || b.hidden || (!b.missing && !actionTarget(o.obj, b, groups)))) continue;
@@ -2712,7 +2890,7 @@ class Taylors3dCard extends HTMLElement {
     const usable = st && st.state !== 'unavailable' && st.state !== 'unknown';
     if (which === 'tap' && this._config.device_tap_action !== 'toggle' && target) {
       this._popup.close();
-      const a = this._objects.anchors().find((x) => x.id === id);
+      const a = (this._objects.displayAnchors ? this._objects.displayAnchors() : this._objects.anchors()).find((x) => x.id === id);
       this._devicePopup.update(this._hass);
       this._devicePopup.showMarker({ name: o.obj.label || o.obj.id, entityId: target,
         entities: (o.chain && o.chain.entities || [target]).map((eid) => ({ eid })) }, a && this._view.projectWorld(a.world));
@@ -2720,7 +2898,7 @@ class Taylors3dCard extends HTMLElement {
     }
     this._devicePopup.close();
     if (action === 'popup' || !usable) {
-      const a = this._objects.anchors().find((x) => x.id === id);
+      const a = (this._objects.displayAnchors ? this._objects.displayAnchors() : this._objects.anchors()).find((x) => x.id === id);
       if (a) this._popup.open(o.obj, a.world);
     } else if (action === 'toggle') this._hass.callService(...toggleCall(target));
     else this._moreInfo(target);
@@ -2957,12 +3135,23 @@ class Taylors3dCard extends HTMLElement {
     if (!selected && hit) {
       if (!hit.hit.up) return; // a facade wall is not a room's floor
       const [px, height, pz] = hit.hit.point;
-      const fid = floorAtHeight((this._floors || []).map((f) => ({ id: f.id, elevation: this._view.floorElevation(f.id) })), height);
-      selected = roomAtPlan(rooms, [px, -pz], fid);
+      if (this._floorPresentationActive()) {
+        const fid = this._view.floorForModelNode?.(hit.hit.object);
+        if (!fid) return;
+        const source = this._view.displayWorldToSource([px, height, pz], fid);
+        if (!source.ok) return;
+        selected = roomAtPlan(rooms, [source.point[0], -source.point[2]], fid);
+      } else {
+        const fid = floorAtHeight((this._floors || []).map((f) => ({ id: f.id, elevation: this._view.floorElevation(f.id) })), height);
+        selected = roomAtPlan(rooms, [px, -pz], fid);
+      }
     } else if (!selected && !this._view.model) {
-      const floors = (this._floors || []).slice().sort((a, b) => b.elevation - a.elevation);
+      const floors = (this._floors || []).slice().sort((a, b) => this._floorPresentationActive()
+        ? this._view.displayFloorElevation(b.id) - this._view.displayFloorElevation(a.id) : b.elevation - a.elevation);
       for (const f of floors) {
-        selected = roomAtPlan(rooms, this._view.planPoint(x, y, this._view.floorElevation(f.id)), f.id);
+        const point = this._floorPresentationActive() ? this._view.displayPlanPoint(x, y, f.id)
+          : this._view.planPoint(x, y, this._view.floorElevation(f.id));
+        if (point) selected = roomAtPlan(rooms, point, f.id);
         if (selected) break;
       }
     }
@@ -2986,11 +3175,13 @@ class Taylors3dCard extends HTMLElement {
     this._popup.close();
     this._devicePopup.close();
     if (point.floorId && this._floor !== point.floorId) this._setFloor(point.floorId);
+    const displayed = this._displayFeaturePosition({ ...point, elevation: this._view.floorElevation(point.floorId) });
+    if (!displayed) return;
     if (this._mode === 'top') {
       const c = this._view.getTopCamera();
-      if (c) this._view.setTopCamera({ ...c, center: [point.x, point.y] });
+      if (c) this._view.setTopCamera({ ...c, center: [displayed.x, displayed.y] });
     } else {
-      const c = focusCamera(this._view.getCamera(), { ...point, elevation: this._view.floorElevation(point.floorId) });
+      const c = focusCamera(this._view.getCamera(), displayed);
       if (c) this._view.setCamera(c);
     }
     this._selectedRoomId = point.roomId || null;
@@ -3006,6 +3197,7 @@ class Taylors3dCard extends HTMLElement {
       if (this._miniMap) this._miniMap.dispose();
       this._miniMap = new MiniMap(this._stage, {
         size, corner, returnFocus: () => this._miniMapBtn, onFocus: (point) => this._focusPlan(point),
+        cameraForFloor: (snapshot, floorId) => this._miniMapSourceCamera(snapshot, floorId),
         onMarker: (id, point) => { if (point.tracked) this._showTrackedEntity(id); },
         onVisibilityChange: (visible) => { this._miniMapVisible = visible; this._syncToolbar(); },
       });
@@ -3015,6 +3207,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _syncMiniMap() {
+    this._syncFloorPresentation();
     this._syncSecurity();
     this._syncTracking();
     this._syncWeather();
@@ -3028,8 +3221,7 @@ class Taylors3dCard extends HTMLElement {
       if (!object || !object.binding || object.binding.hidden || !nodeShown(object.obj.node)) continue;
       const entity = actionTarget(object.obj, object.binding, this._groups, this._hass && this._hass.states);
       if (!entity) continue;
-      const floorId = (this._levels && this._levels.levelFloor[object.obj.level])
-        || floorAtHeight((this._floors || []).map((f) => ({ id: f.id, elevation: this._view.floorElevation(f.id) })), anchor.world.y);
+      const floorId = this._sourceObjectFloor(object, anchor.world);
       if (!floorId) continue;
       const id = `object:${anchor.id}`, st = this._hass && this._hass.states[entity];
       markers.push({ id, entityId: entity, name: st && st.attributes.friendly_name || object.obj.label || object.obj.id });
