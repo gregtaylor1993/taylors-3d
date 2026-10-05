@@ -36,7 +36,7 @@ For each implementation, update its status, record the changed behavior, link it
 | F08 | Presence: people/devices in rooms | Explicit room observations, anonymous activity and verified identity bindings | Testing |
 | F09 | Alert pulses at the affected location | Located, labelled smoke/leak/unlocked/custom alerts | Testing |
 | F10 | Actual sun plus rain, clouds and snow | Strict sun/location evidence and opt-in bounded outdoor weather | Testing |
-| F11 | Hue colour/brightness lighting the rooms | Validated light readings, inline colour/white controls and a bounded pool | In progress |
+| F11 | Hue colour/brightness lighting the rooms | Validated light readings, inline colour/white controls and a bounded pool | Testing |
 | F12 | Scene previews | HA device controls; no scene preview | Planned |
 | F13 | Ambient idle rotation and night dimming | Automatic night lighting; no idle rotation | Planned |
 | F14 | Camera-aware cut-away and glass/faded walls | Side Section, opacity and authored glass | Planned |
@@ -183,7 +183,7 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 
 **Already present:** bound model lamps glow and use real point/spot lights with HA colour/brightness. The pool is 8 point lights plus 4 spot lights, with up to 4 shadow slots. Lit, visible fixtures are prioritized; other fixtures can retain glow. This is a light budget, not a limit of twelve rooms.
 
-**Work started:** share strict actual appearance/capability readers across model lamps, drawn floor glows and the device panel; add intentional RGB and bounded Kelvin controls; rank lighting slots by useful current output and avoid redraws for semantically unchanged readings. This separate draft is excluded from the verified Phase 5 package. Browser surface-colour, controls and regression checks remain before the next checkpoint.
+**Phase 6 implementation:** model lamps, drawn floor glows and both device panels share strict current light readings. Colour and warm/cool white controls appear only with actual supported capabilities and reported Kelvin limits. Explicit commands wait for HA's real response; opening or moving an unfinished control sends no command. Missing/restored/invalid/zero-output readings remain dark. Current emitted output ranks the fixed lighting pool, compatible surviving fixtures retain their slots, and unchanged readings or names add no frames or shadow work. All 1,904 JavaScript tests and the complete 772-assertion local browser regression pass, including 113 lighting checks using actual rendered floor/wall pixels. Final GitHub checks and the next installation package are pending. F11 remains Testing for Taylor's actual Hue entities, house materials and wall panel. [Lighting guide](docs/LIGHTING-GUIDE.md).
 
 **Complete when:** Taylor's model lights and Hue entities are bound correctly; colour/brightness changes visibly affect nearby surfaces; off lights release their lighting slots; invisible rooms do not consume unnecessary slots. A low-power mode remains available. Materials, exposure and shadows are checked on the actual tablet/model rather than promising the same appearance on every device.
 
@@ -400,7 +400,7 @@ A feature is Done only after its agreed behavior works, it persists where approp
 | 2026-10-05 | Phase 3 | Native camera views, explicitly configured approximate coverage and its editor, shared entity metadata/precision and missing-link preservation implemented. All 933 JS and 48 HA Python tests, lint/build/bundle gates, complete browser suites and HACS checks pass. The GitHub-built frontend matches the exact-commit manual package; household camera/model/panel checks remain. | `1a3e733` |
 | 2026-10-05 | Phase 4 | Explicit presence/activity, parked vehicles, measured/status vacuum symbols, Tracking editor, source panels and mini-map bindings implemented. All 1,214 JS and 48 HA Python tests, lint/build/bundle checks, complete local/GitHub browser suites and HACS validation pass. Exact-commit manual package matches the GitHub frontend. Household checks and visual vacuum calibration remain. | `90c626a` |
 | 2026-10-05 | Phase 5 | Visual source/plan calibration, separate freshness controls, exact contacts/rigid hinge motion and bounded outdoor weather implemented. All 1,704 JS and 48 HA Python tests, lint/build/bundle checks, complete local/GitHub browser suites and HACS validation pass. All 659 browser assertions pass, including 71 calibration, 30 security and 31 weather checks. The model suite passes without retry. Exact-commit installation zip matches GitHub's frontend; actual household checks remain. | `ca64019` |
-| 2026-10-05 | Lighting started | F11 reader, panel and lighting work started separately. Invalid readings, current-output budget, RGB/Kelvin controls and equal-reading redraws are being checked. This draft is excluded from Phase 5's installation zip. | Uncommitted draft |
+| 2026-10-05 | Phase 6 | Validated light appearances, deliberate RGB/Kelvin controls and current-output lighting selection implemented. All 1,904 JS tests, lint/build/bundle checks and the complete local browser regression pass. The 113 lighting checks verify actual floor/wall colour, brightness, darkness, native controls and stable rendering resources. Final GitHub validation and packaging remain; actual HA/Hue/model/panel checks remain. | Pending checkpoint |
 
 ### Phase 1: Taylor's Home Assistant check
 
@@ -482,5 +482,29 @@ Code checkpoint `ca640196fe109a01b3cbb7fa66809de4bf7e7e3c` connects visual vacuu
 **Exact package:** the current `taylors3d.zip` was built from that committed source snapshot. Its frontend matches the downloaded GitHub artifact byte for byte: `810f10172f0352b903a3976321a9196aae1b7aee5114877b953ec99ab6919236`. The zip SHA256 is `3f0f6efb3585624c026ba38f01601b3acf780684b64b65325aebf0747899f87b`. Phase 4's zip is preserved separately. New lighting drafts are excluded; no release tag has been published. Actual household devices, model, streams and panel remain unverified.
 
 **Repairs included:** captured picks cancel immediately after a floor/context change; numbered calibration points remain visible above device badges without moving their coordinates. Untouched malformed imports remain invalid until deliberately repaired, and stale weather drafts cannot overwrite newer card settings. Malformed restored-data flags cannot become live coordinate/contact evidence. Clearing an already-empty mower trail no longer redraws the house. The weather idle fixture starts with its unrelated sensor already registered, so it measures reading updates separately from adding an entity.
+
+### Phase 6: light colour, warm/cool white and room illumination
+
+Model lamps, drawn floor glows and both light panels share the same validated HA light
+appearance. Supported RGB and Kelvin controls send deliberate commands and retain real
+reported state until Home Assistant responds. Uncertain readings remain dark; the
+existing eight-point/four-spot/four-shadow pool prioritizes current output and retains
+compatible assignments. [The lighting guide](docs/LIGHTING-GUIDE.md) includes a simulated
+surface-lighting screenshot and checks for Taylor's own installation.
+
+**Local result:** all 1,904 JavaScript tests in 67 files, lint, build and bundle matching
+pass. The complete browser regression passes all 772 assertions with no browser errors
+and no model retry. Its 113 lighting assertions sample actual rendered floor/wall
+pixels, native input events, latest capabilities, cancelled gestures, resource reuse,
+unchanged readings and drawn-plan markers. Actual Hue/model/tablet validation remains.
+
+**Expiry-test observation repair:** the later log-only Phase 5 CI run read its first
+two-second deadline 272 ms after it had already expired. The real timer correctly
+pointed to the later event. A passive recorder now captures normal updates before slow
+rendering can delay Puppeteer's observation. Real two/four-second clocks, exact
+deadlines, unknown/grey/neutral poses and zero service calls remain required. The
+revised complete Security suite passes all 31 checks separately, including unchanged
+source references and exact restoration of the temporary observer. Production expiry
+behavior is unchanged. Final complete GitHub validation and packaging are pending.
 
 When starting work, add a row here and update the feature status above. When it is completed, record exactly what was tested and any unfinished part that remains.

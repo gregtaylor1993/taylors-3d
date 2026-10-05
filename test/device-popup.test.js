@@ -349,6 +349,283 @@ describe('DevicePopup', () => {
     expect(stage.children).toHaveLength(0);
   });
 
+  describe('supported light colour controls', () => {
+    const colourHass = (attributes = {}) => {
+      const h = hass();
+      h.states['light.desk'] = state('on', { friendly_name: 'Desk lamp', brightness: 128,
+        supported_color_modes: ['rgb', 'color_temp'], color_mode: 'rgb', rgb_color: [255, 59, 48],
+        min_color_temp_kelvin: 2200, max_color_temp_kelvin: 6500, ...attributes });
+      return h;
+    };
+    const inputFor = (kind) => rowFor(popup, 'light.desk').querySelector(`[data-light-control="${kind}"]`);
+    const swatch = (name = 'Blue') => rowFor(popup, 'light.desk').querySelector(`[data-color-name="${name}"]`);
+
+    it.each(['marker', 'room', 'model'])('opens supported %s colour controls without requesting or changing a light', (kind) => {
+      const h = colourHass(); h.callService = vi.fn(); h.callWS = vi.fn(); popup.update(h);
+      if (kind === 'room') popup.showRoom({ area_id: 'office' }, [light]);
+      else popup.showMarker(kind === 'model' ? { entityId: 'light.desk', name: 'Bound ceiling fixture', entities: ['light.desk'] } : light);
+      expect(inputFor('color').type).toBe('color'); expect(inputFor('kelvin').min).toBe('2200'); expect(inputFor('kelvin').max).toBe('6500');
+      expect(rowFor(popup, 'light.desk').querySelectorAll('[data-action="color-swatch"]')).toHaveLength(8);
+      expect(swatch('Red').getAttribute('aria-pressed')).toBe('true'); expect(inputFor('color').value).toBe('#ff3b30');
+      expect(rowFor(popup, 'light.desk').querySelector('[data-action="more-info"]')).not.toBeNull();
+      if (kind !== 'model') expect(rowFor(popup, 'sensor.power')).toBeTruthy();
+      expect(onAction).not.toHaveBeenCalled(); expect(h.callService).not.toHaveBeenCalled(); expect(h.callWS).not.toHaveBeenCalled();
+    });
+
+    it.each(['rgb', 'hs', 'xy', 'rgbw', 'rgbww'])('offers deliberate RGB actions for declared %s support', (mode) => {
+      popup.update(colourHass({ supported_color_modes: [mode], color_mode: mode })); popup.showMarker(light);
+      expect(inputFor('color')).not.toBeNull(); expect(inputFor('kelvin')).toBeNull();
+      swatch().click(); expect(onAction).toHaveBeenCalledExactlyOnceWith('light', 'turn_on', { entity_id: 'light.desk', rgb_color: [10, 132, 255] });
+    });
+
+    it.each([['onoff'], ['brightness'], ['color_temp'], ['future_mode'], [], null, 'rgb'].map((modes) => ({ modes })))('does not invent RGB support from an old RGB attribute: $modes', ({ modes }) => {
+      const h = colourHass({ supported_color_modes: modes, color_mode: Array.isArray(modes) ? modes[0] : 'rgb' });
+      popup.update(h); popup.showMarker(light);
+      expect(inputFor('color')).toBeNull(); expect(swatch()).toBeNull();
+      expect(rowFor(popup, 'light.desk').querySelector('[data-action="more-info"]')).not.toBeNull(); expect(onAction).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { min_color_temp_kelvin: null }, { max_color_temp_kelvin: null }, { min_color_temp_kelvin: 0 },
+      { max_color_temp_kelvin: Infinity }, { min_color_temp_kelvin: '2200' }, { min_color_temp_kelvin: 7000 },
+    ])('omits Kelvin commands when actual bounds are missing or invalid: %j', (bounds) => {
+      popup.update(colourHass(bounds)); popup.showMarker(light); expect(inputFor('kelvin')).toBeNull();
+      expect(rowFor(popup, 'light.desk').querySelector('[data-action="more-info"]')).not.toBeNull(); expect(onAction).not.toHaveBeenCalled();
+    });
+
+    it('reports missing current temperature honestly while letting an online capable light accept a deliberate value', () => {
+      popup.update(colourHass({ color_mode: 'color_temp', color_temp_kelvin: null, rgb_color: null })); popup.showMarker(light);
+      const slider = inputFor('kelvin'); expect(slider).not.toBeNull();
+      expect(rowFor(popup, 'light.desk').textContent).toContain('Colour temperature: not reported');
+      expect(rowFor(popup, 'light.desk').textContent).not.toContain('2700 K'); expect(slider.getAttribute('aria-valuetext')).toContain('not reported');
+      slider.value = '4100'; slider.dispatchEvent(new Event('input', { bubbles: true })); expect(onAction).not.toHaveBeenCalled();
+      slider.dispatchEvent(new Event('change', { bubbles: true }));
+      expect(onAction).toHaveBeenCalledExactlyOnceWith('light', 'turn_on', { entity_id: 'light.desk', color_temp_kelvin: 4100 });
+    });
+
+    it('does not invent a reported brightness, but accepts an explicit supported brightness setting', () => {
+      popup.update(colourHass({ brightness: null })); popup.showMarker(light);
+      const slider = inputFor('brightness');
+      expect(rowFor(popup, 'light.desk').textContent).toContain('Brightness: not reported');
+      expect(slider.disabled).toBe(false);
+      slider.value = '60'; slider.dispatchEvent(new Event('input', { bubbles: true }));
+      expect(onAction).not.toHaveBeenCalled();
+      slider.dispatchEvent(new Event('change', { bubbles: true }));
+      expect(onAction).toHaveBeenCalledExactlyOnceWith('light', 'turn_on', { entity_id: 'light.desk', brightness: 153 });
+    });
+
+    it('marks unknown XY appearance as not reported without selecting a fake white swatch', () => {
+      popup.update(colourHass({ supported_color_modes: ['xy'], color_mode: 'xy', rgb_color: null, xy_color: [.3, .4] })); popup.showMarker(light);
+      expect(rowFor(popup, 'light.desk').textContent).toContain('Current colour: not reported');
+      expect(inputFor('color').value).toBe('#ffffff');
+      expect(rowFor(popup, 'light.desk').querySelectorAll('[aria-pressed="true"]')).toHaveLength(0);
+      expect(onAction).not.toHaveBeenCalled();
+      swatch().click(); expect(onAction).toHaveBeenCalledExactlyOnceWith('light', 'turn_on', { entity_id: 'light.desk', rgb_color: [10, 132, 255] });
+    });
+
+    it.each(['attributes', 'domain', 'state'])('blocks all inline commands from a malformed basic %s source', (kind) => {
+      const h = colourHass();
+      if (kind === 'attributes') h.states['light.desk'].attributes = [];
+      else if (kind === 'domain') h.states['light.desk'].entity_id = 'switch.desk';
+      else h.states['light.desk'].state = 1;
+      popup.update(h); popup.showMarker(light);
+      const toggle = rowFor(popup, 'light.desk').querySelector('[data-action="toggle"]');
+      expect(toggle.disabled).toBe(true); toggle.click(); expect(onAction).not.toHaveBeenCalled();
+      expect(rowFor(popup, 'light.desk').querySelector('[data-action="more-info"]').disabled).toBe(false);
+    });
+
+    it('retains a physical toggle when only current appearance is malformed', () => {
+      popup.update(colourHass({ rgb_color: ['red', 2, 3] })); popup.showMarker(light);
+      const toggle = rowFor(popup, 'light.desk').querySelector('[data-action="toggle"]');
+      expect(toggle.disabled).toBe(false); expect(rowFor(popup, 'light.desk').textContent).toContain('Current colour: not reported');
+      toggle.click(); expect(onAction).toHaveBeenCalledExactlyOnceWith('light', 'toggle', { entity_id: 'light.desk' });
+    });
+
+    it('labels a restored on reading as waiting rather than presenting it as current', () => {
+      popup.update(colourHass({ restored: true })); popup.showMarker(light); const row = rowFor(popup, 'light.desk');
+      expect(row.querySelector('.t3d-entity-value').textContent).toBe('Waiting for a current light reading');
+      expect(row.querySelector('[data-action="toggle"]').disabled).toBe(true); expect(inputFor('color')).toBeNull();
+      popup.update(colourHass({ restored: 'false' }));
+      expect(row.querySelector('.t3d-entity-value').textContent).toBe('Invalid light reading'); expect(onAction).not.toHaveBeenCalled();
+    });
+
+    it('rechecks a swatch source immediately even if no state refresh has yet rebuilt its row', () => {
+      const h = colourHass(); popup.update(h); popup.showMarker(light);
+      h.connection = { connected: false }; swatch().click(); expect(onAction).not.toHaveBeenCalled();
+      delete h.connection; h.states['light.desk'].attributes.restored = true; swatch().click(); expect(onAction).not.toHaveBeenCalled();
+    });
+
+    it('does not replace a focused row twice when Chrome synchronously blurs it during capability removal', () => {
+      const h = colourHass(); popup.update(h); popup.showMarker(light); const picker = inputFor('color');
+      picker.focus(); picker.value = '#123456'; picker.dispatchEvent(new Event('input', { bubbles: true }));
+      const oldRow = rowFor(popup, 'light.desk'), parent = oldRow.parentNode;
+      const replace = oldRow.replaceWith.bind(oldRow); let emitted = false;
+      // jsdom does not emit the removal blur Chrome produces. Reproduce that real
+      // synchronous event ordering and Chrome's original-parent removal requirement.
+      oldRow.replaceWith = vi.fn((...nodes) => {
+        if (!emitted) { emitted = true; picker.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); }
+        if (oldRow.parentNode !== parent) throw new DOMException('Row already replaced during blur', 'NotFoundError');
+        replace(...nodes);
+      });
+      h.states['light.desk'].attributes.supported_color_modes = ['brightness'];
+      h.states['light.desk'].attributes.color_mode = 'brightness';
+      expect(() => popup.update(h)).not.toThrow();
+      expect(oldRow.replaceWith).toHaveBeenCalledTimes(1); expect(inputFor('color')).toBeNull();
+      expect(inputFor('brightness')).not.toBeNull();
+      expect(popup.el.querySelectorAll('[data-entity="light.desk"].t3d-entity')).toHaveLength(1);
+      picker.dispatchEvent(new Event('change', { bubbles: true })); expect(onAction).not.toHaveBeenCalled();
+      popup.update(colourHass()); const next = inputFor('color'); expect(next).not.toBeNull();
+      next.value = '#123456'; next.dispatchEvent(new Event('input', { bubbles: true })); next.dispatchEvent(new Event('change', { bubbles: true }));
+      expect(onAction).toHaveBeenCalledExactlyOnceWith('light', 'turn_on', { entity_id: 'light.desk', rgb_color: [18, 52, 86] });
+    });
+
+    it('native colour input previews locally and sends one payload on change, with actual state still authoritative', async () => {
+      const h = colourHass(); popup.update(h); popup.showMarker(light);
+      const picker = inputFor('color'); picker.focus(); picker.value = '#010203';
+      picker.dispatchEvent(new Event('input', { bubbles: true }));
+      expect(rowFor(popup, 'light.desk').textContent).toContain('Choice: #010203');
+      expect(rowFor(popup, 'light.desk').textContent).toContain('Current colour: #ff3b30'); expect(onAction).not.toHaveBeenCalled();
+      picker.dispatchEvent(new Event('change', { bubbles: true })); await flush();
+      expect(onAction).toHaveBeenCalledExactlyOnceWith('light', 'turn_on', { entity_id: 'light.desk', rgb_color: [1, 2, 3] });
+      expect(inputFor('color')).toBe(picker); expect(document.activeElement).toBe(picker); expect(picker.value).toBe('#ff3b30');
+      expect(swatch('Red').getAttribute('aria-pressed')).toBe('true'); expect(swatch('Blue').getAttribute('aria-pressed')).toBe('false');
+      popup.update(colourHass({ rgb_color: [1, 2, 3] }));
+      expect(picker.value).toBe('#010203'); expect(rowFor(popup, 'light.desk').textContent).toContain('Current colour: #010203');
+    });
+
+    it('Kelvin input previews without action, sends once on release, then waits for the actual reported temperature', async () => {
+      popup.update(colourHass({ color_mode: 'color_temp', color_temp_kelvin: 3000 })); popup.showMarker(light);
+      const slider = inputFor('kelvin'); slider.value = '4800'; slider.dispatchEvent(new Event('input', { bubbles: true }));
+      expect(rowFor(popup, 'light.desk').textContent).toContain('Choose temperature: 4800 K'); expect(onAction).not.toHaveBeenCalled();
+      slider.dispatchEvent(new Event('change', { bubbles: true })); await flush();
+      expect(onAction).toHaveBeenCalledExactlyOnceWith('light', 'turn_on', { entity_id: 'light.desk', color_temp_kelvin: 4800 });
+      expect(rowFor(popup, 'light.desk').textContent).toContain('Colour temperature: 3000 K'); expect(slider.value).toBe('3000');
+      popup.update(colourHass({ color_mode: 'color_temp', color_temp_kelvin: 4800 })); expect(slider.value).toBe('4800');
+    });
+
+    it('keeps a focused colour or Kelvin draft mounted through unrelated live updates and refreshes on blur', () => {
+      popup.update(colourHass({ color_mode: 'color_temp', color_temp_kelvin: 3000 })); popup.showMarker(light);
+      for (const [kind, value] of [['color', '#123456'], ['kelvin', '4700']]) {
+        const input = inputFor(kind); input.focus(); input.value = value; input.dispatchEvent(new Event('input', { bubbles: true }));
+        const next = colourHass({ color_mode: 'color_temp', color_temp_kelvin: 3100 }); next.states['sensor.power'] = state('1.2'); popup.update(next);
+        expect(inputFor(kind)).toBe(input); expect(document.activeElement).toBe(input); expect(input.value).toBe(value);
+        input.blur(); expect(input.value).toBe(kind === 'color' ? '#ff3b30' : '3100');
+      }
+      expect(onAction).not.toHaveBeenCalled();
+    });
+
+    it('blocks every light command while pending, displays errors safely, and permits a deliberate retry', async () => {
+      let reject; onAction.mockReturnValueOnce(new Promise((_resolve, r) => { reject = r; }));
+      popup.update(colourHass()); popup.showMarker(light); const blue = swatch(); blue.click(); blue.click();
+      expect(onAction).toHaveBeenCalledTimes(1); expect(blue.disabled).toBe(true);
+      for (const input of rowFor(popup, 'light.desk').querySelectorAll('input')) expect(input.disabled).toBe(true);
+      expect(rowFor(popup, 'light.desk').textContent).toContain('Sending command…');
+      reject(new Error('<img src=x> no permission')); await flush();
+      expect(rowFor(popup, 'light.desk').querySelector('[role="alert"]').textContent).toContain('<img src=x> no permission');
+      expect(rowFor(popup, 'light.desk').querySelector('img')).toBeNull(); expect(blue.disabled).toBe(false);
+      blue.click(); await flush(); expect(onAction).toHaveBeenCalledTimes(2); expect(rowFor(popup, 'light.desk').querySelector('[role="alert"]').hidden).toBe(true);
+    });
+
+    it.each(['unavailable', 'unknown', 'missing', 'restored', 'malformed restored', 'hidden', 'diagnostic', 'disabled', 'connection', 'service', 'capability'])('rejects a queued colour change after %s revokes the source or capability', (reason) => {
+      const h = colourHass(); popup.update(h); popup.showMarker(light); const picker = inputFor('color'); picker.value = '#010203'; picker.dispatchEvent(new Event('input', { bubbles: true }));
+      if (reason === 'unavailable' || reason === 'unknown') h.states['light.desk'].state = reason;
+      else if (reason === 'missing') delete h.states['light.desk'];
+      else if (reason === 'restored') h.states['light.desk'].attributes.restored = true;
+      else if (reason === 'malformed restored') h.states['light.desk'].attributes.restored = 'false';
+      else if (reason === 'hidden') h.entities['light.desk'] = { hidden_by: 'user' };
+      else if (reason === 'diagnostic') h.entities['light.desk'] = { entity_category: 'diagnostic' };
+      else if (reason === 'disabled') h.entities['light.desk'] = { disabled_by: 'user' };
+      else if (reason === 'connection') h.connection = { connected: false };
+      else if (reason === 'service') h.services = { light: { toggle: {} } };
+      else h.states['light.desk'].attributes.supported_color_modes = ['brightness'];
+      // No refresh first: the release itself must consult the current source.
+      picker.dispatchEvent(new Event('change', { bubbles: true })); expect(onAction).not.toHaveBeenCalled();
+      if (!['hidden', 'diagnostic'].includes(reason)) expect(rowFor(popup, 'light.desk').querySelector('[data-action="more-info"]')).not.toBeNull();
+    });
+
+    it('cancels a temperature draft when bounds change, including a formerly valid value inside the new range', () => {
+      const h = colourHass({ color_mode: 'color_temp', color_temp_kelvin: 3000 }); popup.update(h); popup.showMarker(light);
+      const slider = inputFor('kelvin'); slider.value = '4500'; slider.dispatchEvent(new Event('input', { bubbles: true }));
+      h.states['light.desk'].attributes.min_color_temp_kelvin = 4000;
+      slider.dispatchEvent(new Event('change', { bubbles: true })); expect(onAction).not.toHaveBeenCalled();
+      expect(slider.min).toBe('4000'); expect(slider.dataset.editing).toBe('');
+      slider.value = '4500'; slider.dispatchEvent(new Event('input', { bubbles: true })); slider.dispatchEvent(new Event('change', { bubbles: true }));
+      expect(onAction).toHaveBeenCalledExactlyOnceWith('light', 'turn_on', { entity_id: 'light.desk', color_temp_kelvin: 4500 });
+    });
+
+    it.each(['connection', 'service', 'bounds'])('never sends an interrupted old native release after %s recovers', (reason) => {
+      const h = colourHass({ color_mode: 'color_temp', color_temp_kelvin: 3000 }); popup.update(h); popup.showMarker(light);
+      const old = inputFor(reason === 'bounds' ? 'kelvin' : 'color');
+      old.value = reason === 'bounds' ? '4500' : '#123456'; old.dispatchEvent(new Event('input', { bubbles: true }));
+      if (reason === 'connection') h.connected = false;
+      else if (reason === 'service') h.services = { light: { toggle: {}, turn_off: {} } };
+      else h.states['light.desk'].attributes.min_color_temp_kelvin = 4000;
+      popup.update(h);
+      if (reason === 'connection') h.connected = true;
+      else if (reason === 'service') delete h.services;
+      else h.states['light.desk'].attributes.min_color_temp_kelvin = 2200;
+      popup.update(h);
+      old.value = reason === 'bounds' ? '4500' : '#123456'; old.dispatchEvent(new Event('change', { bubbles: true }));
+      expect(onAction).not.toHaveBeenCalled();
+      const current = inputFor(reason === 'bounds' ? 'kelvin' : 'color');
+      current.value = reason === 'bounds' ? '4500' : '#123456'; current.dispatchEvent(new Event('input', { bubbles: true }));
+      current.dispatchEvent(new Event('change', { bubbles: true }));
+      expect(onAction).toHaveBeenCalledExactlyOnceWith('light', 'turn_on', reason === 'bounds'
+        ? { entity_id: 'light.desk', color_temp_kelvin: 4500 } : { entity_id: 'light.desk', rgb_color: [18, 52, 86] });
+    });
+
+    it('cancels an actual pointer-cancelled slider draft, then accepts a fresh keyboard/native input', () => {
+      popup.update(colourHass()); popup.showMarker(light); const slider = inputFor('kelvin');
+      slider.value = '4500'; slider.dispatchEvent(new Event('input', { bubbles: true }));
+      slider.dispatchEvent(new Event('pointercancel', { bubbles: true }));
+      slider.value = '4500'; slider.dispatchEvent(new Event('change', { bubbles: true })); expect(onAction).not.toHaveBeenCalled();
+      slider.value = '4500'; slider.dispatchEvent(new Event('input', { bubbles: true })); slider.dispatchEvent(new Event('change', { bubbles: true }));
+      expect(onAction).toHaveBeenCalledExactlyOnceWith('light', 'turn_on', { entity_id: 'light.desk', color_temp_kelvin: 4500 });
+    });
+
+    it('does not cancel a valid native colour-dialog change just because the input lost focus', () => {
+      popup.update(colourHass()); popup.showMarker(light); const picker = inputFor('color');
+      picker.focus(); picker.value = '#123456'; picker.dispatchEvent(new Event('input', { bubbles: true })); picker.blur();
+      // A native colour dialog reports its final value with change after returning focus.
+      picker.value = '#123456'; picker.dispatchEvent(new Event('change', { bubbles: true }));
+      expect(onAction).toHaveBeenCalledExactlyOnceWith('light', 'turn_on', { entity_id: 'light.desk', rgb_color: [18, 52, 86] });
+    });
+
+    it('still revokes an unfinished native colour-dialog gesture after blur and connection recovery', () => {
+      const h = colourHass(); popup.update(h); popup.showMarker(light); const picker = inputFor('color');
+      picker.focus(); picker.value = '#123456'; picker.dispatchEvent(new Event('input', { bubbles: true })); picker.blur();
+      h.connected = false; popup.update(h); h.connected = true; popup.update(h);
+      picker.value = '#123456'; picker.dispatchEvent(new Event('change', { bubbles: true })); expect(onAction).not.toHaveBeenCalled();
+      picker.value = '#123456'; picker.dispatchEvent(new Event('input', { bubbles: true })); picker.dispatchEvent(new Event('change', { bubbles: true }));
+      expect(onAction).toHaveBeenCalledExactlyOnceWith('light', 'turn_on', { entity_id: 'light.desk', rgb_color: [18, 52, 86] });
+    });
+
+    it.each(['2100', '6600', 'NaN', '4500.5', ''])('rejects a forged out-of-range or malformed Kelvin value %s', (value) => {
+      popup.update(colourHass()); popup.showMarker(light); const slider = inputFor('kelvin');
+      Object.defineProperty(slider, 'value', { configurable: true, value }); slider.dispatchEvent(new Event('change', { bubbles: true }));
+      expect(onAction).not.toHaveBeenCalled();
+    });
+
+    it.each(['close', 'replacement', 'removed row', 'capability replacement'])('rejects controls retained from a previous %s', (kind) => {
+      popup.update(colourHass()); popup.showMarker(light); const picker = inputFor('color'), blue = swatch(); picker.value = '#010203';
+      if (kind === 'close') popup.close();
+      else if (kind === 'replacement') popup.showMarker(light);
+      else if (kind === 'removed row') popup.showMarker(climate);
+      else popup.update(colourHass({ supported_color_modes: ['brightness'], color_mode: 'brightness' }));
+      picker.dispatchEvent(new Event('change', { bubbles: true })); blue.click(); expect(onAction).not.toHaveBeenCalled();
+    });
+
+    it('keeps theme backgrounds, non-text swatches, keyboard names and 44px controls inside a wrapping layout', () => {
+      popup.update(colourHass()); popup.showMarker(light); const style = popup.el.querySelector('style').textContent;
+      expect(style).toContain('min-height: 44px'); expect(style).toContain('minmax(44px, 1fr)');
+      expect(style).toContain('var(--secondary-background-color, var(--ha-card-background, var(--card-background-color, #f5f5f5)))');
+      expect(style).toContain(':focus-visible'); expect(inputFor('color').getAttribute('aria-label')).toBe('Desk lamp: choose colour');
+      expect(inputFor('kelvin').getAttribute('aria-label')).toContain('kelvin'); expect(swatch().getAttribute('aria-label')).toBe('Desk lamp: set blue');
+      expect(swatch().querySelector('span').getAttribute('aria-hidden')).toBe('true'); swatch().focus(); expect(document.activeElement).toBe(swatch());
+      expect(onAction).not.toHaveBeenCalled();
+    });
+  });
+
   describe('camera views', () => {
     let h, helpers, cards, loader;
     const cameraButton = (id) => rowFor(popup, id).querySelector('[data-action="camera-view"]');

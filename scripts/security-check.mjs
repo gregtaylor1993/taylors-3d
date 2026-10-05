@@ -253,24 +253,58 @@ try {
   await page.evaluate(() => { const c = document.querySelector('taylors3d-card'); c.setSection(true); }); await settle(page); s = await snapshot(page);
   check('owned outlines receive both actual model and side-section clipping planes', s.planes === 2, s.planes);
   await page.evaluate(() => document.querySelector('taylors3d-card').setSection(false)); await settle(page);
-  await page.evaluate(() => {
-    const c = document.querySelector('taylors3d-card'), now = new Date().toISOString(); window.securityFixture.eventTime = now;
-    c.hass = { ...c._hass, states: { ...c._hass.states,
-      'binary_sensor.security_door': { state: 'on', last_updated: now, attributes: { device_class: 'door' } },
-      'event.security_vehicle': { state: now, attributes: { event_type: 'vehicle' } } } };
-    c._commit({ ...c._layout, security_bindings: c._layout.security_bindings.map((binding) => ({ ...binding,
-      freshness: { timestamp_mode: 'last_updated', timestamp_format: 'iso', max_age_seconds: 2 } })),
-      vehicle_bindings: [{ id: 'late', entity: 'event.security_vehicle', kind: 'event', vehicle_source_confirmed: true,
-        timestamp_mode: 'state', timestamp_format: 'iso', event_types: ['vehicle'], expires_seconds: 4,
-        position: { x: 17, y: -2, z: .05, floorId: 'ground' } }] });
-  }); await settle(page); s = await snapshot(page); const firstDeadline = s.deadline;
-  check('security heartbeat and event sighting use one nearest absolute expiry timer', s.timer && Number.isFinite(firstDeadline)
-    && Math.abs(firstDeadline - Date.parse(await page.evaluate(() => window.securityFixture.eventTime)) - 2000) < 5, s.deadline);
-  await page.waitForFunction(() => document.querySelector('taylors3d-card')._securityLayer.parts.get('security_1')?.reading.status === 'stale', { timeout: 4500 });
-  s = await snapshot(page); check('without another HA update stale contact becomes neutral grey and the shared timer advances to the later event', s.open === null
-    && s.color === '#8d9199' && near(s.rotation, s.authored.quaternion) && s.timer && s.deadline === firstDeadline + 2000, { status: s.status, deadline: s.deadline });
-  await page.waitForFunction(() => !document.querySelector('taylors3d-card')._trackingLayer.parts.has('vehicle:late'), { timeout: 4500 });
-  s = await snapshot(page); check('later sighting expires independently and the shared timer clears', !s.timer && s.deadline === null && s.services === 0);
+  let expiry, expiryCleanup;
+  try {
+    await page.evaluate(() => {
+      const c = document.querySelector('taylors3d-card'), now = new Date().toISOString(); window.securityFixture.eventTime = now;
+      const contactSource = { state: 'on', last_updated: now, attributes: { device_class: 'door' } };
+      const eventSource = { state: now, attributes: { event_type: 'vehicle' } };
+      const original = c._syncMiniMap, trace = { observedAt: Date.parse(now) };
+      // SwiftShader can spend longer than the two-second heartbeat in two RAFs.
+      // Observe normal updates before rendering, retaining real timers and deadlines.
+      const observer = function (...args) {
+        const result = original.apply(this, args);
+        const part = c._securityLayer.parts.get('security_1');
+        const sample = () => ({ status: part?.reading.status, open: part?.reading.open, color: part?.color,
+          rotation: window.securityFixture.leaf.quaternion.toArray(), authored: window.securityFixture.authored.quaternion.slice(),
+          deadline: c._trackingDeadline, timer: !!c._trackingTimer, services: window.securityFixture.services.length,
+          elapsed: Date.now() - trace.observedAt, sameEvidence: c._hass.states['binary_sensor.security_door'] === contactSource
+            && c._hass.states['event.security_vehicle'] === eventSource });
+        if (!trace.initial) trace.initial = sample();
+        if (!trace.stale && part?.reading.status === 'stale') trace.stale = sample();
+        if (!trace.expired && trace.stale && !c._trackingLayer.parts.has('vehicle:late')) trace.expired = sample();
+        return result;
+      };
+      window.securityFixture.expiryObserver = { card: c, original, observer, trace };
+      c._syncMiniMap = observer;
+      c.hass = { ...c._hass, states: { ...c._hass.states,
+        'binary_sensor.security_door': contactSource, 'event.security_vehicle': eventSource } };
+      c._commit({ ...c._layout, security_bindings: c._layout.security_bindings.map((binding) => ({ ...binding,
+        freshness: { timestamp_mode: 'last_updated', timestamp_format: 'iso', max_age_seconds: 2 } })),
+        vehicle_bindings: [{ id: 'late', entity: 'event.security_vehicle', kind: 'event', vehicle_source_confirmed: true,
+          timestamp_mode: 'state', timestamp_format: 'iso', event_types: ['vehicle'], expires_seconds: 4,
+          position: { x: 17, y: -2, z: .05, floorId: 'ground' } }] });
+    });
+    await page.waitForFunction(() => !!window.securityFixture.expiryObserver.trace.expired, { timeout: 9000 });
+    expiry = await page.evaluate(() => window.securityFixture.expiryObserver.trace);
+  } finally {
+    expiryCleanup = await page.evaluate(() => {
+      const observation = window.securityFixture.expiryObserver;
+      if (!observation) return { attached: false, restored: false, released: true };
+      const { card, original, observer } = observation, attached = card._syncMiniMap === observer;
+      if (attached) card._syncMiniMap = original;
+      const restored = card._syncMiniMap === original;
+      delete window.securityFixture.expiryObserver;
+      return { attached, restored, released: !window.securityFixture.expiryObserver };
+    });
+  }
+  const firstDeadline = expiry.initial.deadline;
+  check('security heartbeat and event sighting use one nearest absolute expiry timer', expiry.initial.timer && Number.isFinite(firstDeadline)
+    && expiry.initial.sameEvidence && Math.abs(firstDeadline - expiry.observedAt - 2000) < 5, expiry.initial);
+  s = expiry.stale; check('without another HA update stale contact becomes neutral grey and the shared timer advances to the later event', s.status === 'stale'
+    && s.open === null && s.color === '#8d9199' && near(s.rotation, s.authored) && s.sameEvidence && s.timer && s.deadline === firstDeadline + 2000, s);
+  s = expiry.expired; check('later sighting expires independently and the shared timer clears', !s.timer && s.deadline === null && s.sameEvidence && s.services === 0, s);
+  check('passive expiry observer restores the exact original method and releases its references', expiryCleanup.attached && expiryCleanup.restored && expiryCleanup.released, expiryCleanup);
   await page.evaluate(() => {
     const c = document.querySelector('taylors3d-card'); c._commit({ ...c._layout, vehicle_bindings: [],
       security_bindings: c._layout.security_bindings.map(({ freshness: _freshness, ...binding }) => binding) });

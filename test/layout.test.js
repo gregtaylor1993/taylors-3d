@@ -114,7 +114,22 @@ describe('lightGlow', () => {
   });
   it('uses rgb_color and brightness', () => {
     expect(lightGlow({ state: 'on', attributes: { rgb_color: [255, 0, 0], brightness: 255 } })).toEqual({ rgb: [255, 0, 0], strength: 1 });
-    expect(lightGlow({ state: 'on', attributes: { brightness: 0 } })).toEqual({ rgb: [255, 196, 120], strength: 0.25 });
+    expect(lightGlow({ state: 'on', attributes: { brightness: 0 } })).toBeNull();
+  });
+  it('keeps uncertain readings and black colour dark instead of drawing a lit room', () => {
+    for (const attributes of [
+      { brightness: NaN }, { restored: true }, { restored: 'false' },
+      { color_mode: 'xy', brightness: 255, xy_color: [.3, .3] },
+      { color_mode: 'rgb', brightness: 255, rgb_color: [0, 0, 0] },
+      { color_mode: 'rgb', brightness: 255, rgb_color: [255, NaN, 0] },
+      { color_mode: 'brightness' },
+    ]) expect(lightGlow({ state: 'on', attributes })).toBeNull();
+  });
+  it('uses Home Assistant derived colour for XY and temperature lamps', () => {
+    for (const color_mode of ['xy', 'color_temp']) {
+      expect(lightGlow({ state: 'on', attributes: { color_mode, brightness: 51, rgb_color: [255, 150, 60] } }))
+        .toEqual({ rgb: [255, 150, 60], strength: .4 });
+    }
   });
 });
 

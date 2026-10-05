@@ -9,9 +9,21 @@
 
 import { CameraFeedController } from './camera-feed.js';
 import { entityMetadata, formatEntityValue } from './entity-metadata.js';
+import { lightCapabilities, readLightAppearance } from './light-state.js';
 
 const QUICK_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
-const DIMMABLE_MODES = new Set(['brightness', 'color_temp', 'hs', 'rgb', 'rgbw', 'rgbww', 'xy', 'white']);
+const LIGHT_SOURCE_ERRORS = new Set(['missing', 'state', 'attributes', 'domain', 'restored', 'unavailable', 'unknown']);
+const SWATCHES = [
+  ['Red', [255, 59, 48]], ['Orange', [255, 149, 0]], ['Yellow', [255, 214, 10]], ['Green', [52, 199, 89]],
+  ['Teal', [48, 213, 200]], ['Blue', [10, 132, 255]], ['Purple', [175, 82, 222]], ['Pink', [255, 55, 145]],
+];
+const finite = (value) => typeof value === 'number' && Number.isFinite(value);
+const rgbHex = (rgb) => Array.isArray(rgb) && rgb.length === 3 && rgb.every((v) => finite(v) && v >= 0 && v <= 255)
+  ? '#' + rgb.map((v) => Math.round(v).toString(16).padStart(2, '0')).join('') : null;
+const hexRgb = (hex) => typeof hex === 'string' && /^#[0-9a-f]{6}$/i.test(hex)
+  ? [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)) : null;
+const inputContext = (control, kind) => JSON.stringify([control.entityId, kind, control.dimmable, control.rgb,
+  control.colorTemperature, kind === 'kelvin' ? control.minKelvin : null, kind === 'kelvin' ? control.maxKelvin : null]);
 const STOP_EVENTS = ['pointerdown', 'pointerup', 'pointermove', 'pointercancel', 'click', 'dblclick',
   'contextmenu', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'touchmove', 'wheel'];
 
@@ -43,7 +55,17 @@ const STYLE = `
   .taylors3d-device-popup .t3d-entity-actions { display: flex; gap: 8px; flex-wrap: wrap; }
   .taylors3d-device-popup .t3d-brightness { display: block; margin: 10px 0 2px; }
   .taylors3d-device-popup .t3d-brightness input { display: block; width: 100%; margin-top: 6px;
-    accent-color: var(--primary-color, #03a9f4); }
+    min-height: 44px; box-sizing: border-box; accent-color: var(--primary-color, #03a9f4); }
+  .taylors3d-device-popup .t3d-colour { min-width: 0; border: 0; margin: 12px 0 0; padding: 0; }
+  .taylors3d-device-popup .t3d-colour legend { padding: 0; }
+  .taylors3d-device-popup .t3d-swatches { display: grid; grid-template-columns: repeat(auto-fit, minmax(44px, 1fr)); gap: 8px; margin: 8px 0; }
+  .taylors3d-device-popup .t3d-swatches button { min-width: 44px; padding: 6px; }
+  .taylors3d-device-popup .t3d-swatches button[aria-pressed="true"] { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: -3px; }
+  .taylors3d-device-popup .t3d-swatch-dot { display: block; width: 22px; height: 22px; border-radius: 50%; margin: auto;
+    border: 1px solid var(--divider-color, #ddd); }
+  .taylors3d-device-popup .t3d-colour-picker { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .taylors3d-device-popup input[type="color"] { min-width: 56px; min-height: 44px; width: 100%; box-sizing: border-box; }
+  .taylors3d-device-popup .t3d-light-reading { margin: 6px 0; overflow-wrap: anywhere; }
   .taylors3d-device-popup .t3d-entity-error { color: var(--error-color, #db4437); margin: 6px 0 0; }
   .taylors3d-device-popup .t3d-entity-status { color: var(--secondary-text-color, #727272); margin: 6px 0 0; }
   .taylors3d-device-popup [hidden] { display: none; }
@@ -69,16 +91,34 @@ export function entityControl(hass, entityId) {
   const state = metadata.state;
   const attr = (state && state.attributes) || {};
   const domain = metadata.domain;
-  const modes = attr.supported_color_modes;
-  const dimmable = Array.isArray(modes) ? modes.some((m) => DIMMABLE_MODES.has(m)) : Number.isFinite(attr.brightness);
+  const caps = domain === 'light' ? lightCapabilities(state) : {};
+  const appearance = domain === 'light' ? readLightAppearance(state) : null;
+  const sourceIssue = appearance?.diagnostics.find((d) => LIGHT_SOURCE_ERRORS.has(d.code));
+  // Missing appearance data must not prevent a deliberate supported command. A malformed
+  // source (as opposed to its current colour/brightness) cannot authorize any command.
+  const usable = domain !== 'light' || !!state && ['on', 'off'].includes(state.state)
+    && !sourceIssue;
+  const lightService = domain === 'light' && serviceExists(hass, 'light', 'turn_on');
+  const minKelvin = finite(caps.minKelvin) ? Math.ceil(caps.minKelvin) : null;
+  const maxKelvin = finite(caps.maxKelvin) ? Math.floor(caps.maxKelvin) : null;
+  const kelvinBounds = minKelvin !== null && maxKelvin !== null && minKelvin > 0 && minKelvin <= maxKelvin;
+  const brightness = finite(attr.brightness) && attr.brightness >= 0 && attr.brightness <= 255 ? Math.round(attr.brightness / 255 * 100) : null;
   return {
-    entityId, name: metadata.name, value: formatEntityValue(hass, entityId),
-    available: metadata.available && hass.connected !== false && hass.connection?.connected !== false,
+    entityId, name: metadata.name, value: domain === 'light' && attr.restored === true ? 'Waiting for a current light reading'
+      : sourceIssue && ['state', 'attributes', 'domain', 'restored'].includes(sourceIssue.code) ? 'Invalid light reading'
+        : formatEntityValue(hass, entityId),
+    available: metadata.available && !metadata.hidden && !metadata.category && usable && hass.connected !== false && hass.connection?.connected !== false,
     camera: domain === 'camera',
     toggle: QUICK_TOGGLE.has(domain) && serviceExists(hass, domain, 'toggle'),
-    dimmable: domain === 'light' && dimmable && serviceExists(hass, 'light', 'turn_on') && serviceExists(hass, 'light', 'turn_off'),
+    dimmable: lightService && caps.valid === true && caps.brightness === true && serviceExists(hass, 'light', 'turn_off'),
+    rgb: lightService && caps.valid === true && caps.rgb === true,
+    colorTemperature: lightService && caps.valid === true && caps.colorTemperature === true && kelvinBounds,
+    minKelvin, maxKelvin,
+    colorHex: appearance?.colorKnown ? rgbHex(appearance.color) : null,
+    kelvin: state?.state === 'on' && attr.color_mode === 'color_temp' && Number.isInteger(attr.color_temp_kelvin)
+      && kelvinBounds && attr.color_temp_kelvin >= minKelvin && attr.color_temp_kelvin <= maxKelvin ? attr.color_temp_kelvin : null,
     on: !!state && state.state === 'on',
-    brightness: state && state.state === 'on' ? Math.round((Number.isFinite(attr.brightness) ? attr.brightness : 255) / 255 * 100) : 0,
+    brightness: state && state.state === 'on' ? brightness : 0,
   };
 }
 
@@ -177,7 +217,8 @@ export class DevicePopup {
     el.addEventListener('click', (e) => this._click(e));
     el.addEventListener('input', (e) => this._sliderInput(e));
     el.addEventListener('change', (e) => this._sliderChange(e));
-    el.addEventListener('focusout', (e) => { if (e.target.type === 'range') { e.target.dataset.editing = ''; this._refreshRows(); } });
+    el.addEventListener('focusout', (e) => { if (e.target.dataset.lightControl) { this._clearInput(e.target); this._refreshRows(); } });
+    el.addEventListener('pointercancel', (e) => { if (e.target.dataset.lightControl) { e.target.dataset.cancelled = 'true'; this._clearInput(e.target); this._refreshRows(); } });
     this.el = el;
     this.root.append(el);
     this.onVisibilityChange(true, this.placement);
@@ -213,6 +254,15 @@ export class DevicePopup {
   }
 
   _refreshRows() {
+    if (!this.el || this._refreshingRows) return;
+    // Removing a focused control synchronously emits focusout in Chrome. Its
+    // handler must not replace the same row while this DOM update is in progress.
+    this._refreshingRows = true;
+    try { this._refreshRowsNow(); }
+    finally { this._refreshingRows = false; }
+  }
+
+  _refreshRowsNow() {
     if (!this.el) return;
     const ids = this._entityIds();
     const keep = new Set(ids);
@@ -229,7 +279,7 @@ export class DevicePopup {
     for (const id of ids) {
       const control = entityControl(this.hass, id);
       let row = this._rows.get(id);
-      const key = `${control.toggle}:${control.dimmable}:${control.camera}`;
+      const key = `${control.toggle}:${control.dimmable}:${control.camera}:${control.rgb}:${control.colorTemperature}`;
       if (!row || row.key !== key) {
         const next = this._makeRow(control, key);
         if (row) row.el.replaceWith(next.el);
@@ -242,6 +292,16 @@ export class DevicePopup {
       row.info.setAttribute('aria-label', `${control.name}: all controls`);
       const busy = this._pending.has(id);
       row.el.setAttribute('aria-busy', String(busy));
+      for (const input of row.inputs) {
+        const kind = input.dataset.lightControl;
+        const context = input.dataset.context || input.dataset.gestureContext;
+        if (!control.available || busy || context && context !== inputContext(control, kind)) {
+          if (input.dataset.editing === 'true' || context) input.dataset.cancelled = 'true';
+          delete input.dataset.gestureContext;
+          this._clearInput(input);
+        }
+        input.disabled = !control.available || busy;
+      }
       if (row.camera) {
         row.camera.disabled = !control.available;
         row.camera.setAttribute('aria-label', `${control.name}: camera view`);
@@ -252,12 +312,32 @@ export class DevicePopup {
         row.toggle.disabled = !control.available || busy;
       }
       if (row.slider) {
-        row.slider.disabled = !control.available || busy;
         row.slider.setAttribute('aria-label', `${control.name}: brightness`);
         if (!row.slider.dataset.editing) {
-          row.slider.value = String(Math.min(100, Math.max(0, control.brightness)));
-          row.brightness.textContent = `Brightness: ${row.slider.value}%`;
+          row.slider.value = String(control.brightness ?? 0);
+          row.brightness.textContent = control.brightness === null ? 'Brightness: not reported' : `Brightness: ${row.slider.value}%`;
         }
+      }
+      if (row.colorInput) {
+        row.colorInput.setAttribute('aria-label', `${control.name}: choose colour`);
+        row.colorReading.textContent = control.colorHex ? `Current colour: ${control.colorHex}` : 'Current colour: not reported';
+        if (!row.colorInput.dataset.editing) { row.colorInput.value = control.colorHex || '#ffffff'; row.colorChoice.hidden = true; }
+        for (const swatch of row.swatches) {
+          swatch.disabled = !control.available || busy;
+          swatch.setAttribute('aria-label', `${control.name}: set ${swatch.dataset.colorName.toLowerCase()}`);
+          swatch.setAttribute('aria-pressed', String(!!control.colorHex && swatch.dataset.hex === control.colorHex));
+        }
+      }
+      if (row.kelvinInput) {
+        row.kelvinInput.min = String(control.minKelvin); row.kelvinInput.max = String(control.maxKelvin);
+        row.kelvinInput.setAttribute('aria-label', `${control.name}: choose colour temperature in kelvin`);
+        if (!row.kelvinInput.dataset.editing) {
+          row.kelvinInput.value = String(control.kelvin ?? control.minKelvin);
+          row.kelvinText.textContent = control.kelvin === null ? 'Colour temperature: not reported' : `Colour temperature: ${control.kelvin} K`;
+        }
+        row.kelvinInput.setAttribute('aria-valuetext', control.kelvin === null && !row.kelvinInput.dataset.editing
+          ? `Current temperature not reported; choose ${control.minKelvin} to ${control.maxKelvin} kelvin` : `${row.kelvinInput.value} kelvin`);
+        row.kelvinBounds.textContent = `Supported range: ${control.minKelvin}–${control.maxKelvin} K`;
       }
       const error = this._errors.get(id);
       row.error.textContent = error || '';
@@ -282,63 +362,122 @@ export class DevicePopup {
     if (camera) actions.append(camera);
     actions.append(info);
     el.append(name, value, actions);
-    let slider = null, brightness = null;
+    const inputs = [], swatches = [];
+    const field = (kind, type) => {
+      const input = element('input'); input.type = type; input.dataset.entity = id; input.dataset.lightControl = kind;
+      inputs.push(input); return input;
+    };
+    let slider = null, brightness = null, colorInput = null, colorReading = null, colorChoice = null;
+    let kelvinInput = null, kelvinText = null, kelvinBounds = null;
     if (control.dimmable) {
       const label = element('label', 't3d-brightness');
       brightness = element('span');
-      slider = element('input');
-      slider.type = 'range';
+      slider = field('brightness', 'range');
       slider.min = '0'; slider.max = '100'; slider.step = '1';
       slider.dataset.entity = id;
       slider.setAttribute('aria-label', `${control.name}: brightness`);
       label.append(brightness, slider);
       el.append(label);
     }
+    if (control.rgb) {
+      const colors = element('fieldset', 't3d-colour'); colors.append(element('legend', '', 'Colour'));
+      const choices = element('div', 't3d-swatches');
+      for (const [name, rgb] of SWATCHES) {
+        const swatch = button('', 'color-swatch', id); swatch.dataset.hex = rgbHex(rgb); swatch.dataset.colorName = name;
+        swatch.title = name; const dot = element('span', 't3d-swatch-dot'); dot.setAttribute('aria-hidden', 'true');
+        dot.style.backgroundColor = swatch.dataset.hex; swatch.append(dot); choices.append(swatch); swatches.push(swatch);
+      }
+      const label = element('label', 't3d-colour-picker', 'Choose colour'); colorInput = field('color', 'color'); label.append(colorInput);
+      colorReading = element('p', 't3d-light-reading'); colorChoice = element('p', 't3d-light-reading'); colorChoice.hidden = true;
+      colors.append(choices, label, colorReading, colorChoice); el.append(colors);
+    }
+    if (control.colorTemperature) {
+      const label = element('label', 't3d-brightness'); kelvinText = element('span'); kelvinInput = field('kelvin', 'range'); kelvinInput.step = '1';
+      kelvinBounds = element('p', 't3d-light-reading'); label.append(kelvinText, kelvinInput); el.append(label, kelvinBounds);
+    }
     const error = element('p', 't3d-entity-error');
     error.setAttribute('role', 'alert');
     const status = element('p', 't3d-entity-status');
     status.setAttribute('role', 'status');
     el.append(error, status);
-    return { el, key, name, value, info, toggle, camera, slider, brightness, error, status };
+    return { el, key, name, value, info, toggle, camera, slider, brightness, colorInput, colorReading, colorChoice,
+      kelvinInput, kelvinText, kelvinBounds, swatches, inputs, error, status };
   }
 
   _click(e) {
     e.stopPropagation();
     const b = e.target.closest && e.target.closest('button[data-action]');
-    if (!b || b.disabled) return;
+    if (!b || b.disabled || !this.el?.contains(b)) return;
     const id = b.dataset.entity;
     if (b.dataset.action === 'close') this.close();
+    else if (!this._activeControl(b)) return;
     else if (b.dataset.action === 'more-info') { this.close(); this.onMoreInfo(id); }
     else if (b.dataset.action === 'camera-view') this.openCamera(id);
     else if (b.dataset.action === 'toggle') {
       const c = entityControl(this.hass, id);
       if (c.toggle && c.available) this._run(id, id.split('.')[0], 'toggle', { entity_id: id });
+    } else if (b.dataset.action === 'color-swatch') {
+      const c = entityControl(this.hass, id), rgb = hexRgb(b.dataset.hex);
+      if (c.rgb && c.available && rgb) this._run(id, 'light', 'turn_on', { entity_id: id, rgb_color: rgb });
     }
   }
 
+  _activeControl(target) {
+    const row = target && this._rows.get(target.dataset.entity);
+    return !!row && !!this.el?.contains(target) && row.el.contains(target) && this._entityIds().includes(target.dataset.entity);
+  }
+
+  _clearInput(input) { input.dataset.editing = ''; delete input.dataset.context; }
+
   _sliderInput(e) {
     const slider = e.target;
-    if (slider.type !== 'range' || slider.disabled) return;
+    if (!slider.dataset.lightControl || slider.disabled || !this._activeControl(slider)) return;
+    const control = entityControl(this.hass, slider.dataset.entity);
+    if (!control.available || this._pending.has(slider.dataset.entity)) return;
+    delete slider.dataset.cancelled;
     slider.dataset.editing = 'true';
+    slider.dataset.context = inputContext(control, slider.dataset.lightControl);
+    // A native colour dialog can blur before its final change. Keep its unfinished
+    // intent separate from the visible draft, so a later revocation still cancels it.
+    slider.dataset.gestureContext = slider.dataset.context;
     const row = this._rows.get(slider.dataset.entity);
-    if (row) row.brightness.textContent = `Brightness: ${slider.value}%`;
+    if (slider.dataset.lightControl === 'brightness') row.brightness.textContent = `Brightness: ${slider.value}%`;
+    else if (slider.dataset.lightControl === 'kelvin') { row.kelvinText.textContent = `Choose temperature: ${slider.value} K`; slider.setAttribute('aria-valuetext', `${slider.value} kelvin`); }
+    else if (slider.dataset.lightControl === 'color') { row.colorChoice.textContent = `Choice: ${slider.value}`; row.colorChoice.hidden = false; }
   }
 
   _sliderChange(e) {
     const slider = e.target;
-    if (slider.type !== 'range' || slider.disabled) return;
+    if (!slider.dataset.lightControl || slider.disabled || !this._activeControl(slider)) return;
     const id = slider.dataset.entity;
     const c = entityControl(this.hass, id);
-    if (!c.dimmable || !c.available) return;
-    const percent = Math.min(100, Math.max(0, Number(slider.value)));
-    slider.dataset.editing = '';
-    if (!Number.isFinite(percent)) return;
-    this._run(id, 'light', percent === 0 ? 'turn_off' : 'turn_on',
-      percent === 0 ? { entity_id: id } : { entity_id: id, brightness: Math.round(percent * 255 / 100) });
+    const kind = slider.dataset.lightControl;
+    const context = slider.dataset.context || slider.dataset.gestureContext;
+    if (!c.available || this._pending.has(id) || slider.dataset.cancelled === 'true'
+      || context && context !== inputContext(c, kind)) {
+      if (slider.dataset.editing === 'true' || context) slider.dataset.cancelled = 'true';
+      delete slider.dataset.gestureContext;
+      this._clearInput(slider); this._refreshRows(); return;
+    }
+    delete slider.dataset.gestureContext;
+    this._clearInput(slider);
+    if (kind === 'brightness' && c.dimmable) {
+      const percent = Number(slider.value);
+      if (!Number.isFinite(percent) || percent < 0 || percent > 100) return;
+      this._run(id, 'light', percent === 0 ? 'turn_off' : 'turn_on',
+        percent === 0 ? { entity_id: id } : { entity_id: id, brightness: Math.round(percent * 255 / 100) });
+    } else if (kind === 'color' && c.rgb) {
+      const rgb = hexRgb(slider.value);
+      if (rgb) this._run(id, 'light', 'turn_on', { entity_id: id, rgb_color: rgb });
+    } else if (kind === 'kelvin' && c.colorTemperature) {
+      const kelvin = Number(slider.value);
+      if (Number.isInteger(kelvin) && kelvin >= c.minKelvin && kelvin <= c.maxKelvin)
+        this._run(id, 'light', 'turn_on', { entity_id: id, color_temp_kelvin: kelvin });
+    }
   }
 
   async _run(id, domain, service, data) {
-    if (this._pending.has(id)) return;
+    if (!this.el || !this._rows.has(id) || this._pending.has(id)) return;
     const session = this._session;
     this._errors.delete(id);
     this._pending.add(id);

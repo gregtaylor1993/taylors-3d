@@ -2,19 +2,23 @@
 // update() when the object's state changed. Real lights come from the layer's fixed pool.
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import { lightColor, lightLevel } from './logic.js';
+import { readLightAppearance } from '../light-state.js';
 
 const fin = (v) => typeof v === 'number' && Number.isFinite(v);
-const vec3 = (a) => (Array.isArray(a) && a.length === 3 && a.every(fin) ? a.slice() : null);
+// Values beyond this generous rendering limit are invalid hints and use defaults.
+// It keeps uniforms and derived grouped intensities comfortably within GPU Float32 range.
+export const MAX_LIGHT_HINT = 1e6;
+const magnitude = (v) => fin(v) && Math.abs(v) <= MAX_LIGHT_HINT;
+const vec3 = (a) => (Array.isArray(a) && a.length === 3 && a.every(magnitude) ? a.slice() : null);
 
 // Invalid hints fall back to defaults; down / up beams are point lights.
 export function hintDefaults(hints) {
   const h = hints && typeof hints === 'object' ? hints : {};
   return {
     beam: h.beam === 'spot' ? 'spot' : 'point',
-    max: fin(h.max) && h.max >= 0 ? h.max : 5,
-    distance: fin(h.distance) && h.distance >= 0 ? h.distance : 0,
-    decay: fin(h.decay) && h.decay >= 0 ? h.decay : 2,
+    max: magnitude(h.max) && h.max >= 0 ? h.max : 5,
+    distance: magnitude(h.distance) && h.distance >= 0 ? h.distance : 0,
+    decay: magnitude(h.decay) && h.decay >= 0 ? h.decay : 2,
     angle: fin(h.angle) ? Math.min(80, Math.max(5, h.angle)) : 24,
     penumbra: fin(h.penumbra) && h.penumbra >= 0 && h.penumbra <= 1 ? h.penumbra : 0.6,
     target: vec3(h.target),
@@ -77,7 +81,7 @@ function claimGlow(part, glow) {
       return c;
     });
     glow.material = Array.isArray(original) ? clones : clones[0];
-    entry = { original, clones, owners: new Set() };
+    entry = { original, clones, owners: new Set(), paintKey: '0|0,0,0' };
     shared.set(glow, entry);
   }
   entry.owners.add(part);
@@ -86,7 +90,7 @@ function claimGlow(part, glow) {
 function prepareLight(obj, { root }, pool) {
   const hints = hintDefaults(obj.hints);
   const glow = obj.node ? findGlow(obj.node, obj.glow || 'glow') : null;
-  const part = { obj, glow, hints, pool, level: 0, color: null, anchor: null };
+  const part = { obj, glow, hints, pool, level: 0, output: 0, color: null, anchor: null, appearance: null };
   claimGlow(part, glow);
   part.anchor = obj.node ? anchorOf(obj, glow, root, hints.offset) : new THREE.Vector3();
   return part;
@@ -96,8 +100,11 @@ function paint(glow) {
   const entry = glow && shared.get(glow);
   if (!entry) return;
   let best = null;
-  for (const p of entry.owners) if (!best || p.level > best.level) best = p;
+  for (const p of entry.owners) if (!best || (p.output ?? p.level) > (best.output ?? best.level)) best = p;
   const level = best ? best.level : 0, c = (best && best.color) || [0, 0, 0];
+  const key = `${level}|${c.join(',')}`;
+  if (key === entry.paintKey) return;
+  entry.paintKey = key;
   for (const m of entry.clones) {
     if (m.emissive) m.emissive.setRGB(c[0] / 255, c[1] / 255, c[2] / 255, THREE.SRGBColorSpace);
     m.emissiveIntensity = level * 3;
@@ -105,12 +112,17 @@ function paint(glow) {
 }
 
 function updateLight(part, chain) {
-  const level = chain.lit ? lightLevel(chain.source || { state: 'on', attributes: {} }) : 0;
-  const color = lightColor(chain.source);
+  // A validated on/off relay chain has no light source and uses an explicit display fallback.
+  const appearance = readLightAppearance(chain.source || { state: chain.unavailable ? 'unavailable' : chain.lit ? 'on' : 'off', attributes: {} });
+  const output = chain.lit ? appearance.output : 0;
+  const level = output > 0 ? appearance.level : 0;
+  const color = output > 0 ? appearance.color : [0, 0, 0];
+  part.appearance = appearance;
   part.level = level;
+  part.output = output;
   part.color = color;
   paint(part.glow);
-  return { lit: level > 0, level, color };
+  return { lit: output > 0, level, color, output, appearance };
 }
 
 function disposeLight(part) {
@@ -199,6 +211,7 @@ function prepareStatus(obj, ctx, glowName, withLabel) {
 function updateStatus(part, color) {
   part.color = color;
   part.level = color ? 1 : 0;
+  part.output = color ? Math.max(...color) / 255 : 0;
   paint(part.glow);
   return { lit: false, level: part.level, color };
 }

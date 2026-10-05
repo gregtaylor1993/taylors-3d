@@ -1,10 +1,12 @@
 // Object popup: a small panel next to a model object with its controls (toggle, brightness,
 // colour, the group chain) and read-only values. popupRows() is the pure part (unit-tested).
 import { typeOf } from './types.js';
+import { lightCapabilities, readLightAppearance } from '../light-state.js';
+import { entityMetadata } from '../entity-metadata.js';
 
 export const ACTIONS = new Set(['toggle', 'more-info', 'popup', 'none']);
 const KINDS = new Set(['toggle', 'brightness', 'color', 'state', 'battery', 'power', 'energy', 'temperature', 'mode', 'start_dock']);
-const COLOR_MODES = new Set(['hs', 'rgb', 'xy', 'rgbw', 'rgbww']);
+const SOURCE_ERRORS = new Set(['missing', 'state', 'attributes', 'domain', 'restored', 'unavailable', 'unknown']);
 const TOGGLE_DOMAINS = new Set(['light', 'switch', 'fan', 'input_boolean']);
 export const SWATCHES = [
   [255, 59, 48], [255, 149, 0], [255, 214, 10], [52, 199, 89], [48, 213, 200], [10, 132, 255], [175, 82, 222], [255, 55, 145],
@@ -13,9 +15,13 @@ const LABELS = {
   toggle: 'On / off', brightness: 'Brightness', color: 'Colour', state: 'State', battery: 'Battery', power: 'Power',
   energy: 'Energy', temperature: 'Temperature', mode: 'Mode', start_dock: 'Mower',
 };
+const COLOR_NAMES = ['Red', 'Orange', 'Yellow', 'Green', 'Teal', 'Blue', 'Purple', 'Pink'];
+const finite = (v) => typeof v === 'number' && Number.isFinite(v);
 
 const domainOf = (e) => String(e).split('.')[0];
-const bad = (s) => !s || s.state === 'unavailable' || s.state === 'unknown';
+const bad = (s, e = '') => !s || s.state === 'unavailable' || s.state === 'unknown'
+  || (s.attributes && Object.hasOwn(s.attributes, 'restored') && s.attributes.restored !== false)
+  || (e.startsWith('light.') && readLightAppearance(s).diagnostics.some((d) => SOURCE_ERRORS.has(d.code)));
 const nameOf = (states, e) => (states[e] && states[e].attributes && states[e].attributes.friendly_name) || e;
 const withUnit = (v, u) => (u ? `${v} ${u}` : String(v));
 
@@ -80,16 +86,19 @@ function readValue(kind, e, s) {
  */
 export function popupRows(obj, chain, states = {}, groups = {}) {
   const unavailable = [{ kind: 'state', label: 'State', value: 'unavailable' }];
-  if (!chain || !chain.entities || !chain.entities.some((e) => !bad(states[e]))) return unavailable;
+  if (!chain || !chain.entities || !chain.entities.some((e) => !bad(states[e], e))) return unavailable;
   const g = obj.group && groups[obj.group];
   const ctrl = (g && g.entity && chain.entities.includes(g.entity) && g.entity) || null;
   const own = chain.entities.find((e) => e !== ctrl) || null;
-  const ownBad = !!own && bad(states[own]);
+  const ownBad = !!own && bad(states[own], own);
   // an unavailable own entity: only the (usable) controller row and the reason
   const main = ownBad ? null : own || ctrl;
-  const light = chain.entities.find((e) => e.startsWith('light.') && !bad(states[e])) || null;
+  const light = chain.entities.find((e) => e.startsWith('light.') && !bad(states[e], e)) || null;
   const ls = light ? states[light] : null;
-  const modes = ls && Array.isArray(ls.attributes.supported_color_modes) ? ls.attributes.supported_color_modes : null;
+  const caps = lightCapabilities(ls), appearance = readLightAppearance(ls);
+  const min = finite(caps.minKelvin) ? Math.ceil(caps.minKelvin) : null;
+  const max = finite(caps.maxKelvin) ? Math.floor(caps.maxKelvin) : null;
+  const whiteKelvin = caps.valid && caps.colorTemperature && min > 0 && min <= max ? min : null;
   const ui = obj.ui && Array.isArray(obj.ui.popup) ? obj.ui.popup : typeOf(obj.type).defaults.popup;
   const want = [];
   for (const k of ui) {
@@ -101,12 +110,12 @@ export function popupRows(obj, chain, states = {}, groups = {}) {
     const label = LABELS[kind];
     if (kind === 'toggle') rows.push({ kind, entity: main, label, value: states[main].state === 'on' });
     else if (kind === 'brightness') {
-      if (!ls || (modes && modes.every((m) => m === 'onoff'))) continue;
-      const b = ls.attributes.brightness;
-      rows.push({ kind, entity: light, label, value: ls.state === 'on' && typeof b === 'number' ? b : ls.state === 'on' ? 255 : 0 });
+      if (!caps.valid || !caps.brightness) continue;
+      const b = ls.attributes?.brightness;
+      rows.push({ kind, entity: light, label, value: ls.state === 'off' ? 0 : finite(b) && b >= 0 && b <= 255 ? b : null });
     } else if (kind === 'color') {
-      if (!modes || !modes.some((m) => COLOR_MODES.has(m))) continue;
-      rows.push({ kind, entity: light, label, value: Array.isArray(ls.attributes.rgb_color) ? ls.attributes.rgb_color.slice(0, 3) : null });
+      if (!caps.valid || (!caps.rgb && whiteKelvin === null)) continue;
+      rows.push({ kind, entity: light, label, rgb: caps.rgb, whiteKelvin, value: appearance.colorKnown ? appearance.color : null });
     } else if (kind === 'start_dock') {
       if (domainOf(main) === 'lawn_mower') rows.push({ kind, entity: main, label, value: states[main].state });
     } else {
@@ -133,7 +142,8 @@ const STOP = ['pointerdown', 'pointerup', 'pointermove', 'pointercancel', 'click
 /**
  * The DOM popup. root: the stage (position: relative). opts:
  *   onAction(domain, service, data), project(world: Vector3) -> [clientX, clientY] | null,
- *   resolve(id) -> { obj, chain, states, groups } | null (current data for the open object).
+ *   resolve(id) -> { obj, chain, states, groups, hass? } | null (current data for the open object).
+ * hass supplies current registry, connection and service guards. State-only callers remain supported.
  */
 export class ObjectPopup {
   constructor(root, { onAction, project, resolve, anchor } = {}) {
@@ -147,6 +157,9 @@ export class ObjectPopup {
     this._anchor = null;
     this._key = null;
     this._sliding = false;
+    this._pending = new Set();
+    this._errors = new Map();
+    this._session = 0;
     this.closedBy = null; // the outside pointerdown that closed the popup (that gesture must not act)
     this._onOutside = (e) => {
       if (!this.el || e.composedPath().includes(this.el)) return;
@@ -166,13 +179,23 @@ export class ObjectPopup {
     this._anchor = anchorWorld && anchorWorld.clone ? anchorWorld.clone() : anchorWorld;
     const el = document.createElement('div');
     el.className = 'fp-popup';
-    el.innerHTML = `<div class="fp-pop-head"><span class="fp-pop-title"></span><button class="fp-pop-x" title="Close">×</button></div><div class="fp-pop-rows"></div>`;
+    el.innerHTML = `<style>
+      .fp-popup button, .fp-popup input[type=range] { min-height: 44px; }
+      .fp-popup .fp-swatch { min-width: 44px; }
+      .fp-popup .fp-pop-row.brightness { flex-wrap: wrap; }
+      .fp-popup .fp-pop-reading, .fp-popup .fp-pop-status { flex-basis: 100%; font-size: 12px; overflow-wrap: anywhere; }
+      .fp-popup button:disabled, .fp-popup input:disabled { opacity: .5; cursor: default; }
+      .fp-popup button:focus-visible, .fp-popup input:focus-visible { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
+    </style><div class="fp-pop-head"><span class="fp-pop-title"></span><button class="fp-pop-x" title="Close" aria-label="Close object controls">×</button></div><div class="fp-pop-rows"></div>`;
     el.querySelector('.fp-pop-title').textContent = obj.label || obj.id;
     for (const t of STOP) el.addEventListener(t, (e) => e.stopPropagation()); // no HA long-press / orbit / marker
     el.addEventListener('keydown', (e) => { if (e.key === 'Escape') this.close(); }); // window never sees it (stopped)
     el.addEventListener('click', (e) => this._click(e));
     el.addEventListener('change', (e) => this._change(e));
     el.addEventListener('pointerdown', (e) => { if (e.target.type === 'range') this._sliding = true; });
+    el.addEventListener('pointercancel', (e) => { if (e.target.type === 'range') { this._sliding = false; e.target.dataset.editing = ''; delete e.target.dataset.gesture; e.target.dataset.cancelled = 'true'; this.update(); } });
+    el.addEventListener('input', (e) => { if (e.target.type === 'range' && !e.target.disabled) { this._sliding = true; e.target.dataset.editing = 'true'; e.target.dataset.gesture = 'true'; delete e.target.dataset.cancelled; } });
+    el.addEventListener('focusout', (e) => { if (e.target.type === 'range') { this._sliding = false; e.target.dataset.editing = ''; this.update(); } });
     el.querySelector('.fp-pop-x').addEventListener('click', () => this.close());
     this.el = el;
     this.root.append(el);
@@ -192,10 +215,19 @@ export class ObjectPopup {
 
   // Re-read the object's rows; same row layout: values only (a slider being dragged keeps its value).
   update() {
+    if (!this.el || this._updating) return;
+    // Chrome blurs removed inputs synchronously. Their handler must not inspect
+    // the old rows after the new layout key has been selected but before mounting.
+    this._updating = true;
+    try { this._updateNow(); }
+    finally { this._updating = false; }
+  }
+
+  _updateNow() {
     if (!this.el) return;
     const rows = this._rows();
     if (!rows) { this.close(); return; }
-    const key = rows.map((r) => `${r.kind}:${r.entity || ''}`).join('|');
+    const key = rows.map((r) => `${r.kind}:${r.entity || ''}:${r.kind === 'color' ? `${r.rgb}:${r.whiteKelvin !== null}` : ''}`).join('|');
     const box = this.el.querySelector('.fp-pop-rows');
     if (key !== this._key) {
       this._key = key;
@@ -205,6 +237,16 @@ export class ObjectPopup {
       const row = box.children[i];
       if (!row) return;
       row.dataset.entity = r.entity || '';
+      for (const button of row.querySelectorAll('[data-act]')) {
+        button.disabled = !this._allowed(r, button.dataset.act) || this._pending.has(r.entity);
+        button.setAttribute('aria-label', r.kind === 'color' ? button.title : `${r.label}: ${r.entity || ''}`);
+      }
+      const status = row.querySelector('.fp-pop-status');
+      if (status) {
+        status.textContent = this._errors.get(r.entity) || (this._pending.has(r.entity) ? 'Sending command…' : '');
+        status.hidden = !status.textContent;
+        status.setAttribute('role', this._errors.has(r.entity) ? 'alert' : 'status');
+      }
       if (r.kind === 'toggle' || r.kind === 'chain') {
         const b = row.querySelector('.fp-switch');
         b.classList.toggle('on', !!r.value);
@@ -212,11 +254,23 @@ export class ObjectPopup {
         if (r.kind === 'chain') row.querySelector('.fp-pop-label').textContent = r.label;
       } else if (r.kind === 'brightness') {
         const input = row.querySelector('input');
-        if (!this._sliding) input.value = String(Math.max(1, r.value));
-        row.classList.toggle('off', !r.value);
+        input.disabled = !this._allowed(r, 'brightness') || this._pending.has(r.entity);
+        if (input.disabled) {
+          if (input.dataset.editing === 'true' || input.dataset.gesture === 'true' || this._sliding) input.dataset.cancelled = 'true';
+          input.dataset.editing = '';
+          delete input.dataset.gesture;
+        }
+        if ((!this._sliding && input.dataset.editing !== 'true') || input.disabled) input.value = String(Math.max(1, r.value ?? 1));
+        row.querySelector('.fp-pop-reading').textContent = r.value === null ? 'Brightness: not reported' : `Brightness: ${Math.round(r.value / 255 * 100)}%`;
+        row.classList.toggle('off', r.value === 0);
       } else if (r.kind === 'color') {
         const v = r.value ? r.value.join(',') : '';
-        for (const s of row.querySelectorAll('.fp-swatch')) s.classList.toggle('on', !!v && s.dataset.rgb === v);
+        for (const s of row.querySelectorAll('.fp-swatch')) {
+          const selected = !!v && s.dataset.rgb === v;
+          s.classList.toggle('on', selected); s.setAttribute('aria-pressed', String(selected));
+          if (s.dataset.act === 'white') s.dataset.kelvin = String(r.whiteKelvin);
+        }
+        row.querySelector('.fp-pop-reading').textContent = v ? `Current colour: rgb(${v})` : 'Current colour: not reported';
       } else if (r.kind === 'reason') {
         row.textContent = r.label;
       } else if (r.kind !== 'start_dock') {
@@ -227,16 +281,18 @@ export class ObjectPopup {
 
   _rowHtml(r) {
     const label = `<span class="fp-pop-label">${esc(r.label)}</span>`;
+    const status = '<span class="fp-pop-status" hidden></span>';
     switch (r.kind) {
       case 'toggle': case 'chain':
-        return `<div class="fp-pop-row ${r.kind}">${label}<button class="fp-switch" role="switch" data-act="toggle"><span></span></button></div>`;
+        return `<div class="fp-pop-row ${r.kind}">${label}<button class="fp-switch" role="switch" data-act="toggle"><span></span></button>${status}</div>`;
       case 'brightness':
-        return `<div class="fp-pop-row brightness">${label}<input type="range" min="1" max="255" step="1"></div>`;
+        return `<div class="fp-pop-row brightness">${label}<input type="range" min="1" max="255" step="1" aria-label="${esc(r.entity)}: brightness"><span class="fp-pop-reading"></span>${status}</div>`;
       case 'color':
-        return `<div class="fp-pop-row color">${SWATCHES.map((c) => `<button class="fp-swatch" data-act="rgb" data-rgb="${c.join(',')}" style="background:rgb(${c.join(',')})"></button>`).join('')}`
-          + '<button class="fp-swatch white" data-act="white" title="Warm white"></button></div>';
+        return `<div class="fp-pop-row color">${r.rgb ? SWATCHES.map((c, i) => `<button class="fp-swatch" data-act="rgb" data-rgb="${c.join(',')}" title="Set ${COLOR_NAMES[i].toLowerCase()}" style="background:rgb(${c.join(',')})"></button>`).join('') : ''}`
+          + (r.whiteKelvin !== null ? '<button class="fp-swatch white" data-act="white" title="Warmest supported white"></button>' : '')
+          + `<span class="fp-pop-reading"></span>${status}</div>`;
       case 'start_dock':
-        return `<div class="fp-pop-row start_dock">${label}<span class="fp-pop-btns"><button data-act="start">Start</button><button data-act="dock">Dock</button></span></div>`;
+        return `<div class="fp-pop-row start_dock">${label}<span class="fp-pop-btns"><button data-act="start">Start</button><button data-act="dock">Dock</button></span>${status}</div>`;
       case 'reason':
         return `<div class="fp-pop-row reason">${esc(r.label)}</div>`;
       default:
@@ -248,22 +304,63 @@ export class ObjectPopup {
     const b = e.target.closest && e.target.closest('[data-act]');
     const row = b && b.closest('.fp-pop-row');
     const entity = row && row.dataset.entity;
-    if (!b || !entity) return;
+    if (!b || b.disabled || !entity || !this.el?.contains(b)) return;
     const act = b.dataset.act;
-    if (act === 'toggle') this.onAction(...toggleCall(entity));
-    else if (act === 'rgb') this.onAction('light', 'turn_on', { entity_id: entity, rgb_color: b.dataset.rgb.split(',').map(Number) });
-    else if (act === 'white') this.onAction('light', 'turn_on', { entity_id: entity, color_temp_kelvin: 2700 });
-    else if (act === 'start') this.onAction('lawn_mower', 'start_mowing', { entity_id: entity });
-    else if (act === 'dock') this.onAction('lawn_mower', 'dock', { entity_id: entity });
+    const current = this._currentRow(row);
+    if (!current || !this._allowed(current, act)) { this.update(); return; }
+    if (act === 'toggle') this._run(entity, ...toggleCall(entity));
+    else if (act === 'rgb') {
+      const rgb = b.dataset.rgb.split(',').map(Number);
+      if (rgb.length === 3 && rgb.every((v) => Number.isInteger(v) && v >= 0 && v <= 255)) this._run(entity, 'light', 'turn_on', { entity_id: entity, rgb_color: rgb });
+    } else if (act === 'white' && Number(b.dataset.kelvin) === current.whiteKelvin)
+      this._run(entity, 'light', 'turn_on', { entity_id: entity, color_temp_kelvin: current.whiteKelvin });
+    else if (act === 'start') this._run(entity, 'lawn_mower', 'start_mowing', { entity_id: entity });
+    else if (act === 'dock') this._run(entity, 'lawn_mower', 'dock', { entity_id: entity });
   }
 
   // brightness: one call when the slider is released ('change'), not per 'input' step
   _change(e) {
-    if (e.target.type !== 'range') return;
+    if (e.target.type !== 'range' || e.target.disabled || !this.el?.contains(e.target)) return;
     this._sliding = false;
+    e.target.dataset.editing = '';
+    delete e.target.dataset.gesture;
     const row = e.target.closest('.fp-pop-row');
-    const entity = row && row.dataset.entity;
-    if (entity) this.onAction('light', 'turn_on', { entity_id: entity, brightness: Math.round(Number(e.target.value)) });
+    const current = this._currentRow(row), value = Number(e.target.value);
+    if (current && e.target.dataset.cancelled !== 'true' && this._allowed(current, 'brightness') && e.target.value !== '' && Number.isInteger(value) && value >= 1 && value <= 255)
+      this._run(current.entity, 'light', 'turn_on', { entity_id: current.entity, brightness: value });
+    else this.update();
+  }
+
+  _currentRow(row) {
+    if (!row || !this.el?.contains(row)) return null;
+    const rows = this._rows();
+    return rows?.find((r) => r.entity === row.dataset.entity && row.classList.contains(r.kind)) || null;
+  }
+
+  _allowed(row, action) {
+    const r = this._id ? this.resolve(this._id) : null;
+    const state = r?.states?.[row.entity];
+    if (!r || !row.entity || bad(state, row.entity) || this._pending.has(row.entity)) return false;
+    let call = null;
+    if (action === 'toggle' && ['toggle', 'chain'].includes(row.kind)) call = toggleCall(row.entity);
+    else if ((action === 'brightness' && row.kind === 'brightness') || (action === 'rgb' && row.kind === 'color' && row.rgb)
+      || (action === 'white' && row.kind === 'color' && row.whiteKelvin !== null)) call = ['light', 'turn_on'];
+    else if (action === 'start' && row.kind === 'start_dock') call = ['lawn_mower', 'start_mowing'];
+    else if (action === 'dock' && row.kind === 'start_dock') call = ['lawn_mower', 'dock'];
+    if (!call) return false;
+    if (!r.hass) return true;
+    const m = entityMetadata(r.hass, row.entity), h = r.hass;
+    return m.available && !m.hidden && !m.category && h.connected !== false && h.connection?.connected !== false
+      && (!h.services || !!h.services[call[0]]?.[call[1]]);
+  }
+
+  async _run(entity, domain, service, data) {
+    if (!this.el || this._pending.has(entity)) return;
+    const session = this._session;
+    this._pending.add(entity); this._errors.delete(entity); this.update();
+    try { await this.onAction(domain, service, data); }
+    catch (error) { if (this._session === session) this._errors.set(entity, `Command failed: ${error?.message || 'Please try again.'}`); }
+    finally { if (this._session === session) { this._pending.delete(entity); this.update(); } }
   }
 
   // Next to the object's anchor (called after every render), kept inside the stage; hidden while
@@ -286,6 +383,8 @@ export class ObjectPopup {
   }
 
   close() {
+    this._session++;
+    this._pending.clear(); this._errors.clear();
     if (!this.el) return;
     window.removeEventListener('pointerdown', this._onOutside, true);
     window.removeEventListener('pointerup', this._onRelease, true);

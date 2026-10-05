@@ -3,6 +3,7 @@
 
 import { autoPlace, signedArea } from './placement.js';
 import { floorsFromHA } from './registry.js';
+import { readLightAppearance } from './light-state.js';
 
 export const DEFAULT_FLOOR_HEIGHT = 2.7;
 export const LEVEL_SPACING = 3;
@@ -121,13 +122,12 @@ export function markerPositions(markers, layout, hass, floors, attachAt = null) 
   return out;
 }
 
-// Light glow: colour from rgb_color (or a warm white), strength from brightness.
+// Drawn-plan lights use the same validated appearance as model lamps. The warm
+// legacy/non-colour fallback remains decorative; zero or uncertain output is dark.
 export function lightGlow(stateObj) {
-  if (!stateObj || stateObj.state !== 'on') return null;
-  const a = stateObj.attributes || {};
-  const rgb = Array.isArray(a.rgb_color) && a.rgb_color.length === 3 ? a.rgb_color : [255, 196, 120];
-  const b = Number.isFinite(a.brightness) ? a.brightness / 255 : 1;
-  return { rgb, strength: 0.25 + 0.75 * Math.max(0, Math.min(1, b)) };
+  const appearance = readLightAppearance(stateObj);
+  if (!(appearance.output > 0)) return null;
+  return { rgb: appearance.color, strength: 0.25 + 0.75 * appearance.level };
 }
 
 // Room label text: name plus size (bounding width × depth for rectangles, area otherwise).

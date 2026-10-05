@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as THREE from 'three';
 import { hintDefaults, findGlow, TYPES, typeOf, statusColor, objectLabel } from '../src/objects/types.js';
 
@@ -115,7 +115,8 @@ describe('types', () => {
     const part = TYPES.light.prepare({ id: 'l', type: 'light', node, hints: {} }, { root });
     const on = { state: 'on', attributes: { brightness: 255, rgb_color: [255, 0, 0] } };
     let r = TYPES.light.update(part, { lit: true, source: on });
-    expect(r).toEqual({ lit: true, level: 1, color: [255, 0, 0] });
+    expect(r).toMatchObject({ lit: true, level: 1, color: [255, 0, 0], output: 1 });
+    expect(r.appearance).toMatchObject({ status: 'ready', brightnessKnown: true, colorKnown: true });
     expect(glow.material.emissiveIntensity).toBe(3);
     expect(glow.material.emissive.r).toBeCloseTo(1);
     r = TYPES.light.update(part, { lit: false, source: on });
@@ -170,6 +171,28 @@ describe('types', () => {
     const { root, node } = lamp();
     expect(TYPES.light_strip.prepare({ id: 's', node, hints: {} }, { root }).pool).toBe(false);
     expect(TYPES.light_strip.prepare({ id: 's', node, hints: { max: 3 } }, { root }).pool).toBe(true);
+  });
+
+  it('a shared glow selects actual emitted output rather than the largest brightness fraction', () => {
+    const { root, node, glow, mat } = lamp();
+    const a = TYPES.light.prepare({ id: 'a', type: 'light', node }, { root });
+    const b = TYPES.light.prepare({ id: 'b', type: 'light', node }, { root });
+    const clone = glow.material;
+    const on = (brightness, rgb_color, extra = {}) => ({ lit: true, source: { state: 'on', attributes: {
+      supported_color_modes: ['rgb'], color_mode: 'rgb', brightness, rgb_color, ...extra,
+    } } });
+    TYPES.light.update(a, on(255, [1, 0, 0]));
+    TYPES.light.update(b, on(128, [255, 255, 255]));
+    expect(a.level).toBe(1); expect(a.output).toBe(1 / 255); expect(b.output).toBe(128 / 255);
+    expect(clone.emissive.toArray()).toEqual([1, 1, 1]); expect(clone.emissiveIntensity).toBeCloseTo(128 / 255 * 3);
+    const paint = vi.spyOn(clone.emissive, 'setRGB'), version = clone.version;
+    TYPES.light.update(a, on(255, [1, 0, 0], { friendly_name: 'Renamed' }));
+    TYPES.light.update(b, on(128, [255, 255, 255], { friendly_name: 'Another name' }));
+    expect(paint).not.toHaveBeenCalled(); expect(glow.material).toBe(clone); expect(clone.version).toBe(version);
+    TYPES.light.dispose(b); // remaining weak owner is still shown, not lost.
+    expect(glow.material).toBe(clone); expect(clone.emissive.r).toBeGreaterThan(0); expect(clone.emissive.g).toBe(0);
+    expect(clone.emissiveIntensity).toBe(3);
+    TYPES.light.dispose(a); expect(glow.material).toBe(mat);
   });
 
   it('generic: no visual change', () => {

@@ -31,6 +31,10 @@ jobs:
         run: node scripts/calibration-check.mjs && node scripts/security-check.mjs && node scripts/weather-check.mjs
         env:
           CHROME_PATH: /usr/bin/google-chrome
+      - name: Headless browser checks (room lighting and light controls)
+        run: node scripts/lighting-check.mjs
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
       - uses: actions/upload-artifact@v4
         if: always()
         with:

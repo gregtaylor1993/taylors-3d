@@ -801,7 +801,7 @@ class Taylors3dCard extends HTMLElement {
       resolve: (id) => {
         const o = this._objects.objectAt(id);
         if (!o || !this._hass || (o.binding && o.binding.hidden)) return null;
-        return { obj: o.obj, chain: o.chain, states: this._hass.states, groups: this._groups };
+        return { obj: o.obj, chain: o.chain, states: this._hass.states, groups: this._groups, hass: this._hass };
       },
     });
     this._devicePopup = new DevicePopup(this._stage, {
@@ -2278,7 +2278,8 @@ class Taylors3dCard extends HTMLElement {
     // no plan position, their arrival must not recreate every visible marker.
     const renderKey = JSON.stringify(this._markers.filter((marker) => this._positions.has(marker.id)).map((marker) => {
       const p = this._positions.get(marker.id);
-      return [marker.id, marker.entityId, marker.domain, marker.deviceClass, marker.name, marker.areaId,
+      // Names belong to DOM captions/accessibility, not marker geometry or lights.
+      return [marker.id, marker.entityId, marker.domain, marker.deviceClass, marker.areaId,
         marker.secondaryId, (marker.entities || []).map((entity) => entity.eid || entity), p, this._view.floorElevation(p.floorId)];
     }));
     if (this._markerRenderKey === renderKey) { this._applyMarkerStates(); return; }
@@ -2370,7 +2371,8 @@ class Taylors3dCard extends HTMLElement {
       const el = this._markerEls.get(m.id);
       if (!el) continue;
       const st = h.states[m.entityId];
-      el.classList.toggle('active', isActive(st));
+      const g = m.domain === 'light' ? lightGlow(st) : null;
+      el.classList.toggle('active', m.domain === 'light' ? !!g : isActive(st));
       el.classList.toggle('unavailable', !st || st.state === 'unavailable');
       const icon = el.querySelector('ha-icon');
       const ic = m.id === this._mowerMarkerId ? 'mdi:robot-mower' : iconFor(h, m.entityId);
@@ -2379,10 +2381,10 @@ class Taylors3dCard extends HTMLElement {
       el.querySelector('.fp-val').textContent = own || (m.secondaryId ? displayValue(h, m.secondaryId) : '');
       const name = st && st.attributes.friendly_name;
       el.title = m.name + (name && name !== m.name ? ' – ' + name : '');
+      el.setAttribute('aria-label', `Open ${m.name} controls`);
 
       if (m.domain === 'light') {
-        const g = lightGlow(st);
-        el.style.setProperty('--fp-light', g && st.attributes.rgb_color ? `rgb(${g.rgb.join(',')})` : '');
+        el.style.setProperty('--fp-light', g ? `rgb(${g.rgb.join(',')})` : '');
         const p = this._positions.get(m.id);
         if (g && p) glows.push({ id: m.id, x: p.x, y: p.y, floorId: p.floorId, ...g });
       }
@@ -2392,6 +2394,10 @@ class Taylors3dCard extends HTMLElement {
 
   _tap(m) {
     if (!this._layout) return;
+    // A retained marker's event listener can predate a name-only registry update.
+    // Resolve its current metadata and reject a queued click for a removed marker.
+    m = (this._markers || []).find((current) => current.id === m.id);
+    if (!m) return;
     if (this._config.device_tap_action !== 'toggle') {
       this._popup.close();
       const p = this._positions.get(m.id);

@@ -1,5 +1,6 @@
 // A small fake Home Assistant: registries, states, services, websocket, a mower driving circles.
 import { DEMO_LAYOUT } from './layout.js';
+import { readLightAppearance } from '../src/light-state.js';
 
 const floors = {
   ground: { floor_id: 'ground', name: 'Ground floor', level: 0 },
@@ -47,7 +48,13 @@ function device(id, name, area, list) {
 }
 const temp = (v) => ({ device_class: 'temperature', unit_of_measurement: '°C', state: v });
 const sensor = (eid, v, dc, unit) => [eid, v, { device_class: dc, unit_of_measurement: unit }];
-const light = (eid, on, brightness = 255, rgb) => [eid, on ? 'on' : 'off', on ? { brightness, ...(rgb ? { rgb_color: rgb } : {}) } : {}];
+// Simulated colour lamps expose actual modern HA capabilities. White-only demo
+// lamps are dimmable, without pretending they support colour or Kelvin commands.
+const light = (eid, on, brightness = 255, rgb) => [eid, on ? 'on' : 'off', {
+  supported_color_modes: rgb ? ['rgb', 'color_temp'] : ['brightness'],
+  ...(rgb ? { min_color_temp_kelvin: 2200, max_color_temp_kelvin: 6500 } : {}),
+  ...(on ? { color_mode: rgb ? 'rgb' : 'brightness', brightness, ...(rgb ? { rgb_color: rgb } : {}) } : {}),
+}];
 
 device('living_ceiling', 'Living ceiling', 'living_room', [light('light.living_ceiling', true, 210, [255, 190, 120])]);
 device('floor_lamp', 'Floor lamp', 'living_room', [light('light.floor_lamp', true, 150, [110, 130, 255])]);
@@ -151,9 +158,20 @@ export function createMockHass({ onChange }) {
       const on = service === 'toggle' ? s.state !== 'on' : service === 'turn_on';
       const attrs = { ...s.attributes };
       if (s.entity_id.startsWith('light.')) {
-        if (on) attrs.brightness = data.brightness ?? attrs.brightness ?? 255;
+        if (on) {
+          attrs.brightness = data.brightness ?? attrs.brightness ?? 255;
+          if (Array.isArray(attrs.supported_color_modes))
+            attrs.color_mode = attrs.color_mode || (attrs.supported_color_modes.includes('rgb') ? 'rgb' : 'brightness');
+        }
         else delete attrs.brightness;
-        if (on && data.rgb_color) attrs.rgb_color = data.rgb_color;
+        if (on && data.rgb_color) { attrs.rgb_color = data.rgb_color; attrs.color_mode = 'rgb'; delete attrs.color_temp_kelvin; }
+        if (on && data.color_temp_kelvin !== undefined) {
+          attrs.color_mode = 'color_temp'; attrs.color_temp_kelvin = data.color_temp_kelvin; delete attrs.rgb_color;
+          // Simulate HA's reported conversion, instead of keeping a stale RGB
+          // attribute from the previously selected colour mode.
+          const appearance = readLightAppearance({ entity_id: s.entity_id, state: 'on', attributes: attrs });
+          if (appearance.colorKnown) attrs.rgb_color = appearance.color;
+        }
       }
       update({ [data.entity_id]: { ...s, state: on ? 'on' : 'off', attributes: attrs } });
     },

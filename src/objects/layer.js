@@ -13,6 +13,7 @@ const DEG = Math.PI / 180;
 
 const shown = (node) => { for (let n = node; n; n = n.parent) if (!n.visible) return false; return true; };
 const colorKey = (c) => (c ? c.join(',') : '');
+const renderKey = (p) => JSON.stringify([p.result?.level || 0, p.result?.color || null, p.part.text || null]);
 const within = (node, ancestor) => { for (let n = node; n; n = n.parent) if (n === ancestor) return true; return false; };
 
 // Match types.js's authored anchor priority and ROOT-local offset convention exactly.
@@ -45,6 +46,7 @@ export class ObjectLayer {
         l.shadow.bias = -0.004;
         l.shadow.camera.near = 0.15;
         l.shadow.autoUpdate = false; // re-rendered only when flagged (needsUpdate)
+        l.shadow.intensity = 0; // inactive/requested non-shadow uses keep the fixed shader flag
       }
       this.pool.points.push(l);
       group.add(l);
@@ -161,6 +163,7 @@ export class ObjectLayer {
     const mw = this._mower();
     const mowerEntity = mw ? mw.entity : null;
     for (const [id, p] of this.parts) {
+      const labelWasVisible = p.part.label?.visible;
       const binding = this.bindings.get(id);
       const hidden = !!(binding && binding.hidden); // hidden = ignored as a control: dark, no pool light
       const ctrl = !hidden && p.obj.group && this.groups[p.obj.group] && this.groups[p.obj.group].entity;
@@ -178,15 +181,20 @@ export class ObjectLayer {
         p.chain = hidden ? { lit: false, unavailable: false, source: null, entities: [], reason: null }
           : chainState(p.obj, binding, this.groups, states);
         p.result = p.type.update(p.part, p.chain, { ...ctx, states, entity: hidden ? null : (binding && binding.entity) || null, mowerEntity });
-        changed = true;
+        const key = renderKey(p);
+        if (key !== p.renderKey) changed = true;
+        p.renderKey = key;
         if (prev && (prev.level !== p.result.level || colorKey(prev.color) !== colorKey(p.result.color))) recolour.push(id);
       }
-      if (p.part.label) p.part.label.visible = !!p.part.text && !hidden && visibleLevel(p.obj.level) && shown(p.obj.node);
+      if (p.part.label) {
+        p.part.label.visible = !!p.part.text && !hidden && visibleLevel(p.obj.level) && shown(p.obj.node);
+        if (p.part.label.visible !== labelWasVisible) changed = true;
+      }
       if (!p.part.pool || hidden) continue;
       const h = p.part.hints;
       fixtures.push({
         id, lit: lightsOn && !!p.result.lit, visible: visibleLevel(p.obj.level) && shown(p.obj.node),
-        group: p.obj.group, max: h.max, beam: h.beam, castShadow: h.castShadow,
+        group: p.obj.group, max: h.max, output: p.result.output, beam: h.beam, castShadow: h.castShadow,
       });
     }
     // the model was placed elsewhere: pool positions move with it
@@ -201,11 +209,15 @@ export class ObjectLayer {
         if (p.type.relayout) p.type.relayout(p.part);
       }
     }
-    const sig = placeSig + '|' + fixtures.filter((f) => f.lit && f.visible).map((f) => f.id).join();
+    const budget = lightBudget(fixtures, { points: POINTS, spots: SPOTS, shadows: SHADOWS });
+    // Selected IDs/roles drive assignment, not state identity or brightness ranking order.
+    const selection = [...budget.real].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+      .map(([id, pick]) => `${id}:${pick.kind}:${pick.factor}:${budget.shadows.has(id)}`).join(';');
+    const sig = placeSig + '|' + selection;
     if (sig !== this._budgetSig) {
       this._budgetSig = sig;
       const before = this._slotSig();
-      this._assign(fixtures);
+      this._assign(budget);
       this.stats.budget++;
       // shadow maps: only lit shadow slots whose fixture or position changed (dark slots are never redrawn)
       const redraw = [];
@@ -228,7 +240,7 @@ export class ObjectLayer {
 
   // fixture@position of a lit shadow slot, null when the slot is dark
   _shadowKey(light) {
-    for (const [id, s] of this._slots) if (s.light === light) return `${id}@${light.position.toArray().join()}`;
+    for (const [id, s] of this._slots) if (s.light === light && s.shadow) return `${id}@${light.position.toArray().join()}`;
     return null;
   }
 
@@ -243,29 +255,33 @@ export class ObjectLayer {
     return out;
   }
 
-  _assign(fixtures) {
+  _assign({ real, shadows }) {
     const prev = new Map([...this._slots].map(([id, s]) => [id, s.light]));
-    this._darken();
-    const { real, shadows } = lightBudget(fixtures, { points: POINTS, spots: SPOTS, shadows: SHADOWS });
+    this._darken({ keepShadowRequests: true });
     const pts = this.pool.points;
-    const shadowSlots = pts.slice(0, SHADOWS), freeSlots = pts.slice(SHADOWS);
+    const shadowSlots = pts.slice(0, SHADOWS), freeSlots = pts.slice(SHADOWS), spotSlots = this.pool.spots.slice();
     const order = [...real.keys()];
-    // a fixture keeps the shadow slot it had (no needless shadow map redraws)
-    const take = (id) => {
-      const i = shadowSlots.indexOf(prev.get(id));
-      return i >= 0 ? shadowSlots.splice(i, 1)[0] : null;
+    const take = (slots, id) => {
+      const i = slots.indexOf(prev.get(id));
+      return i >= 0 ? slots.splice(i, 1)[0] : null;
     };
-    // shadow picks first (slots 0..3; own slot, then any), then the rest into 4..7, then any shadow slot left
+    // Reserve surviving slots before allocating newcomers, including points/spots without shadows.
     const picks = order.filter((x) => shadows.has(x));
-    const kept = new Map(picks.map((id) => [id, take(id)]));
-    for (const id of picks) this._slots.set(id, { light: kept.get(id) || shadowSlots.shift(), shadow: true, factor: real.get(id).factor });
-    let spot = 0;
-    for (const id of order) {
-      if (shadows.has(id)) continue;
+    const rest = order.filter((id) => !shadows.has(id));
+    const survivingPoints = new Set(rest.filter((id) => real.get(id).kind === 'point').map((id) => prev.get(id)));
+    const kept = new Map(picks.map((id) => [id, take(shadowSlots, id)]));
+    for (const id of picks) {
+      const free = shadowSlots.findIndex((light) => !survivingPoints.has(light));
+      const light = kept.get(id) || shadowSlots.splice(free >= 0 ? free : 0, 1)[0];
+      this._slots.set(id, { light, shadow: true, factor: real.get(id).factor });
+    }
+    const retained = new Map(rest.map((id) => [id, real.get(id).kind === 'spot'
+      ? take(spotSlots, id) : take(freeSlots, id) || take(shadowSlots, id)]));
+    for (const id of rest) {
       const { kind, factor } = real.get(id);
-      if (kind === 'spot') { this._slots.set(id, { light: this.pool.spots[spot++], shadow: false, factor }); continue; }
-      const light = freeSlots.shift() || take(id) || shadowSlots.shift();
-      this._slots.set(id, { light, shadow: pts.indexOf(light) < SHADOWS, factor });
+      if (kind === 'spot') { this._slots.set(id, { light: retained.get(id) || spotSlots.shift(), shadow: false, factor }); continue; }
+      const light = retained.get(id) || freeSlots.shift() || shadowSlots.shift();
+      this._slots.set(id, { light, shadow: false, factor });
     }
     const root = this.model.root;
     for (const [id, slot] of this._slots) {
@@ -284,21 +300,35 @@ export class ObjectLayer {
       l.updateMatrixWorld();
       this._light(slot, p);
     }
+    // Non-shadow overflow can use a physical shadow-capable slot without contributing
+    // shadows or scheduling maps. Existing shader flags and GPU resources stay fixed.
+    for (const light of pts.slice(0, SHADOWS)) {
+      const active = [...this._slots.values()].some((slot) => slot.light === light && slot.shadow);
+      light.shadow.intensity = active ? 1 : 0;
+      if (!active) light.shadow.needsUpdate = false;
+    }
   }
 
   _slotSig() {
-    return [...this._slots].map(([id, s]) => `${id}:${s.light.id}:${s.light.position.toArray().join()}`).join(';');
+    return [...this._slots].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+      .map(([id, s]) => `${id}:${s.light.id}:${s.shadow}:${s.factor}:${s.light.position.toArray().join()}`).join(';');
   }
 
   _light(slot, p) {
     const r = p.result;
     const c = r.color || [255, 255, 255];
     slot.light.color.setRGB(c[0] / 255, c[1] / 255, c[2] / 255, THREE.SRGBColorSpace);
-    slot.light.intensity = r.level * p.part.hints.max * slot.factor;
+    // A finite authored maximum can still overflow after the group multiplier.
+    const intensity = r.level * p.part.hints.max;
+    slot.light.intensity = Math.min(Number.MAX_VALUE / slot.factor, intensity) * slot.factor;
   }
 
-  _darken() {
+  _darken({ keepShadowRequests = false } = {}) {
     for (const l of [...this.pool.points, ...this.pool.spots]) l.intensity = 0;
+    for (const light of this.pool.points.slice(0, SHADOWS)) {
+      light.shadow.intensity = 0;
+      if (!keepShadowRequests) light.shadow.needsUpdate = false;
+    }
     this._slots.clear();
   }
 

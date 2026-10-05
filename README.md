@@ -9,6 +9,7 @@ See the [plain-language controls guide](docs/FEATURES-GUIDE.md) for camera autom
 See the [camera guide](docs/CAMERAS-GUIDE.md) for camera pictures and approximate coverage.
 See the [tracking guide](docs/TRACKING-GUIDE.md) for room activity, parked vehicles and measured vacuum positions.
 See the [security and weather guide](docs/SECURITY-AND-WEATHER-GUIDE.md) for contacts, explicit door hinges and outdoor effects.
+See the [lighting guide](docs/LIGHTING-GUIDE.md) for Hue colour, warm/cool white and the realtime light budget.
 
 A Lovelace card that shows your home as a 3D floorplan with every device on it. Draw each room
 once and link it to a Home Assistant area. After that, every device assigned to the area appears
@@ -27,7 +28,10 @@ position over its map.
   single-tap toggle behavior is still available as a visual setting
 - Lightweight north-up 2D mini-map with a floor selector, live device dots and camera focus;
   tap a room or dot to move the main view there
-- Lights that are on cast a glow on the floor in their colour and brightness
+- Light panels offer brightness, colour and warm/cool white when the entity reports that support.
+  Controls send deliberate commands; the displayed state follows Home Assistant's response
+- Valid on lights cast a floor glow and illuminate model surfaces in their reported colour/brightness.
+  Unavailable, restored, invalid and zero-output readings remain dark
 - Markers show a value next to the icon (temperature, power, …)
 - Camera controls use Home Assistant's native muted camera viewer. Edit → Cameras saves
   approximate coverage with an explicit heading, viewing angle and range

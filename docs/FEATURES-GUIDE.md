@@ -15,6 +15,10 @@ Tap a room's floor to see its devices and readings on the right. Tap a device to
 controls. Opening the panel only reads device states. **Turn on**, **Turn off** or changing
 brightness sends a command to the actual device. **All controls** opens Home Assistant's own
 full controls, including the options for heating, cameras, blinds and vacuums.
+Lights also offer colour and warm/cool white when supported. Input movement previews
+the chosen value in the panel; releasing it sends a real command. Readings follow
+Home Assistant's actual response. See [the lighting guide](LIGHTING-GUIDE.md) for model
+lamps, Kelvin limits and wall-panel checks.
 Camera devices can also open a muted camera picture directly in this panel. See the
 [camera guide](CAMERAS-GUIDE.md) for grouped devices, coverage settings and troubleshooting.
 

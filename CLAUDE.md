@@ -24,6 +24,7 @@ position and map overlay.
   least-squares affine. `overlayUrl()` for image./camera. entities via entity_picture.
 - `storage.js` — LayoutStore: companion integration WS -> `frontend/set_user_data` -> localStorage.
 - `device-popup.js` — room/device panels; explicit quick controls and HA All controls fallback.
+- `light-state.js` — strict finite current light appearance and independently reported modern capabilities. Use HA-derived RGB; never guess XY gamut or Kelvin bounds. Fixed legacy/non-colour display fallback is explicit. Model lamps, floor glows and panel readings share this reader. Controls revalidate current membership/source/capabilities/services/connection; input alone sends nothing.
 - `minimap.js` — north-up SVG mini-map sharing room outlines and live marker/model-object positions.
 - `navigation.js` — bubble control ordering, room picking and camera focus math.
 - `history.js` — bounded session snapshots; root `_commit` records editable layout, EditMode groups gestures.
@@ -100,7 +101,7 @@ View mode:
 - Undo/Redo changes layout/config snapshots, never hass state or services. Reload/key/GLB replacement
   resets history. Cancel transient edit gestures and ignore async old-context upload/import results.
 - Explicit deleted model area/floor IDs remain manual/stale until deliberately relinked/cleared or the exact ID returns. No stale-floor placement/elevation overrides; stale areas keep polygons without area devices. GLB named-view geometry rules remain independent from HA assignments.
-- Lights that are on: additive radial glow on the floor, colour from rgb_color, strength from brightness.
+- Lights: shared validated current colour/brightness for floor glows and model illumination. Zero/invalid/restored/unavailable output stays dark. Model lights rank useful current output inside the existing fixed 8-point/4-spot/4-shadow pool. Semantic unchanged readings must not write materials, redraw or rebuild lighting slots.
 - Marker shows secondary sensor value (e.g. temperature) when the device has one.
 
 Edit mode (side panel, tabs Rooms / Devices / Mower / Data):
