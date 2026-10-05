@@ -25,7 +25,10 @@ jobs:
           FRONTEND=$(python -c "import json, importlib.resources as r; print(json.load(open(r.files('homeassistant') / 'components/frontend/manifest.json'))['requirements'][0])")
           pip install "$FRONTEND"
           pip freeze > furniture-test-environment.txt
+      - name: Check actual integration startup, reload and original integration behavior
+        run: python -m pytest -q tests/test_furniture_setup_ha.py tests/test_init.py tests/test_config_flow.py tests/test_model.py tests/test_services.py
       - name: Check immutable packs, storage and real authenticated uploads
+        if: always()
         run: python -m pytest -q tests/test_furniture_pack.py tests/test_furniture.py tests/test_furniture_ha.py
       - uses: actions/upload-artifact@v4
         if: always()
