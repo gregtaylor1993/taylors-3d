@@ -39,7 +39,7 @@ describe('roomFloorId', () => {
     expect(roomFloorId({ floor_id: 'up', area_id: 'kitchen' }, hass, floors)).toBe('up');
     expect(roomFloorId({ area_id: 'bed' }, hass, floors)).toBe('up');
     expect(roomFloorId({ area_id: 'nofloor' }, hass, floors)).toBe('ground');
-    expect(roomFloorId({ floor_id: 'gone', area_id: 'x' }, hass, floors)).toBe('ground');
+    expect(roomFloorId({ floor_id: 'gone', area_id: 'x' }, hass, floors)).toBe('gone');
   });
 });
 

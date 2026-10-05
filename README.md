@@ -2,7 +2,17 @@
 
 NOTICE: Based on floorplan3d-card by istals (MIT)
 
+For entity choices, missing floors and saved-link warnings, see the
+[Home Assistant links guide](docs/HOME-ASSISTANT-LINKS-GUIDE.md).
+
 Original project by Ingus Stals / istals. This independent copy is maintained by Taylor.
+
+The features below describe this source version. Use a matching verified release,
+or build the source yourself: an older HACS release can contain fewer features.
+The feature log records the checks and installation packages for each checkpoint.
+The combined `0.2.0` checkpoint is a local source candidate. Its latest
+recorded checks are in the [feature log](REQUIREMENTS_AND_FEATURES.md#combined-020-local-checkpoint).
+Local checks alone do not publish a HACS update.
 
 See [Requirements and features](REQUIREMENTS_AND_FEATURES.md) for Taylor's development ideas, proposed build order and progress log.
 See the [plain-language controls guide](docs/FEATURES-GUIDE.md) for camera automations, Undo/Redo and room overlays.
@@ -14,6 +24,11 @@ See the [model shading guide](docs/MODEL-SHADING-GUIDE.md) for lighter display s
 See the [scene preview guide](docs/SCENE-PREVIEW-GUIDE.md) to try a lighting look before deliberately activating its Home Assistant scene.
 See the [idle mode guide](docs/AMBIENT-IDLE-GUIDE.md) for optional gentle rotation and picture dimming on a wall panel.
 See the [House layout guide](docs/HOUSE-VIEW-GUIDE.md) for the photo-inspired menus, actual status sources and responsive room panels.
+See the [furniture guide](docs/FURNITURE-GUIDE.md) for local licensed packs, placement drafts and the pack-making tool.
+See the [visual settings guide](docs/VISUAL-SETTINGS-GUIDE.md) for card options, imported overrides and advanced layout controls.
+See the [complete dashboard backup guide](docs/DASHBOARD-BACKUP-GUIDE.md) for the local candidate's separate inspect, prepare and new-dashboard steps.
+See the [translation guide](docs/TRANSLATION-GUIDE.md) for supported languages, literal source data and how to add translated feature labels.
+See the [room and device controls guide](docs/ROOM-AND-DEVICE-CONTROLS-GUIDE.md) for room shortcuts, supported direct controls and mini-map alerts in the local candidate.
 
 A Lovelace card that shows your home as a 3D floorplan with every device on it. Draw each room
 once and link it to a Home Assistant area. After that, every device assigned to the area appears
@@ -231,8 +246,19 @@ in the model's tags, and a "no longer in the model" list shows assignments whose
 room was removed by a re-export, with **Forget** to drop them. See
 [docs/model-builder-guide.md](docs/model-builder-guide.md).
 
-**Data.** Export and import the layout as JSON, and see where it is stored. *Shared* means the
-integration is active and everyone sees the same plan.
+**Data.** **Single-layout JSON** exports or imports one Taylor layout and shows
+where it is stored. *Shared* means the integration is active and everyone sees
+the same plan. This JSON stores references, not model bytes or furniture pack ZIPs.
+
+The combined local `0.2.0` candidate also provides **Full dashboard backup** in
+**Edit → Data** for an administrator. Its ZIP includes the selected Home Assistant
+dashboard (including other cards), its Taylor layouts, available uploaded models
+and original licensed furniture packs. External card resources and model URLs
+remain dependencies; their files are not downloaded. Restoring uses separate
+**Inspect ZIP**, **Prepare copy** and **Create new dashboard** steps; only the
+last creates a dashboard. See the [backup guide](docs/DASHBOARD-BACKUP-GUIDE.md)
+for missing items and restore limits. This workflow is not in the verified
+Phase 12 manual package or the published HACS `v0.1.0` release.
 
 Coordinates are metres, x = east, y = north. A layout prepared elsewhere (for example from an
 existing house model) can be imported here; see [docs/house-model-spec.md](docs/house-model-spec.md)

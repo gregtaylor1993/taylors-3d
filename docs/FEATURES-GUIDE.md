@@ -18,6 +18,14 @@ You choose the lights and desired settings explicitly. A preview changes the hou
 **Activate** runs the real saved Home Assistant scene and can also affect its other devices.
 The device menus continue to show actual readings during a preview.
 
+For your own furniture, use **Edit → Furniture** and the [furniture guide](FURNITURE-GUIDE.md).
+Imported ZIPs keep their original models and licences. Movement is a draft until
+**Save furniture**; **Cancel**, **Undo** and **Redo** work with placements.
+
+For current entity names, area filters and missing-link repair, use the
+[Home Assistant links guide](HOME-ASSISTANT-LINKS-GUIDE.md). Saved missing IDs stay
+visible so you can choose their replacements deliberately.
+
 For a wall panel that gently moves when untouched, open **Edit → Idle** and read the
 [idle mode guide](AMBIENT-IDLE-GUIDE.md). Rotation and night picture dimming are optional.
 An interaction restores the pre-idle camera; the first tap on a rotating surface wakes

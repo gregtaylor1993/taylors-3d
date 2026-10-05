@@ -30,7 +30,7 @@ afterEach(() => { editors.splice(0).forEach((edit) => edit.dispose()); document.
 
 describe('Model shading in the actual layout editor', () => {
   it.each([
-    ['YAML model', { config: { model: '/local/house.glb' } }],
+    ['card URL model', { config: { model: '/local/house.glb' } }],
     ['browser storage', {}],
     ['shared storage with no model', { backend: 'shared' }],
     ['invalid upload key', { backend: 'shared', config: { layout_key: 'invalid/key' } }],
@@ -38,7 +38,7 @@ describe('Model shading in the actual layout editor', () => {
   ])('makes display settings available through the %s route without changing upload behavior', (label, options) => {
     const { card, edit, model, select } = setup(options); model();
     expect(select()).toBeTruthy(); expect(edit.panel.textContent).toContain('Model shading');
-    if (label === 'YAML model') expect(edit.panel.textContent).toContain('from its YAML');
+    if (label === 'card URL model') expect(edit.panel.textContent).toContain('from its card settings');
     if (label === 'browser storage') expect(edit.panel.textContent).toContain('Uploading a model needs');
     if (label === 'invalid upload key') expect(edit.panel.textContent).toContain('for model uploads');
     expect(card._commit).not.toHaveBeenCalled(); expect(card._hass.callService).not.toHaveBeenCalled();

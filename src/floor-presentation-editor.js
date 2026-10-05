@@ -1,5 +1,6 @@
 // Draft-only floor display settings. Root owns the renderer and history; this
 // fragment never moves geometry, changes coordinates or sends a HA action.
+import { editorExtraNotice, readEditorExtraNotice, editorExtraText, editorExtraCaption, updateEditorExtraCaptions, syncEditorOptions, editorExtraDiagnostic } from './editor-extra-localization.js';
 import { FLOOR_PRESENTATION_DEFAULTS, FLOOR_PRESENTATION_LIMITS, readFloorPresentation } from './floor-presentation.js';
 
 const prefix = 'floor-presentation-';
@@ -14,15 +15,15 @@ const tag = (value) => Array.isArray(value) ? ['array', Array.from(value, tag)] 
   ? ['object', Object.entries(value).map(([key, entry]) => [key, tag(entry)])]
   : [typeof value, typeof value === 'number' && !Number.isFinite(value) ? String(value) : value];
 const number = (value) => typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : '';
-const modes = [['assembled', 'Normal (assembled)'], ['horizontal', 'Side by side'], ['vertical', 'Stacked layers']];
-const axes = [['east', 'East'], ['north', 'North']];
+const modesKeys = [['assembled', 'floor.normal'], ['horizontal', 'floor.horizontal'], ['vertical', 'floor.vertical']];
+const axesKeys = [['east', 'floor.east'], ['north', 'floor.north']];
 const fields = new Set(['mode', 'gap_m', 'axis', 'base_elevation_m', 'floors']);
 const exactId = (id) => readFloorPresentation({ floors: [id] }).valid;
 const valueLabel = (value) => typeof value === 'string' ? value : JSON.stringify(value) ?? 'undefined';
 
 /** Model-tab fragment: FloorPresentationEditor(card,onRender). Native fields use
  * floor-presentation-*; rows carry exact value/index intent to reject stale DOM
- * events. Only Save calls commitFeatureLayout(patch,'Floor presentation').
+ * events. Only Save calls commitFeatureLayout(patch,this._t('floor.title')).
  * updatePreviews updates diagnostics, not geometry. No live draft preview.
  * Parent calls cancel/reset on tab/history changes and dispose on true teardown.
  */
@@ -31,6 +32,14 @@ export class FloorPresentationEditor {
     this.card = card; this.onRender = onRender; this.disposed = false;
     this._loaded = false; this.draft = null; this.dirty = false; this.stale = false; this.message = null;
   }
+  _modes() { return modesKeys.map(([value, key]) => [value, this._t(key)]); }
+  _axes() { return axesKeys.map(([value, key]) => [value, this._t(key)]); }
+  get message() { return readEditorExtraNotice(this.card._hass, this._message); }
+  set message(value) { this._message = value; }
+  _notice(key, parameters = {}) { return editorExtraNotice(key, parameters); }
+  _t(key, parameters = {}) { return editorExtraText(this.card._hass, key, parameters); }
+  _caption(key) { return editorExtraCaption(this.card._hass, key); }
+  _diagnostic(value) { return editorExtraDiagnostic(this.card._hass, value); }
   get effective() { return this.card._layout?.floor_presentation ?? this.card._config?.floor_presentation; }
   get canEdit() {
     const hass = this.card._hass, user = hass?.user;
@@ -81,22 +90,22 @@ export class FloorPresentationEditor {
       && (!Object.hasOwn(floor, 'stale') || floor.stale === false) ? floor : null;
   }
   _rowMessage(id) {
-    if (!exactId(id)) return 'Malformed saved floor ID — replace or remove it deliberately.';
+    if (!exactId(id)) return this._t('floor.malformedId');
     const matches = this._floors().filter((floor) => floor?.id === id);
-    if (!matches.length) return 'Saved floor is missing — its exact ID is kept.';
-    if (matches.length !== 1) return 'This floor ID is ambiguous in the current floors.';
-    return this._floor(id) ? `Saved elevation: ${matches[0].elevation} metres.` : 'Current floor elevation is invalid or stale.';
+    if (!matches.length) return this._t('floor.missing');
+    if (matches.length !== 1) return this._t('floor.ambiguous');
+    return this._floor(id) ? this._t('floor.elevation', { value: matches[0].elevation }) : this._t('floor.invalidElevation');
   }
   _choices() { return this._floors().filter((floor) => this._floor(floor?.id) === floor).map((floor) => [floor.id, floor.name || floor.id]); }
   _evaluation() {
-    const policy = readFloorPresentation(this.draft), issues = policy.diagnostics.map((entry) => entry.message);
-    if (!this.canEdit) issues.push('A connected, current active administrator account is required to edit or save floor settings.');
-    if (this.stale) issues.push('The saved settings, model, alignment, floors or session changed. Your draft is kept. Cancel before saving.');
+    const policy = readFloorPresentation(this.draft), issues = policy.diagnostics.map((entry) => this._diagnostic(entry));
+    if (!this.canEdit) issues.push(this._t('floor.admin'));
+    if (this.stale) issues.push(this._t('floor.stale'));
     if (policy.valid && policy.mode !== 'assembled') {
       const ids = this._rows();
-      if (!ids.length) issues.push('Choose at least one current floor before separating floors.');
-      if (ids.length > FLOOR_PRESENTATION_LIMITS.maxFloors) issues.push(`Choose at most ${FLOOR_PRESENTATION_LIMITS.maxFloors} floors for separation.`);
-      for (const id of ids) if (!this._floor(id)) issues.push(`Floor ${valueLabel(id)} has no unique current elevation. Replace or remove it, or choose Normal (assembled).`);
+      if (!ids.length) issues.push(this._t('floor.chooseOne'));
+      if (ids.length > FLOOR_PRESENTATION_LIMITS.maxFloors) issues.push(this._t('floor.limit', { count: FLOOR_PRESENTATION_LIMITS.maxFloors }));
+      for (const id of ids) if (!this._floor(id)) issues.push(this._t('floor.needsElevation', { id: valueLabel(id) }));
     }
     return { policy, issues: [...new Set(issues)] };
   }
@@ -104,38 +113,38 @@ export class FloorPresentationEditor {
     let report;
     try { report = this.card.floorPresentationReport?.(); } catch { report = null; }
     const diagnostics = Array.isArray(report?.diagnostics) ? report.diagnostics : [];
-    const known = modes.find(([id]) => id === report?.mode);
-    return `<p>${known ? `Current renderer report: ${esc(known[1])}${report.valid === false ? ' (requested separation is not ready)' : ''}.` : 'Renderer checks are not connected in this standalone editor.'}</p>
-      <p class="floor-presentation-hint">A model needs separate saved level groups with explicitly confirmed floor links. A drawn plan needs real room outlines. These geometry checks are warnings to inspect; saving a valid request does not prove the model can be separated.</p>
-      ${diagnostics.length ? `<ul>${diagnostics.map((entry) => `<li>${esc(entry?.message || 'A geometry check needs attention.')} ${typeof entry?.floor_id === 'string' ? `(floor ${esc(entry.floor_id)})` : ''}</li>`).join('')}</ul>` : ''}`;
+    const known = this._modes().find(([id]) => id === report?.mode);
+    return `<p>${known ? esc(this._t('floor.renderer', { mode: known[1], warning: report.valid === false ? this._t('floor.notReady') : '' })) : this._t('floor.noReport')}</p>
+      <p class="floor-presentation-hint">${this._caption('floor.geometryHelp')}</p>
+      ${diagnostics.length ? `<ul>${diagnostics.map((entry) => `<li>${esc(entry?.message ? this._diagnostic(entry) : this._t('floor.geometryWarning'))} ${typeof entry?.floor_id === 'string' ? esc(this._t('floor.floorLabel', { id: entry.floor_id })) : ''}</li>`).join('')}</ul>` : ''}`;
   }
   _statusHtml() {
     const saved = readFloorPresentation(this.effective), { issues } = this._evaluation();
-    return `<p>Currently saved: <strong>${saved.valid ? modes.find(([id]) => id === saved.mode)?.[1] : 'Invalid settings; normal display is used'}</strong>.</p>
-      ${this.dirty ? '<p>Unsaved floor settings. Save to apply them; Cancel keeps the saved settings.</p>' : ''}
+    return `<p>${this._caption('common.saved')} <strong>${saved.valid ? this._modes().find(([id]) => id === saved.mode)?.[1] : this._t('floor.invalid')}</strong>.</p>
+      ${this.dirty ? `<p>${this._caption('floor.unsaved')}</p>` : ''}
       ${this.message ? `<p role="status">${esc(this.message)}</p>` : ''}
       ${issues.length ? `<ul role="status">${issues.map((message) => `<li>${esc(message)}</li>`).join('')}</ul>` : ''}`;
   }
-  _options(choices, raw, placeholder = 'Choose a value') {
-    return `${choices.some(([id]) => id === raw) ? '' : `<option value="" disabled selected>${esc(raw === undefined ? placeholder : `Saved value unavailable: ${valueLabel(raw)}`)}</option>`}
+  _options(choices, raw, placeholder = this._t('common.choose')) {
+    return `${choices.some(([id]) => id === raw) ? '' : `<option value="" disabled selected>${esc(raw === undefined ? placeholder : this._t('common.unavailableValue', { value: valueLabel(raw) }))}</option>`}
       ${choices.map(([id, label]) => `<option value="${esc(id)}" ${id === raw ? 'selected' : ''}>${esc(label)}</option>`).join('')}`;
   }
   _floorsHtml() {
     const rows = this._rows(), blocked = this._blocked(), malformed = own(this.draft, 'floors') && !Array.isArray(this.draft.floors);
     const disabled = blocked ? 'disabled' : '';
     const action = (kind, id, index) => `${prefix}${kind}:${index}:${encodeURIComponent(stamp(id))}`;
-    return `<p>${own(this.draft, 'floors') ? malformed ? 'The saved floor choices are malformed. Reset the floor choices deliberately, or Cancel to keep them.' : 'Explicit floor order is saved with these settings.' : 'Using all current floors in elevation order. Changing the list creates an explicit saved order.'}</p>
+    return `<p data-floor-presentation-order-message>${own(this.draft, 'floors') ? malformed ? this._t('floor.badChoices') : this._t('floor.explicitOrder') : this._t('floor.automaticOrder')}</p>
       <ol class="floor-presentation-list">${rows.map((id, index) => {
     const floor = this._floor(id), choices = this._choices().filter(([choice]) => choice === id || !rows.includes(choice));
     return `<li data-floor-presentation-row="${index}"><strong data-floor-presentation-floor-label>${esc(floor?.name || valueLabel(id))}</strong>
-          <span class="floor-presentation-id">Exact ID: ${esc(valueLabel(id))}</span><p>${esc(this._rowMessage(id))}</p>
-          <label>Replace this floor<select data-field="${prefix}floor" data-floor-index="${index}" data-floor-key="${esc(stamp(id))}" ${disabled}>${this._options(choices, id, 'Choose a current floor')}</select></label>
-          <div class="floor-presentation-actions"><button type="button" data-act="${esc(action('up', id, index))}" ${blocked || index === 0 ? 'disabled' : ''} aria-label="Move ${esc(valueLabel(id))} up">Up</button>
-          <button type="button" data-act="${esc(action('down', id, index))}" ${blocked || index === rows.length - 1 ? 'disabled' : ''} aria-label="Move ${esc(valueLabel(id))} down">Down</button>
-          <button type="button" data-act="${esc(action('remove', id, index))}" ${disabled} aria-label="Remove ${esc(valueLabel(id))} from display choices">Remove</button></div></li>`;
+          <span class="floor-presentation-id">${esc(this._t('floor.exactId', { id: valueLabel(id) }))}</span><p>${esc(this._rowMessage(id))}</p>
+          <label>${this._caption('floor.replace')}<select data-field="${prefix}floor" data-floor-index="${index}" data-floor-key="${esc(stamp(id))}" ${disabled}>${this._options(choices, id, this._t('floor.chooseCurrent'))}</select></label>
+          <div class="floor-presentation-actions"><button type="button" data-act="${esc(action('up', id, index))}" ${blocked || index === 0 ? 'disabled' : ''} aria-label="${esc(this._t('floor.moveUp', { id: valueLabel(id) }))}">${this._caption('common.up')}</button>
+          <button type="button" data-act="${esc(action('down', id, index))}" ${blocked || index === rows.length - 1 ? 'disabled' : ''} aria-label="${esc(this._t('floor.moveDown', { id: valueLabel(id) }))}">${this._caption('common.down')}</button>
+          <button type="button" data-act="${esc(action('remove', id, index))}" ${disabled} aria-label="${esc(this._t('floor.removeFloor', { id: valueLabel(id) }))}">${this._caption('common.remove')}</button></div></li>`;
   }).join('')}</ol>
-      <label>Add a current floor<select data-field="${prefix}add-floor" ${blocked || malformed || !this._choices().some(([id]) => !rows.includes(id)) ? 'disabled' : ''}><option value="">Choose a floor to add</option>${this._choices().filter(([id]) => !rows.includes(id)).map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`).join('')}</select></label>
-      <div class="floor-presentation-actions"><button type="button" data-act="${prefix}all-floors" ${disabled}>Use all current floors</button><button type="button" data-act="${prefix}clear-floors" ${disabled}>Clear floor choices</button></div>`;
+      <label>${this._caption('floor.add')}<select data-field="${prefix}add-floor" ${blocked || malformed || !this._choices().some(([id]) => !rows.includes(id)) ? 'disabled' : ''}><option value="">${esc(this._t('floor.chooseAdd'))}</option>${this._choices().filter(([id]) => !rows.includes(id)).map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`).join('')}</select></label>
+      <div class="floor-presentation-actions"><button type="button" data-act="${prefix}all-floors" ${disabled}>${this._caption('floor.all')}</button><button type="button" data-act="${prefix}clear-floors" ${disabled}>${this._caption('floor.clear')}</button></div>`;
   }
   render() {
     if (this.disposed) return '';
@@ -153,16 +162,16 @@ export class FloorPresentationEditor {
       [data-floor-presentation-editor] p,[data-floor-presentation-editor] li,[data-floor-presentation-editor] strong{overflow-wrap:anywhere}
       [data-floor-presentation-editor] .floor-presentation-id{display:block;overflow-wrap:anywhere}
       [data-floor-presentation-editor] .floor-presentation-hint{color:var(--secondary-text-color,#666)}
-      </style><h3>Floor presentation</h3><p>Choose a display arrangement for the floors. Real floor coordinates stay unchanged.</p>
-      <label>Floor view<select data-field="${prefix}mode" ${disabled}>${this._options(modes, this._raw('mode'))}</select></label>
-      ${input('gap_m', 'Additional spacing, metres', 'type="number" min="0" max="100" step="any"')}
-      <label>Side-by-side direction<select data-field="${prefix}axis" ${disabled}>${this._options(axes, this._raw('axis'))}</select></label>
-      ${input('base_elevation_m', 'Side-by-side display height, metres', 'type="number" min="-1000" max="1000" step="any"')}
-      <p class="floor-presentation-hint">Side by side puts the chosen floors at one display height and spreads their measured footprints East or North. Stacked layers keep their saved elevations and add space between layers. Normal restores the assembled display. At most four floors can be separated.</p>
-      <h4>Floors and order</h4><div data-floor-presentation-floors>${this._floorsHtml()}</div>
+      </style><h3>${this._caption('floor.title')}</h3><p>${this._caption('floor.intro')}</p>
+      <label>${this._caption('floor.view')}<select data-field="${prefix}mode" ${disabled}>${this._options(this._modes(), this._raw('mode'))}</select></label>
+      ${input('gap_m', this._caption('floor.spacing'), 'type="number" min="0" max="100" step="any"')}
+      <label>${this._caption('floor.direction')}<select data-field="${prefix}axis" ${disabled}>${this._options(this._axes(), this._raw('axis'))}</select></label>
+      ${input('base_elevation_m', this._caption('floor.height'), 'type="number" min="-1000" max="1000" step="any"')}
+      <p class="floor-presentation-hint">${this._caption('floor.help')}</p>
+      <h4>${this._caption('floor.order')}</h4><div data-floor-presentation-floors>${this._floorsHtml()}</div>
       <div data-floor-presentation-status aria-live="polite">${this._statusHtml()}</div>
-      <div class="floor-presentation-actions"><button type="button" data-act="${prefix}save" ${!this.dirty || this._evaluation().issues.length ? 'disabled' : ''}>Save floor view</button><button type="button" data-act="${prefix}cancel">Cancel</button><button type="button" data-act="${prefix}repair" ${!this.canEdit || this.stale ? 'disabled' : ''}>Use normal default settings</button></div>
-      <h4>Current geometry checks</h4><div data-floor-presentation-report>${this._reportHtml()}</div></section>`;
+      <div class="floor-presentation-actions"><button type="button" data-act="${prefix}save" ${!this.dirty || this._evaluation().issues.length ? 'disabled' : ''}>${this._caption('floor.save')}</button><button type="button" data-act="${prefix}cancel">${this._caption('common.cancel')}</button><button type="button" data-act="${prefix}repair" ${!this.canEdit || this.stale ? 'disabled' : ''}>${this._caption('floor.defaults')}</button></div>
+      <h4>${this._caption('floor.geometry')}</h4><div data-floor-presentation-report>${this._reportHtml()}</div></section>`;
   }
   _refreshFloors(target) {
     if (!target) return;
@@ -171,16 +180,20 @@ export class FloorPresentationEditor {
     // names update inside the same native selects, retaining focus and identity.
     if (target._floorRowsKey !== key) { target.innerHTML = this._floorsHtml(); target._floorRowsKey = key; }
     const blocked = this._blocked(), malformed = own(this.draft, 'floors') && !Array.isArray(this.draft.floors);
+    const orderMessage = target.querySelector('[data-floor-presentation-order-message]');
+    if (orderMessage) orderMessage.textContent = own(this.draft, 'floors') ? malformed ? this._t('floor.badChoices') : this._t('floor.explicitOrder') : this._t('floor.automaticOrder');
     const syncOptions = (control, html) => { if (control && control._floorOptionsHtml !== html) {
-      control.innerHTML = html; control._floorOptionsHtml = html;
+      syncEditorOptions(control, html); control._floorOptionsHtml = html;
     } };
     for (const row of target.querySelectorAll('[data-floor-presentation-row]')) {
       const index = Number(row.dataset.floorPresentationRow), id = rows[index], floor = this._floor(id);
       row.querySelector('[data-floor-presentation-floor-label]').textContent = floor?.name || valueLabel(id);
       row.querySelector('p').textContent = this._rowMessage(id);
+      row.querySelector('.floor-presentation-id').textContent = this._t('floor.exactId', { id: valueLabel(id) });
+      for (const [action, caption] of [['up', 'floor.moveUp'], ['down', 'floor.moveDown'], ['remove', 'floor.removeFloor']]) row.querySelector(`[data-act^="${prefix}${action}:"]`)?.setAttribute('aria-label', this._t(caption, { id: valueLabel(id) }));
       const select = row.querySelector('select');
       select.disabled = blocked;
-      syncOptions(select, this._options(this._choices().filter(([choice]) => choice === id || !rows.includes(choice)), id, 'Choose a current floor'));
+      syncOptions(select, this._options(this._choices().filter(([choice]) => choice === id || !rows.includes(choice)), id, this._t('floor.chooseCurrent')));
       for (const button of row.querySelectorAll('button')) button.disabled = blocked
         || button.dataset.act.startsWith(`${prefix}up:`) && index === 0
         || button.dataset.act.startsWith(`${prefix}down:`) && index === rows.length - 1;
@@ -188,7 +201,7 @@ export class FloorPresentationEditor {
     const add = target.querySelector(`[data-field="${prefix}add-floor"]`), choices = this._choices().filter(([id]) => !rows.includes(id));
     if (add) {
       add.disabled = blocked || malformed || !choices.length;
-      syncOptions(add, `<option value="">Choose a floor to add</option>${choices.map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`).join('')}`);
+      syncOptions(add, `<option value="">${esc(this._t('floor.chooseAdd'))}</option>${choices.map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`).join('')}`);
     }
     for (const button of target.querySelectorAll(`[data-act="${prefix}all-floors"],[data-act="${prefix}clear-floors"]`)) button.disabled = blocked;
   }
@@ -197,17 +210,17 @@ export class FloorPresentationEditor {
     this._ensure();
     const root = container.matches?.('[data-floor-presentation-editor]') ? container : container.querySelector('[data-floor-presentation-editor]');
     if (!root) return;
+    updateEditorExtraCaptions(root, this.card._hass);
     for (const [selector, html] of [['[data-floor-presentation-status]', this._statusHtml()], ['[data-floor-presentation-report]', this._reportHtml()]]) {
       const target = root.querySelector(selector); if (target && target.innerHTML !== html) target.innerHTML = html;
     }
     this._refreshFloors(root.querySelector('[data-floor-presentation-floors]'));
+    updateEditorExtraCaptions(root, this.card._hass);
     for (const field of ['mode', 'axis', 'gap_m', 'base_elevation_m']) {
       const control = root.querySelector(`[data-field="${prefix}${field}"]`); if (!control) continue;
       control.disabled = this._blocked();
-      if (!this.dirty) {
-        if (control.tagName === 'SELECT') { const html = this._options(field === 'mode' ? modes : axes, this._raw(field)); if (control.innerHTML !== html) control.innerHTML = html; }
-        else control.value = this._value(field);
-      }
+      if (control.tagName === 'SELECT') syncEditorOptions(control, this._options(field === 'mode' ? this._modes() : this._axes(), this._raw(field)), this._value(field));
+      else if (!this.dirty) control.value = this._value(field);
     }
     const save = root.querySelector(`[data-act="${prefix}save"]`); if (save) save.disabled = !this.dirty || this._evaluation().issues.length > 0;
     const repair = root.querySelector(`[data-act="${prefix}repair"]`); if (repair) repair.disabled = !this.canEdit || this.stale;
@@ -248,9 +261,9 @@ export class FloorPresentationEditor {
     if (key === 'save') {
       const { issues } = this._evaluation();
       if (!this.dirty || issues.length || typeof this.card.commitFeatureLayout !== 'function') {
-        this.message = issues[0] || 'Choose a different setting before saving.'; this.onRender(); return true;
+        this.message = issues[0] || this._notice('floor.change'); this.onRender(); return true;
       }
-      this.card.commitFeatureLayout({ floor_presentation: clone(this.draft) }, 'Floor presentation');
+      this.card.commitFeatureLayout({ floor_presentation: clone(this.draft) }, this._t('floor.title'));
       this.reset(); this.onRender(); return true;
     }
     if (this._blocked()) return true;

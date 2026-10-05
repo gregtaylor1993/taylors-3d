@@ -2,7 +2,7 @@
 // popup lifecycle and actual category actions; this module creates no timer/RAF.
 import { HouseHeader } from './house-header.js';
 import { buildHouseSummary } from './house-summary.js';
-import { HouseNavigation, HOUSE_NAVIGATION_ITEMS, HOUSE_NAVIGATION_LIMITS } from './house-navigation.js';
+import { HouseNavigation, localizeHouseNavigationItems, HOUSE_NAVIGATION_LIMITS } from './house-navigation.js';
 import { planHouseShell, HOUSE_SHELL_LIMITS } from './house-shell-layout.js';
 import { TAYLORS3D_THEME_CSS } from './taylors3d-theme.js';
 
@@ -105,7 +105,7 @@ export class HouseShell {
     this._restoreAll(); this.header?.element.remove(); this.navigation?.element.remove(); this.style?.remove();
     this._popup = null; this._miniMap = null; this._lastPlan = null; this._lastPresentation = null; this._sessionKey = null;
   }
-  setData({ enabled = false, scheme = 'ha', summaryRaw, selected = 'house', navItems = HOUSE_NAVIGATION_ITEMS, editing = false } = {}) {
+  setData({ enabled = false, scheme = 'ha', summaryRaw, selected = 'house', navItems = localizeHouseNavigationItems(this.card._hass), editing = false } = {}) {
     if (this.disposed) return { valid: false, diagnostics: [{ code: 'disposed', message: 'House layout has been disposed.' }] };
     const diagnostics = [];
     if (typeof enabled !== 'boolean' || typeof editing !== 'boolean') diagnostics.push({ code: 'flags', message: 'House layout needs explicit enabled/editing booleans.' });
@@ -116,14 +116,14 @@ export class HouseShell {
     this.enabled = true; this.editing = editing; this.scheme = scheme;
     this._attribute(this.card, 'data-taylors3d-theme', 'house'); this._attribute(this.card, 'data-taylors3d-scheme', scheme === 'ha' ? null : scheme);
     this._attribute(this._stage, 'data-taylors3d-shell', 'adaptive');
-    this.header.update(buildHouseSummary(this.card._hass, summaryRaw));
+    this.header.update(buildHouseSummary(this.card._hass, summaryRaw), this.card._hass);
     this.header.element.hidden = editing;
     const session = this._session(), suspended = editing || !session.ready || typeof this.onSelect !== 'function';
     const disabledItems = () => this._suspendedItems(navItems);
     // An observed account/session change permanently interrupts a held gesture,
     // even if the same categories are immediately available for the new user.
-    if (this._sessionKey && !this._sameSession(this._sessionKey, session)) this.navigation.update({ selected, items: disabledItems() });
-    const navResult = this.navigation.update({ selected, items: suspended ? disabledItems() : navItems }); this._sessionKey = session; this._navItems = navItems;
+    if (this._sessionKey && !this._sameSession(this._sessionKey, session)) this.navigation.update({ selected, items: disabledItems(), hass: this.card._hass });
+    const navResult = this.navigation.update({ selected, items: suspended ? disabledItems() : navItems, hass: this.card._hass }); this._sessionKey = session; this._navItems = navItems;
     this.navigation.element.hidden = editing || this.navigation.element.hidden;
     const key = stamp([editing, scheme, this.header.element.textContent,
       [...this.navigation.items.children].filter((node) => !node.hidden).map((node) => node.textContent)]);

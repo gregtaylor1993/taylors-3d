@@ -27,6 +27,7 @@ describe('draft-only model shading settings', () => {
     ['normal', { shadows: 'realtime', lamps: 'inherit' }],
     ['no-shadows', { shadows: 'off', lamps: 'inherit' }],
     ['authored', { shadows: 'off', lamps: 'off' }],
+    ['shadows-only', { shadows: 'realtime', lamps: 'off' }],
   ])('saves %s exactly once and sends no HA actions', (value, expected) => {
     const { card, host, choose, click } = setup();
     expect(host.textContent).toContain('No model is loaded'); expect(card.commitFeatureLayout).not.toHaveBeenCalled();
@@ -52,10 +53,10 @@ describe('draft-only model shading settings', () => {
     expect(card.commitFeatureLayout).not.toHaveBeenCalled(); choose('authored'); click('save');
     expect(card._layout.model_rendering.extension).toBe(7);
   });
-  it('keeps a valid imported custom combination until an explicit preset is chosen', () => {
+  it('recognises the shadows-only combination without rewriting its imported extension fields', () => {
     const saved = { shadows: 'realtime', lamps: 'off', future: true };
     const { card, host, select, choose, click } = setup({ layout: { model_rendering: saved } });
-    expect(select().value).toBe('custom'); expect(host.textContent).toContain('Imported custom settings');
+    expect(select().value).toBe('shadows-only'); expect(host.textContent).toContain('Realtime shadows (lamps off)');
     click('cancel'); expect(card._layout.model_rendering).toEqual(saved); expect(card.commitFeatureLayout).not.toHaveBeenCalled();
     choose('no-shadows'); click('save'); expect(card._layout.model_rendering).toEqual({ shadows: 'off', lamps: 'inherit', future: true });
   });

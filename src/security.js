@@ -14,26 +14,59 @@ const issue = (code, message, id) => ({ code, message, ...(id ? { id } : {}) });
 const contactClasses = new Set(['door', 'window', 'opening', 'garage_door']);
 const claims = new WeakMap(); // Two SecurityLayers cannot write the same/nested model target.
 const DEG = Math.PI / 180;
-export const SECURITY_LIMITS = Object.freeze({ maxBindings: 256, maxMeshes: 256, maxTotalMeshes: 1024, maxVertices: 100000, maxDuration: 5000, maxDegrees: 360, maxCoordinate: 1000000 });
+export const SECURITY_LIMITS = Object.freeze({ maxBindings: 256, maxMeshes: 256, maxTotalMeshes: 1024, maxVertices: 100000, maxDuration: 5000, maxDegrees: 360, maxCoordinate: 1000000, maxHeight: 1000, maxRoomPoints: 4096 });
+const reference = (value) => typeof value === 'string' && value.trim() === value && value.length > 0 && value.length <= 256;
+
+function planTarget(value, add) {
+  if (!plain(value) || value.type !== 'plan') { add('target', 'Choose one explicit plan target.'); return null; }
+  const keys = ['position', 'roomId', 'position_key'].filter((key) => value[key] !== undefined);
+  if (keys.length !== 1) add('target', 'Choose exactly one fixed position, room or marker anchor.');
+  if (value.floorId !== undefined && !reference(value.floorId)) add('floor', 'Choose an exact source floor ID.');
+  if (value.z !== undefined && (!finite(value.z) || Math.abs(value.z) > SECURITY_LIMITS.maxHeight)) add('height', 'Choose a finite height above the source floor, within 1000 metres.');
+  if (keys[0] === 'position') {
+    const p = value.position;
+    if (!plain(p) || !reference(p.floorId) || ![p.x, p.y, p.z].every(finite)
+      || Math.abs(p.x) > SECURITY_LIMITS.maxCoordinate || Math.abs(p.y) > SECURITY_LIMITS.maxCoordinate || Math.abs(p.z) > SECURITY_LIMITS.maxHeight
+      || value.floorId !== undefined && value.floorId !== p.floorId)
+      add('position', 'Choose finite plan metres x/y/z and one exact source floor.');
+    if (value.z !== undefined) add('target', 'A fixed position already contains its explicit height.');
+  } else if (keys[0] && !reference(value[keys[0]])) add('target', 'Choose one exact existing room or marker anchor ID.');
+  if (keys[0] === 'position_key' && value.z !== undefined) add('target', 'A marker target uses its actual anchor height; do not retain a room height override.');
+  return { ...value, ...(plain(value.position) ? { position: { ...value.position } } : {}) };
+}
 
 /** Saved binding: {id,entity,object_id,kind,open_states,closed_states,enabled?,
  * contact_source_confirmed?,freshness?,highlight?:{mode:'outline',open,closed?,unknown,opacity},
  * motion?:{target,pivot,axis,closed_degrees,open_degrees,duration_ms}}.
  * A relative target is an exact direct-child path ('leaf/mesh'); '.' means the tagged object.
- * No state defaults, untagged object-name search, hinge guesses or inferred angles.
+ * Model targets retain object_id. Plan targets are target:{type:'plan',position:{x,y,z,floorId}}
+ * OR target:{type:'plan',roomId,z?} OR target:{type:'plan',position_key}. Room/marker
+ * sources supply their exact current floor; optional target.floorId must match it.
+ * kind:'lock' requires lock.* and uses native locked/unlocked/transition/jammed states;
+ * it never accepts contact state lists or motion. No guessed location or hinge.
  */
 export function normaliseSecurityBinding(value) {
   const diagnostics = [], cfg = plain(value) ? value : {};
   const add = (code, message) => diagnostics.push(issue(code, message, cfg.id));
   if (!plain(value)) add('binding', 'Choose explicit security binding settings.');
   if (typeof cfg.id !== 'string' || !/^[a-z0-9_-]{1,64}$/.test(cfg.id)) add('id', 'Choose a unique security binding ID.');
-  if (typeof cfg.entity !== 'string' || !/^binary_sensor\.[a-z0-9_]+$/.test(cfg.entity)) add('entity', 'Choose a binary sensor that reports an opening contact.');
-  if (typeof cfg.object_id !== 'string' || !/^[a-z0-9_-]{1,64}$/.test(cfg.object_id)) add('object_id', 'Choose an exact tagged model object ID.');
-  if (!['door', 'window', 'opening'].includes(cfg.kind)) add('kind', 'Choose door, window or opening.');
+  const lock = cfg.kind === 'lock', targetType = cfg.target === undefined ? 'model' : 'plan';
+  if (typeof cfg.entity !== 'string' || !(lock ? /^lock\.[a-z0-9_]+$/ : /^binary_sensor\.[a-z0-9_]+$/).test(cfg.entity))
+    add('entity', lock ? 'Choose an actual lock entity.' : 'Choose a binary sensor that reports an opening contact.');
+  let target;
+  if (targetType === 'model') {
+    if (typeof cfg.object_id !== 'string' || !/^[a-z0-9_-]{1,64}$/.test(cfg.object_id)) add('object_id', 'Choose an exact tagged model object ID.');
+  } else {
+    target = planTarget(cfg.target, add);
+    if (cfg.object_id !== undefined) add('target', 'A plan target must not retain a model object ID.');
+    if (cfg.motion !== undefined) add('motion', 'Plan indicators do not animate a model hinge.');
+  }
+  if (!['door', 'window', 'opening', 'lock'].includes(cfg.kind)) add('kind', 'Choose door, window, opening or lock.');
   if (cfg.enabled !== undefined && typeof cfg.enabled !== 'boolean') add('enabled', 'Enabled must be true or false.');
   if (cfg.contact_source_confirmed !== undefined && typeof cfg.contact_source_confirmed !== 'boolean') add('contact_source', 'Contact-source confirmation must be true or false.');
   const validStates = (v) => Array.isArray(v) && v.length > 0 && v.every((s) => typeof s === 'string' && s.trim() === s && s.length > 0 && !['unknown', 'unavailable'].includes(s)) && new Set(v).size === v.length;
-  if (!validStates(cfg.open_states) || !validStates(cfg.closed_states) || cfg.open_states?.some?.((s) => cfg.closed_states?.includes?.(s)))
+  if (lock && (cfg.open_states !== undefined || cfg.closed_states !== undefined)) add('states', 'Locks use their native locked/unlocked states, not opening-contact state lists.');
+  if (!lock && (!validStates(cfg.open_states) || !validStates(cfg.closed_states) || cfg.open_states?.some?.((s) => cfg.closed_states?.includes?.(s))))
     add('states', 'Choose explicit, separate open and closed states.');
   const h = cfg.highlight === undefined ? {} : cfg.highlight;
   if (!plain(h)) add('highlight', 'Outline settings must be an object.');
@@ -48,6 +81,7 @@ export function normaliseSecurityBinding(value) {
   if (!finite(highlight.opacity) || highlight.opacity < 0 || highlight.opacity > 1) add('opacity', 'Outline opacity must be between 0 and 1.');
   let motion = null;
   if (cfg.motion !== undefined) {
+    if (lock) add('motion', 'Unlocking is not an opening measurement and cannot drive hinge motion.');
     const m = cfg.motion;
     if (!plain(m)) add('motion', 'Door motion requires explicit moving-part and hinge settings.');
     else {
@@ -59,7 +93,7 @@ export function normaliseSecurityBinding(value) {
       if (diagnostics.length === 0) motion = { target: m.target, pivot: m.pivot.slice(), axis: m.axis.map((n) => n / Math.hypot(...m.axis)), closed_degrees: m.closed_degrees, open_degrees: m.open_degrees, duration_ms: m.duration_ms };
     }
   }
-  return { ...cfg, enabled: cfg.enabled !== false, highlight, motion, valid: diagnostics.length === 0, diagnostics,
+  return { ...cfg, ...(target !== undefined ? { target } : {}), targetType, enabled: cfg.enabled !== false, highlight, motion, valid: diagnostics.length === 0, diagnostics,
     open_states: Array.isArray(cfg.open_states) ? cfg.open_states.slice() : [], closed_states: Array.isArray(cfg.closed_states) ? cfg.closed_states.slice() : [] };
 }
 
@@ -69,7 +103,7 @@ export function normaliseSecurityBinding(value) {
  */
 export function readSecurityContact(hass, binding, { now = Date.now() } = {}) {
   const config = normaliseSecurityBinding(binding), metadata = entityMetadata(hass, config.entity);
-  const base = { id: config.id, entity: config.entity, config, metadata, status: 'invalid', open: null, shown: false, nextExpiry: null, verified: false, diagnostics: config.diagnostics.slice() };
+  const base = { id: config.id, entity: config.entity, config, metadata, status: 'invalid', open: null, active: null, locked: null, shown: false, nextExpiry: null, verified: false, diagnostics: config.diagnostics.slice() };
   const bad = (status, message) => ({ ...base, status, diagnostics: [...base.diagnostics, issue(status, message, config.id)] });
   if (!config.valid) return base;
   if (!config.enabled) return { ...base, status: 'disabled', diagnostics: [] };
@@ -77,16 +111,29 @@ export function readSecurityContact(hass, binding, { now = Date.now() } = {}) {
   if (metadata.disabled) return bad('disabled', 'The contact entity or its device is disabled.');
   if (metadata.hidden || metadata.category) return bad('hidden', 'The contact entity is hidden or belongs to a configuration/diagnostic category.');
   if (!metadata.hasState) return bad('unavailable', 'The registered contact has no current state.');
-  if (metadata.deviceClass && !contactClasses.has(metadata.deviceClass)) return bad('contact_class', 'This device class does not report an opening contact.');
-  if (!metadata.deviceClass && config.contact_source_confirmed !== true) return bad('contact_class', 'Confirm that this unclassified binary sensor is a real opening contact.');
+  if (config.kind !== 'lock' && metadata.deviceClass && !contactClasses.has(metadata.deviceClass)) return bad('contact_class', 'This device class does not report an opening contact.');
+  if (config.kind !== 'lock' && !metadata.deviceClass && config.contact_source_confirmed !== true) return bad('contact_class', 'Confirm that this unclassified binary sensor is a real opening contact.');
   const freshness = readFreshness(metadata.state, config.freshness, now);
   if (!['ready', 'current'].includes(freshness.status)) return { ...base, status: metadata.state.state === 'unknown' ? 'unknown' : freshness.status,
     shown: true, diagnostics: freshness.diagnostics.map((d) => ({ ...d, id: config.id })) };
   const reported = metadata.state.state;
+  if (config.kind === 'lock') {
+    if (!['locked', 'unlocked', 'locking', 'unlocking', 'jammed'].includes(reported)) return { ...bad('unknown', 'The lock does not report a known native lock state.'), shown: true };
+    const locked = reported === 'locked' ? true : reported === 'unlocked' ? false : null;
+    return { ...base, status: reported, locked, active: locked === null ? null : !locked, open: null, shown: true,
+      verified: freshness.verified, nextExpiry: freshness.nextExpiry, diagnostics: [] };
+  }
   if (![...config.open_states, ...config.closed_states].includes(reported)) return { ...bad('unknown', 'The contact does not report a configured open or closed state.'), shown: true };
   const open = config.open_states.includes(reported);
-  return { ...base, status: open ? 'open' : 'closed', open, shown: true, verified: freshness.verified,
+  return { ...base, status: open ? 'open' : 'closed', open, active: open, shown: true, verified: freshness.verified,
     nextExpiry: freshness.nextExpiry, diagnostics: [] };
+}
+
+/** Public alias for callers that display both locks and opening contacts. */
+export const readSecurityState = readSecurityContact;
+export function securityHighlight(reading) {
+  return reading.active === true ? reading.config.highlight.open
+    : reading.active === false ? reading.config.highlight.closed : reading.config.highlight.unknown;
 }
 
 const within = (node, ancestor) => { for (let n = node; n; n = n.parent) if (n === ancestor) return true; return false; };
@@ -200,8 +247,12 @@ export class SecurityLayer {
     for (const value of bindings) {
       const reading = readSecurityContact(hass, value, { now }), config = reading.config;
       diagnostics.push(...reading.diagnostics);
+      // Saved identity is unique even when another row is disabled or malformed.
+      // Never silently activate a different row carrying the same requested ID.
+      if (typeof config.id === 'string' && /^[a-z0-9_-]{1,64}$/.test(config.id)) ids.set(config.id, (ids.get(config.id) || 0) + 1);
       if (!config.valid || !config.enabled) continue;
-      ids.set(config.id, (ids.get(config.id) || 0) + 1); objects.set(config.object_id, (objects.get(config.object_id) || 0) + 1);
+      if (config.targetType === 'plan') continue; // valid plan targets belong to the separate scene adapter
+      objects.set(config.object_id, (objects.get(config.object_id) || 0) + 1);
       const matches = this._objects.get(config.object_id) || [];
       if (matches.length !== 1) { diagnostics.push(issue(matches.length ? 'ambiguous_object' : 'missing_object', 'Choose one exact tagged model object; plain node names are not object IDs.', config.id)); continue; }
       if (!reading.shown) continue;
@@ -248,7 +299,7 @@ export class SecurityLayer {
       }
       keep.add(config.id); part.reading = reading; part.shown = candidate.shown; part.config = config;
       if (reading.nextExpiry !== null) this.nextExpiry = this.nextExpiry === null ? reading.nextExpiry : Math.min(this.nextExpiry, reading.nextExpiry);
-      const color = reading.status === 'open' ? config.highlight.open : reading.status === 'closed' ? config.highlight.closed : config.highlight.unknown;
+      const color = securityHighlight(reading);
       const visible = this._visible && part.shown && !!color && config.highlight.opacity > 0;
       if (part.color !== color || part.opacity !== config.highlight.opacity) {
         if (color) part.material.color.set(color); part.material.opacity = config.highlight.opacity;

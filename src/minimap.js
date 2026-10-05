@@ -1,6 +1,7 @@
 // A north-up SVG plan. It shares the card's rooms and live positions; no second 3D renderer.
 import { centroid, signedArea } from './placement.js';
 import { isActive } from './registry.js';
+import { localize, localeKey } from './localization.js';
 
 const NS = 'http://www.w3.org/2000/svg';
 const WIDTH = 200, HEIGHT = 150;
@@ -16,6 +17,16 @@ const SYMBOLS = {
   'mdi:motion-sensor': 'M -4 0 A 4 4 0 0 1 4 0 M -2 0 A 2 2 0 0 1 2 0 M 0 0 V 4 M -2 4 H 2',
   'mdi:car': 'M -4 3 V -1 L -2 -4 H 2 L 4 -1 V 3 Z M -4 -1 H 4 M -2 3 V 4 M 2 3 V 4',
   'mdi:robot-vacuum': 'M 0 -4 A 4 4 0 1 0 0 4 A 4 4 0 1 0 0 -4 M -2 -1 H 2 M 0 4 V 6 M -1 5 H 1',
+  'mdi:door-open': 'M -3 -5 V 5 H 3 V -5 Z M -1 -5 L 2 -3 V 5 L -1 3 Z',
+  'mdi:door-closed': 'M -3 -5 V 5 H 3 V -5 Z M 1 0 H 2',
+  'mdi:window-open-variant': 'M -4 -4 H 0 V 4 H -4 Z M 0 -4 L 4 -2 V 4 L 0 2 Z',
+  'mdi:window-closed-variant': 'M -4 -4 H 4 V 4 H -4 Z M 0 -4 V 4 M -4 0 H 4',
+  'mdi:lock-outline': 'M -3 -1 H 3 V 5 H -3 Z M -2 -1 V -3 A 2 2 0 0 1 2 -3 V -1 M 0 1 V 3',
+  'mdi:lock-open-variant-outline': 'M -3 -1 H 3 V 5 H -3 Z M -2 -1 V -3 A 2 2 0 0 1 2 -3 M 0 1 V 3',
+  'mdi:smoke-detector': 'M -4 -2 H 4 V 2 H -4 Z M -2 4 H 2 M -2 -4 Q -4 -6 -2 -7 M 2 -4 Q 0 -6 2 -7',
+  'mdi:water-alert': 'M -2 -5 Q -7 1 -2 4 Q 2 1 -2 -5 Z M 4 -3 V 1 M 4 3 V 4',
+  'mdi:lock-open': 'M -3 -1 H 3 V 5 H -3 Z M -2 -1 V -3 A 2 2 0 0 1 2 -3 M 0 1 V 3',
+  'mdi:alert': 'M 0 -6 L 6 5 H -6 Z M 0 -2 V 1 M 0 3 V 4',
 };
 
 // Preserve equal scale on both axes. Plan north (+y) is screen up (-y).
@@ -109,6 +120,23 @@ export function miniMapScene(data = {}, { floorId } = {}) {
     status: typeof marker.status === 'string' ? marker.status : '', positionStatus: typeof marker.positionStatus === 'string' ? marker.positionStatus : '',
     tracked: true, icon: Object.hasOwn(SYMBOLS, marker.icon) ? marker.icon : null,
     color: safeColour(marker.color) ? marker.color : null, faded: false });
+  // Alert readers already own trigger/latch/restored semantics. Only their exact
+  // SOURCE locations enter this plan; missing/stale floors never become Ground.
+  const alerts = Array.isArray(data.alertMarkers) ? data.alertMarkers : [], alertIds = new Map();
+  for (const alert of alerts) if (typeof alert?.id === 'string') alertIds.set(alert.id, (alertIds.get(alert.id) || 0) + 1);
+  for (const alert of alerts) {
+    const position = alert?.location, matches = (Array.isArray(data.floors) ? data.floors : []).filter((floor) => floor?.id === position?.floorId);
+    if (typeof alert?.id !== 'string' || !alert.id || alertIds.get(alert.id) !== 1 || markers.some((marker) => marker.id === alert.id)
+      || typeof alert.entity !== 'string' || !/^[a-z][a-z0-9_]*\.[a-z0-9_]+$/.test(alert.entity)
+      || alert.shown !== true || !position || position.floorId !== chosen || matches.length !== 1 || matches[0].stale
+      || matches[0].shown === false || !finite(matches[0].elevation) || ![position.x, position.y].every(finite)
+      || Math.abs(position.x) > 1e6 || Math.abs(position.y) > 1e6 || (!alert.active && alert.status === 'clear')) continue;
+    markers.push({ id: alert.id, bindingId: alert.bindingId, generation: alert.generation, entityId: alert.entity,
+      x: position.x, y: position.y, floorId: chosen, name: typeof alert.label === 'string' ? alert.label : alert.entity,
+      alert: true, selectable: alert.selectable === true, active: alert.active === true, unavailable: unavailable.has(alert.status),
+      icon: Object.hasOwn(SYMBOLS, alert.icon) ? alert.icon : 'mdi:alert', color: safeColour(alert.color) ? alert.color : null,
+      state: '', status: typeof alert.status === 'string' ? alert.status : '', faded: false });
+  }
   const transform = miniMapTransform([...shownRooms.flatMap((r) => r.polygon), ...markers.map((m) => [m.x, m.y])]);
   return { rooms: shownRooms, markers, floors, floorId: chosen, transform, camera: miniMapCamera(data) };
 }
@@ -143,6 +171,11 @@ const STYLE = `
   stroke:var(--taylors3d-map-marker-color,var(--primary-color,#03a9f4)); stroke-width:1.2; stroke-linecap:round; stroke-linejoin:round; pointer-events:none; }
 .taylors3d-minimap .map-marker.tracked.unavailable .dot,.taylors3d-minimap .map-marker.tracked.unavailable .symbol {
   stroke:var(--disabled-text-color,#aaa); }
+.taylors3d-minimap .map-marker.alert .dot { fill:var(--ha-card-background,var(--card-background-color,#fff));
+  stroke:var(--taylors3d-map-marker-color,var(--error-color,#d83d46)); }
+.taylors3d-minimap .map-marker.alert .symbol { visibility:visible; fill:none;
+  stroke:var(--taylors3d-map-marker-color,var(--error-color,#d83d46)); stroke-width:1.2; stroke-linecap:round; stroke-linejoin:round; pointer-events:none; }
+.taylors3d-minimap .map-marker.alert.unavailable .dot { stroke-dasharray:2 2; }
 .taylors3d-minimap .map-hit { fill:transparent; }
 .taylors3d-minimap .map-camera { pointer-events:none; color:var(--primary-color,#03a9f4); }
 .taylors3d-minimap .map-camera circle { fill:var(--card-background-color,#fff); stroke:currentColor; stroke-width:1.7; }
@@ -192,6 +225,7 @@ export class MiniMap {
     this.visible = visible !== false;
     this.disposed = false;
     this._listeners = [];
+    this._alertIntents = new WeakMap(); this._alertHeld = new Map();
     const doc = stage.ownerDocument;
     this.el = doc.createElement('div');
     this.el.className = 'taylors3d-minimap';
@@ -207,7 +241,7 @@ export class MiniMap {
     this.title = doc.createElement('span'); this.title.className = 'map-title'; this.title.textContent = 'Mini-map';
     this.select = doc.createElement('select'); this.select.className = 'map-floor'; this.select.setAttribute('aria-label', 'Mini-map floor');
     const close = doc.createElement('button'); close.type = 'button'; close.className = 'map-close';
-    close.dataset.mapClose = ''; close.textContent = '×'; close.setAttribute('aria-label', 'Hide mini-map');
+    close.dataset.mapClose = ''; close.textContent = '×'; close.setAttribute('aria-label', 'Hide mini-map'); this.closeButton = close;
     header.append(this.title, this.select, close); this.el.append(header);
     this.svg = svgElement(doc, 'svg', { viewBox: `0 0 ${WIDTH} ${HEIGHT}`, role: 'group', 'aria-label': 'North-up floor plan' });
     this.ground = svgElement(doc, 'rect', { x: 0, y: 0, width: WIDTH, height: HEIGHT, class: 'map-ground', role: 'button', tabindex: 0, 'aria-label': 'Focus the centre of this floor' });
@@ -221,11 +255,18 @@ export class MiniMap {
     stage.append(this.el);
     const listen = (el, type, handler, options) => { el.addEventListener(type, handler, options); this._listeners.push(() => el.removeEventListener(type, handler, options)); };
     for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'dblclick', 'wheel', 'contextmenu']) listen(this.el, type, (e) => e.stopPropagation());
+    listen(this.el, 'pointerdown', (e) => this._pressAlert(e));
+    listen(this.el, 'pointerup', (e) => this._releaseAlert(e));
+    listen(this.el, 'pointercancel', (e) => this._releaseAlert(e, false, true));
+    listen(this.el, 'focusout', (e) => { const intent = this._alertIntents.get(e.target.closest?.('.map-marker.alert')); if (intent && !intent.consumed) intent.valid = false; });
     listen(this.el, 'click', (e) => { e.stopPropagation(); this._activate(e); });
     listen(this.el, 'keydown', (e) => {
       e.stopPropagation();
-      if ((e.key === 'Enter' || e.key === ' ') && e.target.closest?.('svg [role="button"]')) { e.preventDefault(); this._activate(e, true); }
+      if ((e.key === 'Enter' || e.key === ' ') && e.target.closest?.('svg [role="button"]')) {
+        e.preventDefault(); if (!this._pressAlert(e, true)) this._activate(e, true);
+      }
     });
+    listen(this.el, 'keyup', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); this._releaseAlert(e, true); } });
     listen(this.select, 'change', (e) => { e.stopPropagation(); this._selectedFloor = this.select.value; this.update(this._data || {}); });
     this.update({});
   }
@@ -234,11 +275,16 @@ export class MiniMap {
     if (this.disposed) return;
     const focused = this._focusedElement();
     this._data = data;
+    const hass = data.hass, language = localeKey(hass);
+    this.el.setAttribute('aria-label', localize(hass, 'minimap.aria'));
+    this.select.setAttribute('aria-label', localize(hass, 'minimap.floor'));
+    this.closeButton.setAttribute('aria-label', localize(hass, 'minimap.hide'));
+    this.ground.setAttribute('aria-label', localize(hass, 'minimap.centre'));
     this.scene = miniMapScene(data, { floorId: this._selectedFloor });
     this._selectedFloor = this.scene.floorId;
     const floor = this.scene.floors.find((f) => f.id === this.scene.floorId);
-    this.svg.setAttribute('aria-label', `North-up floor plan${floor ? `, ${floor.name}` : ''}`);
-    this.title.textContent = this.scene.floors.length > 1 ? 'Mini-map' : floor?.name || 'Mini-map';
+    this.svg.setAttribute('aria-label', floor ? localize(hass, 'minimap.planFloor', { name: floor.name }) : localize(hass, 'minimap.plan'));
+    this.title.textContent = this.scene.floors.length > 1 ? localize(hass, 'minimap.title') : floor?.name || localize(hass, 'minimap.title');
     const optionsKey = JSON.stringify(this.scene.floors.map((f) => [f.id, f.name]));
     if (optionsKey !== this._optionsKey) {
       this.select.replaceChildren();
@@ -248,22 +294,23 @@ export class MiniMap {
     this.select.hidden = this.scene.floors.length < 2;
     this.select.value = this.scene.floorId || '';
     this._syncVisibility();
+    this._pollAlertIntents();
     const transform = this.scene.transform;
     if (!transform) {
       this.roomLayer.replaceChildren(); this.markerLayer.replaceChildren(); this._roomsKey = this._markersKey = null;
       this.cameraLayer.setAttribute('visibility', 'hidden'); this._restoreFocus(focused); return;
     }
     const frameKey = [transform.center, transform.scale];
-    const roomsKey = JSON.stringify([frameKey, this.scene.rooms]);
+    const roomsKey = JSON.stringify([language, frameKey, this.scene.rooms]);
     if (roomsKey !== this._roomsKey) {
       keyedSvg(this.roomLayer, this.scene.rooms, 'data-room', () => svgElement(this.el.ownerDocument, 'polygon'), (el, r) => svgAttributes(el, {
         points: r.polygon.map((p) => transform.toSvg(p).map(round).join(',')).join(' '),
         class: `map-room${r.outdoor ? ' outdoor' : ''}${r.selected ? ' selected' : ''}`, 'data-room': r.id,
-        role: 'button', tabindex: 0, 'aria-label': `Focus ${r.name}`, 'aria-pressed': String(r.selected),
+        role: 'button', tabindex: 0, 'aria-label': localize(hass, 'minimap.focus', { name: r.name }), 'aria-pressed': String(r.selected),
       }));
       this._roomsKey = roomsKey;
     }
-    const markersKey = JSON.stringify([frameKey, this.scene.markers]);
+    const markersKey = JSON.stringify([language, frameKey, this.scene.markers]);
     if (markersKey !== this._markersKey) {
       keyedSvg(this.markerLayer, this.scene.markers, 'data-marker', () => {
         const g = svgElement(this.el.ownerDocument, 'g');
@@ -271,10 +318,12 @@ export class MiniMap {
         return g;
       }, (g, m) => {
         const [x, y] = transform.toSvg([m.x, m.y]);
-        svgAttributes(g, { class: `map-marker${m.tracked ? ' tracked' : ''}${m.active ? ' active' : ''}${m.unavailable ? ' unavailable' : ''}${m.faded ? ' faded' : ''}`,
+        svgAttributes(g, { class: `map-marker${m.tracked ? ' tracked' : ''}${m.alert ? ' alert' : ''}${m.active ? ' active' : ''}${m.unavailable ? ' unavailable' : ''}${m.faded ? ' faded' : ''}`,
           transform: `translate(${round(x)} ${round(y)})`, 'data-marker': m.id, role: 'button', tabindex: 0,
-          'aria-label': `Focus ${m.name}${m.state ? `, ${m.state}` : ''}${m.tracked && m.status ? `; ${m.status}` : ''}${m.positionStatus ? `; position ${m.positionStatus.replaceAll('_', ' ')}` : ''}` });
-        svgAttributes(g.querySelector('.dot'), { r: m.tracked ? 7 : 3 });
+          'aria-label': m.alert ? localize(hass, 'popup.entityControls', { name: m.name })
+            : `${localize(hass, 'minimap.focus', { name: m.name })}${m.state ? `, ${m.state}` : ''}${m.tracked && m.status ? `; ${m.status}` : ''}${m.positionStatus ? `; ${localize(hass, 'minimap.position', { status: m.positionStatus.replaceAll('_', ' ') })}` : ''}` });
+        if (m.alert) g.setAttribute('aria-disabled', String(!m.selectable)); else g.removeAttribute('aria-disabled');
+        svgAttributes(g.querySelector('.dot'), { r: m.tracked || m.alert ? 7 : 3 });
         svgAttributes(g.querySelector('.symbol'), { d: m.icon ? SYMBOLS[m.icon] : '' });
         if (m.color) g.style.setProperty('--taylors3d-map-marker-color', m.color);
         else g.style.removeProperty('--taylors3d-map-marker-color');
@@ -312,6 +361,11 @@ export class MiniMap {
     const markerId = event.target.closest?.('[data-marker]')?.getAttribute('data-marker');
     const room = this.scene.rooms.find((r) => r.id === roomId);
     const marker = this.scene.markers.find((m) => m.id === markerId);
+    if (markerId && !marker) return;
+    const alertNode = event.target.closest?.('.map-marker.alert'), intent = this._alertIntents.get(alertNode);
+    if (marker?.alert && (!marker.selectable || alertNode?.getAttribute('role') !== 'button'
+      || intent && (!intent.valid || intent.consumed || !intent.released || intent.key !== this._alertIntentKey(marker)))) return;
+    if (marker?.alert && intent) intent.consumed = true;
     let p = marker ? [marker.x, marker.y] : room ? room.center : this.scene.transform.center;
     if (!marker && !room && !keyboard) {
       const box = this.svg.getBoundingClientRect();
@@ -320,9 +374,37 @@ export class MiniMap {
     const focus = { x: p[0], y: p[1], floorId: this.scene.floorId };
     if (room) focus.roomId = room.id;
     if (marker) focus.markerId = marker.id;
-    this.callbacks.onFocus?.(focus);
+    if (!marker?.alert) this.callbacks.onFocus?.(focus);
     if (room) this.callbacks.onRoom?.(room.id, focus);
-    if (marker) this.callbacks.onMarker?.(marker.id, { ...focus, entityId: marker.entityId, name: marker.name, icon: marker.icon || null, tracked: marker.tracked === true });
+    if (marker) this.callbacks.onMarker?.(marker.id, { ...focus, entityId: marker.entityId, name: marker.name, icon: marker.icon || null,
+      tracked: marker.tracked === true, ...(marker.alert ? { alert: true, bindingId: marker.bindingId, generation: marker.generation } : {}) });
+  }
+
+  _alertIntentKey(marker) { return JSON.stringify([marker?.id, marker?.entityId, marker?.floorId, marker?.generation]); }
+  _pressAlert(event, keyboard = false) {
+    const node = event.target.closest?.('.map-marker.alert'); if (!node) return false;
+    const heldKey = keyboard ? `key:${event.key}` : `pointer:${event.pointerId ?? 0}`;
+    if (keyboard && event.repeat) return true;
+    const marker = this.scene?.markers.find((marker) => marker.alert && marker.id === node.getAttribute('data-marker'));
+    const intent = { node, key: this._alertIntentKey(marker), valid: !!marker?.selectable && !this.el.hidden,
+      released: false, consumed: false };
+    this._alertIntents.set(node, intent); this._alertHeld.set(heldKey, intent); return true;
+  }
+  _releaseAlert(event, keyboard = false, cancelled = false) {
+    const heldKey = keyboard ? `key:${event.key}` : `pointer:${event.pointerId ?? 0}`, intent = this._alertHeld.get(heldKey);
+    if (!intent) return; this._alertHeld.delete(heldKey); this._pollAlertIntent(intent);
+    intent.released = true; if (cancelled) intent.valid = false;
+    if (keyboard && intent.valid && !cancelled && event.target.closest?.('.map-marker.alert') === intent.node) this._activate(event, true);
+  }
+  _pollAlertIntent(intent) {
+    const marker = this.scene?.markers.find((marker) => marker.alert && marker.id === intent.node.getAttribute('data-marker'));
+    if (this.el.hidden || !this.el.contains(intent.node) || !marker?.selectable || intent.key !== this._alertIntentKey(marker)) intent.valid = false;
+  }
+  _pollAlertIntents() {
+    // Released pointer intents remain fenced until click, including a loss that
+    // is later recovered on the same retained SVG node.
+    for (const node of this.markerLayer.children) { const intent = this._alertIntents.get(node); if (intent) this._pollAlertIntent(intent); }
+    for (const intent of this._alertHeld.values()) this._pollAlertIntent(intent);
   }
 
   _syncVisibility() { this.el.hidden = !this.visible || !!this._data?.editing || !this.scene?.rooms.length; }
@@ -354,6 +436,7 @@ export class MiniMap {
     const next = !!visible, changed = next !== this.visible;
     this.visible = next;
     this._syncVisibility();
+    this._pollAlertIntents();
     this._restoreFocus(focused);
     if (changed) this.callbacks.onVisibilityChange?.(next);
   }
@@ -362,6 +445,7 @@ export class MiniMap {
     if (this.disposed) return;
     const focused = this._focusedElement();
     this.disposed = true;
+    this._alertHeld.clear(); this._alertIntents = new WeakMap();
     this._restoreFocus(focused);
     for (const remove of this._listeners.splice(0)) remove();
     this.callbacks = {};

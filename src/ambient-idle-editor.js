@@ -1,5 +1,6 @@
 // Future EditMode fragment. All settings remain drafts until Save; this editor
 // never moves a camera, dims a picture, starts a timer or sends a HA action.
+import { editorExtraNotice, readEditorExtraNotice, editorExtraText, editorExtraCaption, updateEditorExtraCaptions, syncEditorOptions, editorExtraDiagnostic } from './editor-extra-localization.js';
 import { AMBIENT_IDLE_DEFAULTS, readAmbientIdle, readAmbientDim } from './ambient-idle.js';
 import { readSunState } from './weather.js';
 import { nightFactor } from './objects/logic.js';
@@ -9,7 +10,7 @@ const plain = (value) => !!value && typeof value === 'object' && [Object.prototy
 const clone = (value) => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const own = (value, key) => plain(value) && Object.hasOwn(value, key);
-const modes = [['sun', 'Actual sun'], ['quiet_hours', 'Quiet hours'], ['sun_or_quiet_hours', 'Actual sun or quiet hours']];
+const modesKeys = [['sun', 'idle.sun'], ['quiet_hours', 'idle.quiet'], ['sun_or_quiet_hours', 'idle.either']];
 const known = new Set(['enabled', 'idle_seconds', 'rotate', 'rotation_degrees_per_second', 'dim']);
 const dimKnown = new Set(['enabled', 'brightness', 'when', 'start', 'end']);
 const extras = (value, fields) => plain(value) ? Object.fromEntries(Object.entries(value).filter(([key]) => !fields.has(key))) : {};
@@ -27,6 +28,13 @@ export class AmbientIdleEditor {
     this.draft = null; this.dirty = false; this.disposed = false; this._loaded = false;
     this.message = null; this.stale = false;
   }
+  _modes() { return modesKeys.map(([value, key]) => [value, this._t(key)]); }
+  get message() { return readEditorExtraNotice(this.card._hass, this._message); }
+  set message(value) { this._message = value; }
+  _notice(key, parameters = {}) { return editorExtraNotice(key, parameters); }
+  _t(key, parameters = {}) { return editorExtraText(this.card._hass, key, parameters); }
+  _caption(key) { return editorExtraCaption(this.card._hass, key); }
+  _diagnostic(value) { return editorExtraDiagnostic(this.card._hass, value); }
   get effective() { return this.card._layout?.ambient_idle ?? this.card._config?.ambient_idle; }
   _context() {
     const config = this.card._config || {}, layout = this.card._layout || {}, user = this.card._hass?.user;
@@ -49,11 +57,11 @@ export class AmbientIdleEditor {
   }
   _readOnly() { return this.card._hass?.user?.is_admin !== true; }
   _contextIssue() {
-    return this.stale ? 'The saved settings, model or user changed while you were editing. Your draft is kept. Cancel to load the latest settings before saving.' : null;
+    return this.stale ? this._t('idle.stale') : null;
   }
   _evaluation() {
-    const policy = readAmbientIdle(this.draft), issues = policy.diagnostics.map((diagnostic) => diagnostic.message);
-    if (this._readOnly()) issues.push('Only an administrator can save idle settings.');
+    const policy = readAmbientIdle(this.draft), issues = policy.diagnostics.map((diagnostic) => this._diagnostic(diagnostic));
+    if (this._readOnly()) issues.push(this._t('idle.admin'));
     const context = this._contextIssue(); if (context) issues.push(context);
     return { policy, issues };
   }
@@ -79,16 +87,16 @@ export class AmbientIdleEditor {
     const { policy, issues } = this._evaluation(), saved = readAmbientIdle(this.effective);
     const { sun, reading } = this._sourceReport(), zone = this.card._hass?.config?.time_zone;
     const source = policy.dim.when;
-    const sunText = sun.status === 'ready' ? `Current sun elevation: ${sun.elevation}°.` : 'No usable current sun reading. Sun-based dimming waits for Home Assistant’s sun.sun.';
+    const sunText = sun.status === 'ready' ? this._t('idle.sunReading', { value: sun.elevation }) : this._t('idle.sunMissing');
     const quietText = reading.quietHours.status === 'ready'
-      ? `Quiet hours are ${reading.quietHours.active ? 'active' : 'inactive'} at the current Home Assistant local time.`
-      : 'Quiet-hours dimming needs Home Assistant’s valid time zone and the current clock.';
-    return `<p>Currently saved: <strong>${saved.valid ? saved.enabled ? 'Idle mode enabled' : 'Idle mode off' : 'Invalid settings; idle effects disabled'}</strong>.</p>
-      ${this.dirty ? '<p>Unsaved settings. Save to apply them; Cancel keeps the saved settings.</p>' : ''}
-      <p class="ambient-idle-hint">Editing these settings does not rotate or dim the house. Dimming changes this card’s picture, not your tablet backlight or real lights.</p>
-      ${policy.enabled && policy.dim.enabled ? `<p>${source !== 'quiet_hours' ? esc(sunText) : ''}</p>${source !== 'sun' ? `<p>Home Assistant time zone: ${esc(zone || 'not reported')}. ${esc(quietText)}</p>` : ''}
-      <p>Conditions checked now: ${reading.factor > 0 ? `picture brightness would be ${Math.round(reading.brightness * 100)}% after the idle delay` : 'no currently trusted dim condition is active'}. This is a reading check, not a live preview.</p>
-      ${reading.diagnostics.length ? `<ul>${reading.diagnostics.map((diagnostic) => `<li>${esc(diagnostic.message)}</li>`).join('')}</ul>` : ''}` : ''}
+      ? this._t(reading.quietHours.active ? 'idle.quietActive' : 'idle.quietInactive')
+      : this._t('idle.quietMissing');
+    return `<p>${this._caption('common.saved')} <strong>${saved.valid ? saved.enabled ? this._t('idle.on') : this._t('idle.off') : this._t('idle.invalid')}</strong>.</p>
+      ${this.dirty ? `<p>${this._caption('idle.unsaved')}</p>` : ''}
+      <p class="ambient-idle-hint">${this._caption('idle.displayHelp')}</p>
+      ${policy.enabled && policy.dim.enabled ? `<p>${source !== 'quiet_hours' ? esc(sunText) : ''}</p>${source !== 'sun' ? `<p>${esc(this._t('idle.zone', { zone: zone || this._t('common.notReported'), reading: quietText }))}</p>` : ''}
+      <p>${esc(this._t('idle.conditionReading', { reading: reading.factor > 0 ? this._t('idle.wouldDim', { value: Math.round(reading.brightness * 100) }) : this._t('idle.noCondition') }))}</p>
+      ${reading.diagnostics.length ? `<ul>${reading.diagnostics.map((diagnostic) => `<li>${esc(this._diagnostic(diagnostic))}</li>`).join('')}</ul>` : ''}` : ''}
       ${this.message ? `<p role="status">${esc(this.message)}</p>` : ''}
       ${issues.length ? `<ul role="status">${issues.map((message) => `<li>${esc(message)}</li>`).join('')}</ul>` : ''}`;
   }
@@ -97,6 +105,7 @@ export class AmbientIdleEditor {
     this._ensure();
     const root = container.matches?.('[data-ambient-idle-editor]') ? container : container.querySelector('[data-ambient-idle-editor]');
     if (!root) return;
+    updateEditorExtraCaptions(root, this.card._hass);
     const status = root.querySelector('[data-ambient-idle-status]'), html = this._statusHtml();
     if (status && status.innerHTML !== html) status.innerHTML = html;
     const disabled = this._readOnly() || !!this._contextIssue() || !plain(this.draft);
@@ -104,10 +113,8 @@ export class AmbientIdleEditor {
       control.disabled = disabled;
       const field = control.dataset.field.slice(prefix.length), raw = this._raw(field);
       if (control.type === 'checkbox') { control.checked = raw === true; control.indeterminate = typeof raw !== 'boolean'; }
-      else if (!this.dirty) {
-        if (control.tagName === 'SELECT') this._updateModes(control, raw);
-        else control.value = this._fieldValue(field);
-      }
+      else if (control.tagName === 'SELECT') this._updateModes(control, raw);
+      else if (!this.dirty) control.value = this._fieldValue(field);
     }
     const save = root.querySelector(`[data-act="${prefix}save"]`);
     if (save) save.disabled = !this.dirty || this._evaluation().issues.length > 0;
@@ -115,11 +122,9 @@ export class AmbientIdleEditor {
     if (repair) repair.disabled = this._readOnly() || !!this._contextIssue();
   }
   _updateModes(select, raw) {
-    for (const option of [...select.options]) if (!modes.some(([value]) => value === option.value)) option.remove();
-    if (!modes.some(([value]) => value === raw)) {
-      const option = document.createElement('option'); option.value = ''; option.disabled = true;
-      option.textContent = 'Unsupported saved condition — choose a replacement'; select.prepend(option); select.value = '';
-    } else select.value = raw;
+    const choices = this._modes(), missing = !choices.some(([value]) => value === raw);
+    const html = `${missing ? `<option value="" disabled>${esc(this._t('idle.unsupported'))}</option>` : ''}${choices.map(([value, label]) => `<option value="${value}">${esc(label)}</option>`).join('')}`;
+    syncEditorOptions(select, html, missing ? '' : raw);
   }
   render() {
     if (this.disposed) return '';
@@ -127,7 +132,7 @@ export class AmbientIdleEditor {
     const disabled = this._readOnly() || this._contextIssue() || !plain(this.draft) ? 'disabled' : '';
     const checkbox = (field, label) => `<label class="ambient-idle-check"><input type="checkbox" data-field="${prefix}${field}" ${this._raw(field) === true ? 'checked' : ''} ${disabled}>${label}</label>`;
     const input = (field, label, attributes) => `<label>${label}<input data-field="${prefix}${field}" ${attributes} value="${esc(this._fieldValue(field))}" ${disabled}></label>`;
-    const condition = this._raw('dim.when'), extra = modes.some(([value]) => value === condition) ? '' : '<option value="" disabled selected>Unsupported saved condition — choose a replacement</option>';
+    const condition = this._raw('dim.when'), extra = this._modes().some(([value]) => value === condition) ? '' : `<option value="" disabled selected>${esc(this._t('idle.unsupported'))}</option>`;
     return `<section data-ambient-idle-editor data-taylors3d-ui="ambient-idle-editor"><style>
       [data-ambient-idle-editor]{color:var(--primary-text-color,#212121);margin-bottom:20px}
       [data-ambient-idle-editor] label{display:flex;flex-direction:column;gap:5px;margin:10px 0;overflow-wrap:anywhere}
@@ -138,16 +143,16 @@ export class AmbientIdleEditor {
       [data-ambient-idle-editor] :focus-visible{outline:3px solid var(--primary-color,#03a9f4);outline-offset:2px}
       [data-ambient-idle-editor] .ambient-idle-actions{display:flex;gap:7px;flex-wrap:wrap}[data-ambient-idle-editor] .ambient-idle-hint{color:var(--secondary-text-color,#666)}
       [data-ambient-idle-editor] p,[data-ambient-idle-editor] li{overflow-wrap:anywhere}
-      </style><h3>Ambient idle</h3><p>Choose what the house picture does when nobody is touching the card.</p>
-      ${checkbox('enabled', 'Enable ambient idle')}${input('idle_seconds', 'Wait before idle mode, seconds', 'type="number" min="1" max="86400" step="1"')}
-      ${checkbox('rotate', 'Slowly rotate the house')}${input('rotation_degrees_per_second', 'Rotation speed, degrees per second', 'type="number" min="0" max="6" step="0.1"')}
-      <p class="ambient-idle-hint">Rotation is a display effect. It must pause for touch, controls, alerts, scene previews and automatic view changes. Reduced-motion and inactive views must stay still; it does not promise a particular tablet frame rate or battery saving.</p>
-      ${checkbox('dim.enabled', 'Dim the card picture while idle')}${input('dim.brightness', 'Dimmed picture brightness, percent', 'type="number" min="10" max="100" step="1"')}
-      <label>When to dim<select data-field="${prefix}dim.when" ${disabled}>${extra}${modes.map(([value, label]) => `<option value="${value}" ${condition === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
-      ${input('dim.start', 'Quiet hours start, 24-hour HH:mm', 'type="text" inputmode="numeric" placeholder="22:00"')}${input('dim.end', 'Quiet hours end, 24-hour HH:mm', 'type="text" inputmode="numeric" placeholder="07:00"')}
-      <p class="ambient-idle-hint">Quiet hours use Home Assistant’s time zone, not a guessed browser zone. A range can cross midnight. Start and end must differ. Actual sun uses sun.sun; manual Day/Night and the theme are separate.</p>
+      </style><h3>${this._caption('idle.title')}</h3><p>${this._caption('idle.intro')}</p>
+      ${checkbox('enabled', this._caption('idle.enable'))}${input('idle_seconds', this._caption('idle.delay'), 'type="number" min="1" max="86400" step="1"')}
+      ${checkbox('rotate', this._caption('idle.rotate'))}${input('rotation_degrees_per_second', this._caption('idle.speed'), 'type="number" min="0" max="6" step="0.1"')}
+      <p class="ambient-idle-hint">${this._caption('idle.rotationHelp')}</p>
+      ${checkbox('dim.enabled', this._caption('idle.dim'))}${input('dim.brightness', this._caption('idle.brightness'), 'type="number" min="10" max="100" step="1"')}
+      <label>${this._caption('idle.when')}<select data-field="${prefix}dim.when" ${disabled}>${extra}${this._modes().map(([value, label]) => `<option value="${value}" ${condition === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+      ${input('dim.start', this._caption('idle.start'), 'type="text" inputmode="numeric" placeholder="22:00"')}${input('dim.end', this._caption('idle.end'), 'type="text" inputmode="numeric" placeholder="07:00"')}
+      <p class="ambient-idle-hint">${this._caption('idle.timeHelp')}</p>
       <div data-ambient-idle-status aria-live="polite">${this._statusHtml()}</div>
-      <div class="ambient-idle-actions"><button type="button" data-act="${prefix}save" ${!this.dirty || this._evaluation().issues.length ? 'disabled' : ''}>Save idle settings</button><button type="button" data-act="${prefix}cancel">Cancel</button><button type="button" data-act="${prefix}repair" ${this._readOnly() || this._contextIssue() ? 'disabled' : ''}>Use default idle settings</button></div></section>`;
+      <div class="ambient-idle-actions"><button type="button" data-act="${prefix}save" ${!this.dirty || this._evaluation().issues.length ? 'disabled' : ''}>${this._caption('idle.save')}</button><button type="button" data-act="${prefix}cancel">${this._caption('common.cancel')}</button><button type="button" data-act="${prefix}repair" ${this._readOnly() || this._contextIssue() ? 'disabled' : ''}>${this._caption('idle.defaults')}</button></div></section>`;
   }
   onChange(field, element) {
     if (this.disposed || !field?.startsWith(prefix) || !element) return false;
@@ -155,7 +160,7 @@ export class AmbientIdleEditor {
     if (this._readOnly() || this._contextIssue() || !plain(this.draft)) return true;
     const path = field.slice(prefix.length), [section, key] = path.split('.');
     if (!['enabled', 'idle_seconds', 'rotate', 'rotation_degrees_per_second', 'dim.enabled', 'dim.brightness', 'dim.when', 'dim.start', 'dim.end'].includes(path)) return false;
-    if (key && own(this.draft, section) && !plain(this.draft[section])) { this.message = 'The saved dimming settings need deliberate repair. Use default idle settings, or Cancel to keep them.'; this.updatePreviews(element.closest?.('[data-ambient-idle-editor]')); return true; }
+    if (key && own(this.draft, section) && !plain(this.draft[section])) { this.message = this._notice('idle.repairDim'); this.updatePreviews(element.closest?.('[data-ambient-idle-editor]')); return true; }
     let value = element.value;
     if (['enabled', 'rotate', 'dim.enabled'].includes(path)) value = element.checked === true;
     else if (['idle_seconds', 'rotation_degrees_per_second', 'dim.brightness'].includes(path)) {
@@ -179,7 +184,7 @@ export class AmbientIdleEditor {
     if (action !== `${prefix}save`) return false;
     const { issues } = this._evaluation();
     if (!this.dirty || issues.length || typeof this.card.commitFeatureLayout !== 'function') {
-      this.message = issues[0] || 'Change an idle setting before saving.'; this.onRender(); return true;
+      this.message = issues[0] || this._notice('idle.change'); this.onRender(); return true;
     }
     this.card.commitFeatureLayout({ ambient_idle: clone(this.draft) }); this.reset(); this.onRender(); return true;
   }

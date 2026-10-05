@@ -21,6 +21,13 @@ const categories = Object.freeze({
   cars: { title: 'Cars', emptyText: 'No current vehicle sources are selected. Choose your sources in Edit → Tracking.' },
 });
 const unreadable = 'Current Home Assistant entities could not be read. Refresh the connection and try again.';
+const ownedPresentation = new WeakMap();
+
+// The public category data remains literal English. Only results produced here
+// carry private provenance for the card's own translated headings and guidance.
+export function ownedHouseCategoryPresentation(category) {
+  return category && typeof category === 'object' ? ownedPresentation.get(category) : undefined;
+}
 
 function session(hass) {
   if (!plain(hass)) return false;
@@ -99,21 +106,27 @@ export function buildHouseCategory(options = {}) {
   const hass = field(options, 'hass'), id = field(options, 'id');
   if (typeof id !== 'string' || !own(categories, id) || !session(hass)) return null;
   const category = categories[id];
-  const result = (entityIds = [], emptyText = category.emptyText) => ({ id, title: category.title, entityIds, emptyText });
+  const result = (entityIds = [], emptyText = category.emptyText,
+    emptyTextKey = `house.categories.${id}Empty`, emptyTextParams = {}) => {
+    const value = { id, title: category.title, entityIds, emptyText };
+    ownedPresentation.set(value, Object.freeze({ titleKey: `house.nav.${id}`, emptyTextKey,
+      emptyTextParams: Object.freeze({ ...emptyTextParams }) }));
+    return value;
+  };
   const states = field(hass, 'states');
   const entities = own(hass, 'entities') ? field(hass, 'entities') : {};
   const devices = own(hass, 'devices') ? field(hass, 'devices') : {};
-  if (!plain(states) || !plain(entities) || !plain(devices)) return result([], unreadable);
+  if (!plain(states) || !plain(entities) || !plain(devices)) return result([], unreadable, 'house.categories.unreadable');
   const stateIds = Object.keys(states);
-  if (stateIds.length > HOUSE_CATEGORY_LIMITS.states) return result([], 'Too many Home Assistant entities to list safely. Reduce the entity list and try again.');
+  if (stateIds.length > HOUSE_CATEGORY_LIMITS.states) return result([], 'Too many Home Assistant entities to list safely. Reduce the entity list and try again.', 'house.categories.stateLimit');
   let candidates = stateIds;
   if (id === 'cars') {
     const layout = own(options, 'layout') ? field(options, 'layout') : {};
-    if (!plain(layout)) return result([], 'Vehicle settings need review in Edit → Tracking.');
+    if (!plain(layout)) return result([], 'Vehicle settings need review in Edit → Tracking.', 'house.categories.vehicleReview');
     const bindings = field(layout, 'vehicle_bindings');
     if (bindings === undefined && !own(layout, 'vehicle_bindings')) return result();
-    if (!Array.isArray(bindings)) return result([], 'Vehicle settings need review in Edit → Tracking.');
-    if (bindings.length > HOUSE_CATEGORY_LIMITS.vehicleBindings) return result([], 'Too many saved vehicle bindings. Reduce the list in Edit → Tracking.');
+    if (!Array.isArray(bindings)) return result([], 'Vehicle settings need review in Edit → Tracking.', 'house.categories.vehicleReview');
+    if (bindings.length > HOUSE_CATEGORY_LIMITS.vehicleBindings) return result([], 'Too many saved vehicle bindings. Reduce the list in Edit → Tracking.', 'house.categories.vehicleLimit');
     candidates = [];
     for (let index = 0; index < bindings.length; index++) {
       const binding = field(bindings, String(index));
@@ -129,7 +142,8 @@ export function buildHouseCategory(options = {}) {
     const metadata = currentMetadata(states, entities, devices, entityId);
     if (!metadata || id !== 'cars' && !matches(id, metadata)) continue;
     selected.add(entityId);
-    if (selected.size > HOUSE_CATEGORY_LIMITS.entities) return result([], `More than ${HOUSE_CATEGORY_LIMITS.entities} current ${category.title.toLowerCase()} entities are selected. Reduce the list to open this category.`);
+    if (selected.size > HOUSE_CATEGORY_LIMITS.entities) return result([], `More than ${HOUSE_CATEGORY_LIMITS.entities} current ${category.title.toLowerCase()} entities are selected. Reduce the list to open this category.`,
+      `house.categories.${id}Limit`, { limit: HOUSE_CATEGORY_LIMITS.entities });
   }
   return result([...selected].sort());
 }

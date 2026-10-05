@@ -1,5 +1,7 @@
 // Future photo-inspired navigation. No routes, HA services or household data are
 // inferred here. Root owns selection, panel content and the measured card layout.
+import { localize } from './localization.js';
+
 export const HOUSE_NAVIGATION_LIMITS = Object.freeze({ items: 32, id: 64, label: 128, path: 512 });
 const definition = (id, label, icon, action) => Object.freeze({ id, label, icon, action: Object.freeze(action) });
 export const HOUSE_NAVIGATION_ITEMS = Object.freeze([
@@ -11,6 +13,10 @@ export const HOUSE_NAVIGATION_ITEMS = Object.freeze([
   definition('cars', 'Cars', 'mdi:car', { type: 'category', id: 'cars' }),
   definition('settings', 'Settings', 'mdi:cog', { type: 'category', id: 'settings' }),
 ]);
+// Translate only card-owned defaults. Supplied navigation labels are user data.
+export function localizeHouseNavigationItems(hass) {
+  return HOUSE_NAVIGATION_ITEMS.map((item) => ({ ...item, label: localize(hass, `house.nav.${item.id}`, {}, item.label) }));
+}
 const plain = (value) => !!value && typeof value === 'object'
   && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 const validId = (value) => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(value);
@@ -108,8 +114,11 @@ export class HouseNavigation {
     const item = matches.length === 1 ? readItem(matches[0]) : null;
     return item && item.raw === row.item.raw && item.key === row.item.key && !item.hidden && !item.disabled ? row : null;
   }
-  update({ selected = this.selected, items = this._rawItems } = {}) {
+  update({ selected = this.selected, items = this._rawItems, hass = this._hass } = {}) {
     if (this._disposed) return { valid: false, diagnostics: [{ code: 'disposed', message: 'Navigation has been disposed.' }] };
+    this._hass = hass;
+    const aria = localize(hass, 'house.nav.aria', {}, 'House navigation');
+    if (this.element.getAttribute('aria-label') !== aria) this.element.setAttribute('aria-label', aria);
     this.selected = validId(selected) ? selected : null; this._rawItems = items;
     const diagnostics = [], next = new Map(), duplicates = new Set(), seenIds = new Set();
     if (!Array.isArray(items) || items.length > HOUSE_NAVIGATION_LIMITS.items) diagnostics.push({ code: 'items', message: 'Provide at most 32 explicit navigation items.' });

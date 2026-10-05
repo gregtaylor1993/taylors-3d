@@ -58,4 +58,20 @@ describe('Security controls in the actual layout editor', () => {
     security(); click('sec-add'); edit.detach(); expect(edit._securityEditor.draft).toBeNull();
     edit.attach(); edit.render(); expect(edit._securityEditor.disposed).toBe(false); expect(card._commit).not.toHaveBeenCalled();
   });
+  it('saves an exact plan lock with one Undo/Redo change and no house or hinge requirement', () => {
+    const { card, edit, click, change, security, leaf } = setup();
+    card._view.model = null; card._hass.states['lock.entrance'] = { state: 'unlocked', attributes: { friendly_name: 'Entrance lock' } };
+    security(); click('sec-add'); change('kind', 'lock'); change('entity', 'lock.entrance'); change('target-type', 'plan'); change('plan-source', 'position');
+    change('plan-floor', 'ground'); change('plan-x', '1.25', 'input'); change('plan-y', '-2'); change('plan-z', '.3'); click('sec-save');
+    expect(card._layout.security_bindings[0]).toMatchObject({ kind: 'lock', entity: 'lock.entrance', target: { type: 'plan', position: { x: 1.25, y: -2, z: .3, floorId: 'ground' } } });
+    expect(card._commit).toHaveBeenCalledOnce(); click('history-undo'); expect(card._layout.security_bindings).toBeUndefined();
+    click('history-redo'); expect(card._layout.security_bindings[0].kind).toBe('lock'); expect(leaf.rotation.y).toBe(0); expect(card._hass.callService).not.toHaveBeenCalled(); expect(edit._securityEditor.draft).toBeNull();
+  });
+  it('retains a focused Save button while observing revoked/recovered session intent', () => {
+    const { card, edit, newDraft } = setup(); card._hass.connection = { connected: true }; newDraft();
+    const button = edit.panel.querySelector('[data-act="sec-save"]'); button.focus(); button.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    card._hass.connection.connected = false; edit.onStates(); card._hass.connection.connected = true; edit.afterUpdate();
+    expect(edit.panel.querySelector('[data-act="sec-save"]')).toBe(button); button.click(); expect(card._commit).not.toHaveBeenCalled();
+    expect(edit._securityEditor.draft).not.toBeNull(); expect(card._hass.callService).not.toHaveBeenCalled();
+  });
 });

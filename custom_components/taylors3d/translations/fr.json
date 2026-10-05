@@ -1,0 +1,53 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Taylor's 3D",
+        "description": "Enregistre les agencements de Taylor's 3D dans Home Assistant pour que tous les utilisateurs et appareils voient le même plan, et charge la carte sur tous les tableaux de bord."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Taylor's 3D est déjà configuré."
+    }
+  },
+  "services": {
+    "select_view": {
+      "name": "Sélectionner une vue de caméra",
+      "description": "Sélectionne une vue enregistrée sur une carte ouverte de Taylor's 3D. Indiquez le nom du panneau, l’identifiant de la carte ou les deux. Les cibles indisponibles ou ambiguës et les vues inconnues signalent une erreur d’action.",
+      "fields": {
+        "layout_key": {
+          "name": "Clé d’agencement",
+          "description": "Le layout_key configuré sur la carte souhaitée."
+        },
+        "preset": {
+          "name": "Vue enregistrée",
+          "description": "L’identifiant de la vue enregistrée ou son nom exact et unique."
+        },
+        "panel": {
+          "name": "Panneau",
+          "description": "Le nom du panneau enregistré pour ce navigateur dans l’onglet Vues, ou automation_panel dans la configuration. Indiquez ce nom ou un identifiant de carte."
+        },
+        "card_id": {
+          "name": "Identifiant de carte",
+          "description": "L’automation_card_id configuré sur la carte. Indiquez cet identifiant ou un panneau."
+        },
+        "mode": {
+          "name": "Mode de caméra",
+          "description": "Remplacement facultatif. Sinon, utilise le mode enregistré de la vue ou le mode actuel de la carte."
+        },
+        "return_after": {
+          "name": "Revenir après",
+          "description": "Nombre facultatif de secondes avant de rétablir la vue et la caméra précédentes. Zéro ou aucune valeur conserve la vue sélectionnée. Toucher la carte ou envoyer une nouvelle demande correspondante annule le retour."
+        }
+      }
+    }
+  },
+  "selector": {
+    "camera_mode": {
+      "options": {
+        "3d": "3D",
+        "top": "Vue de dessus"
+      }
+    }
+  }
+}

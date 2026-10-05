@@ -74,14 +74,18 @@ const dotOffset = () => ev(`(() => { const c = ${card}, v = c._view; const r = v
 // panel can reframe the top camera after it has changed mode, even with no tween.
 const settle = async () => {
   await page.waitForFunction(`(async () => {
-    const v = ${card}._view, frame = () => new Promise((r) => requestAnimationFrame(r));
+    const c = ${card}, v = c._view, frame = () => new Promise((r) => requestAnimationFrame(r));
     const snapshot = () => [...v.camera.position.toArray(), ...v.controls.target.toArray(), v.camera.zoom || 1, v.size.w, v.size.h];
     const same = (a, b) => a.every((x, i) => Math.abs(x - b[i]) < 1e-5);
-    if (v._tween) return false;
+    const resized = () => {
+      const r = c._scene.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && Math.abs(v.size.w - r.width) < 1e-5 && Math.abs(v.size.h - r.height) < 1e-5;
+    };
+    if (v._tween || !resized()) return false;
     const before = snapshot(); await frame();
-    if (v._tween) return false;
+    if (v._tween || !resized()) return false;
     const next = snapshot(); await frame();
-    return !v._tween && same(before, next) && same(next, snapshot());
+    return !v._tween && resized() && same(before, next) && same(next, snapshot());
   })()`, { timeout: 7000, polling: 'raf' });
 };
 // stems: [stem count, visible stem discs, visible markers]
@@ -115,6 +119,7 @@ try {
   check('garage listed as missing', await ev(`[...${card}.shadowRoot.querySelectorAll(".panel li")].some(li => li.textContent.includes("Garage") && li.textContent.includes("missing"))`));
 
   // draw the garage west of the bedroom, sharing its wall (x = 0)
+  await settle(); // Draw's top-camera fit must use the resized current scene.
   check('start drawing', await rowButton('Garage', 'Draw'));
   await settle();
   await ev(`(() => { const v = ${card}._view; v.ortho.zoom = 0.75; v.ortho.updateProjectionMatrix(); v.dirty = true; })()`);
@@ -310,10 +315,22 @@ try {
     return { card: r('ha-card').width, stage: [r('.stage').width, r('.stage').height], panel: r('.panel').width, panelTop: r('.panel').top, stageBottom: r('.stage').bottom }; })()`);
   check('narrow: plan keeps full width and height', Math.abs(box.stage[0] - box.card) < 1 && box.stage[1] === 520, JSON.stringify(box));
   check('narrow: panel below the plan, within the card', box.panelTop >= box.stageBottom - 1 && box.panel <= box.card + 1);
-  const hit = await p.evaluate(`(() => { const s = ${card}.shadowRoot;
+  const draw = await p.evaluate(`(() => { const c = ${card}, s = c.shadowRoot;
     const b = [...s.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === 'Draw');
-    const r = b.getBoundingClientRect(); return s.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === b; })()`);
-  check('narrow: Draw button is clickable (not covered)', hit);
+    const r = b.getBoundingClientRect(), point = [r.x + r.width / 2, r.y + r.height / 2];
+    const hit = s.elementFromPoint(...point);
+    return { point, areaId: b.dataset.id, uncovered: hit?.closest('button') === b && !b.disabled,
+      rooms: JSON.stringify(c._layout.rooms) }; })()`);
+  // A caption span belongs to its native button. A different covering control
+  // still fails at the same centre point, and the real click must start drawing.
+  check('narrow: Draw button is clickable (not covered)', draw.uncovered);
+  await p.mouse.click(...draw.point);
+  await sleep(150);
+  check('narrow: real Draw click starts the selected room outline without saving', await p.evaluate(({ areaId, rooms }) => {
+    const c = document.querySelector('taylors3d-card'), drawing = c._edit.drawing;
+    return drawing?.areaId === areaId && drawing.points.length === 0 && c._mode === 'top'
+      && JSON.stringify(c._layout.rooms) === rooms;
+  }, draw));
   errors.push(...narrow.errors);
 } finally {
   await narrow.close();

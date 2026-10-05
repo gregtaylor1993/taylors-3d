@@ -31,7 +31,7 @@ describe('future house header uses actual summary readings', () => {
     const { header } = fixture(), hass = current(); header.update(buildHouseSummary(hass, settings));
     expect(header.title.textContent).toBe('Simulated home');
     expect(header.rows.get('weather').textContent).toBe('Cloudy · 12 °C');
-    expect(header.rows.get('people').textContent).toBe('1 of 1 selected people home');
+    expect(header.rows.get('people').textContent).toBe('1 of 1 selected person home');
     expect(header.rows.get('alarm').textContent).toBe('Disarmed');
     expect(header.rows.get('lights').textContent).toBe('1 light on');
     expect(hass.callService).not.toHaveBeenCalled();
@@ -46,7 +46,7 @@ describe('future house header uses actual summary readings', () => {
     header.update(buildHouseSummary(hass, settings));
     expect(header.rows.get(key).hidden).toBe(false);
     expect(header.rows.get(key).dataset.status).not.toBe('ready');
-    expect(header.rows.get(key).textContent).not.toBe({ weather: 'Cloudy · 12 °C', people: '1 of 1 selected people home', alarm: 'Disarmed' }[key]);
+    expect(header.rows.get(key).textContent).not.toBe({ weather: 'Cloudy · 12 °C', people: '1 of 1 selected person home', alarm: 'Disarmed' }[key]);
   });
   it('revokes current readings on disconnect and preserves only an explicit title', () => {
     const { header } = fixture(), hass = current(); header.update(buildHouseSummary(hass, { ...settings, title: 'My house' }));
@@ -63,7 +63,7 @@ describe('future house header uses actual summary readings', () => {
   });
   it('labels selected people and entity counts precisely for screen readers', () => {
     const { header } = fixture(); header.update(buildHouseSummary(current(), settings));
-    expect(header.rows.get('people').getAttribute('aria-label')).toBe('Selected people: 1 of 1 selected people home');
+    expect(header.rows.get('people').getAttribute('aria-label')).toBe('Selected people: 1 of 1 selected person home');
     expect(header.rows.get('lights').getAttribute('aria-label')).toBe('Light entities: 1 light on');
     expect(header.rows.get('lights').title).toContain('not a count of physical bulbs');
     for (const row of header.rows.values()) expect(row.getAttribute('aria-atomic')).toBe('true');

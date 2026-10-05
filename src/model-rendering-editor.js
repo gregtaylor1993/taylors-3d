@@ -1,6 +1,9 @@
 // Display settings are drafts until Save. This editor never alters a GLB,
 // creates baked textures, changes current HA states or sends a device command.
 import { readModelRendering, modelShadingReport } from './model-rendering.js';
+import { localize } from './localization.js';
+import { renderAdvancedCaptions, updateAdvancedCaptions } from './translations/advanced-settings.js';
+import { editorDetailText, editorDetailSpan, updateEditorDetails, editorOwnedMessage } from './editor-runtime-details.js';
 
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const plain = (value) => !!value && typeof value === 'object' && [Object.prototype, null].includes(Object.getPrototypeOf(value));
@@ -10,6 +13,7 @@ const presets = [
   { id: 'normal', label: 'Normal', shadows: 'realtime', lamps: 'inherit' },
   { id: 'no-shadows', label: 'No realtime shadows', shadows: 'off', lamps: 'inherit' },
   { id: 'authored', label: 'Authored shading (lamps off)', shadows: 'off', lamps: 'off' },
+  { id: 'shadows-only', label: 'Realtime shadows (lamps off)', shadows: 'realtime', lamps: 'off' },
 ];
 const presetFor = (value) => {
   const policy = readModelRendering(value);
@@ -22,6 +26,12 @@ const presetFor = (value) => {
  * rendering override. Focused model-rendering-* controls must survive HA updates.
  */
 export class ModelRenderingEditor {
+  _captions(html) { return renderAdvancedCaptions(html, 'shading', (key, fallback) => localize(this.card._hass, key, {}, fallback)); }
+  _translateCaptions(root) { updateAdvancedCaptions(root, 'shading', (key, fallback) => localize(this.card._hass, key, {}, fallback)); updateEditorDetails(root, this.card._hass); }
+  _text(id, params) { return editorDetailText(this.card._hass, `shading.${id}`, params); }
+  _help(id) { return editorDetailSpan(this.card._hass, `shading.${id}`); }
+  _message(value) { return editorOwnedMessage(this.card._hass, value); }
+  _presetLabel(preset) { return preset ? localize(this.card._hass, `advanced.shading.preset.${preset.id}`, {}, preset.label) : this._text('imported'); }
   constructor(card, onRender = () => {}) {
     this.card = card;
     this.onRender = onRender;
@@ -73,28 +83,28 @@ export class ModelRenderingEditor {
   }
   _reportHtml() {
     const report = modelShadingReport(this.modelRoot);
-    if (!report.hasModel) return '<p>No model is loaded. You can save a display choice now; it will also apply when a model is loaded.</p>';
+    if (!report.hasModel) return `<p>${esc(this._text('noModel'))}</p>`;
     const counts = report.counts;
-    return `<p>Loaded model: ${esc(counts.meshes)} meshes · ${esc(counts.materials)} unique materials.</p>
-      <ul><li>Ambient occlusion (AO) textures: ${esc(counts.aoMaterials)} materials</li>
-      <li>Unlit materials: ${esc(counts.unlitMaterials)}</li>
-      <li>Light-map textures: ${esc(counts.lightMapMaterials)} materials</li></ul>
-      <p>Texture coordinates used: ${report.uvChannels.length ? report.uvChannels.map((channel) => esc(`${channel.attribute} (${channel.materialUses} material uses)`)).join(' · ') : 'none detected'}.</p>
-      <p class="model-rendering-hint">These are properties found in the loaded model, not proof of a complete lighting bake. AO adds shading in creases; it does not provide moving shadows. Unlit materials do not respond to scene lighting.</p>
-      ${report.missingUV.length ? `<p role="status">${esc(report.missingUV.length)} texture uses have missing texture coordinates.</p><ul>${report.missingUV.map((issue) => `<li>${esc(issue.meshName || issue.meshId)} · ${esc(issue.materialName || issue.materialId)}: ${esc(issue.slot)} needs ${esc(issue.attribute)}.</li>`).join('')}</ul>` : ''}
-      ${report.diagnostics.length ? `<ul>${report.diagnostics.map((diagnostic) => `<li>${esc(diagnostic.message)}</li>`).join('')}</ul>` : ''}`;
+    return `<p>${esc(this._text('loaded', { meshes: counts.meshes, materials: counts.materials }))}</p>
+      <ul><li>${esc(this._text('ao', { count: counts.aoMaterials }))}</li>
+      <li>${esc(this._text('unlit', { count: counts.unlitMaterials }))}</li>
+      <li>${esc(this._text('lightMap', { count: counts.lightMapMaterials }))}</li></ul>
+      <p>${esc(this._text('coordinates', { channels: report.uvChannels.length ? report.uvChannels.map((channel) => this._text('channel', { attribute: channel.attribute, count: channel.materialUses })).join(' · ') : this._text('none') }))}</p>
+      <p class="model-rendering-hint">${esc(this._text('reportHelp'))}</p>
+      ${report.missingUV.length ? `<p role="status">${esc(this._text('missingUV', { count: report.missingUV.length }))}</p><ul>${report.missingUV.map((issue) => `<li>${esc(issue.meshName || issue.meshId)} · ${esc(issue.materialName || issue.materialId)}: ${esc(this._text('needs', { slot: issue.slot, attribute: issue.attribute }))}</li>`).join('')}</ul>` : ''}
+      ${report.diagnostics.length ? `<ul>${report.diagnostics.map((diagnostic) => `<li>${esc(diagnostic.code === 'missing_uv' && diagnostic.message === `A material's ${diagnostic.slot} requires a complete ${diagnostic.attribute} mesh attribute.` ? this._text('requires', { slot: diagnostic.slot, attribute: diagnostic.attribute }) : this._message(diagnostic))}</li>`).join('')}</ul>` : ''}`;
   }
   _statusHtml() {
     const { policy, issues } = this._evaluation();
     const saved = readModelRendering(this.effective);
     const savedPreset = presets.find((preset) => preset.shadows === saved.shadows && preset.lamps === saved.lamps);
-    const current = saved.valid ? savedPreset?.label ?? `Custom: shadows ${saved.shadows}, lamps ${saved.lamps}` : 'Invalid saved settings; safe defaults are being used';
-    return `<p>Currently applied: <strong>${esc(current)}</strong>.</p>
-      ${this.dirty ? `<p>Unsaved choice: <strong>${esc(presets.find((preset) => preset.id === this.selection)?.label ?? 'Imported custom settings')}</strong>. Save to apply it.</p>` : ''}
-      <p class="model-rendering-hint">${policy.lamps === 'off' ? 'After Save, model lamp illumination is off.' : 'Model lamps still respect the card’s existing lights setting.'} Real light states and controls stay available. The uploaded file stays unchanged.</p>
-      ${this.card._config?.lights === 'off' ? '<p class="model-rendering-hint">The card’s lights setting is already off. Normal and No realtime shadows keep it off.</p>' : ''}
-      ${this.message ? `<p role="status">${esc(this.message)}</p>` : ''}
-      ${issues.length ? `<ul role="status">${issues.map((issue) => `<li>${esc(issue)}</li>`).join('')}</ul>` : ''}`;
+    const current = saved.valid ? savedPreset ? this._presetLabel(savedPreset) : this._text('custom', { shadows: saved.shadows, lamps: saved.lamps }) : this._text('invalidSaved');
+    return `<p>${esc(this._text('current'))} <strong>${esc(current)}</strong>.</p>
+      ${this.dirty ? `<p>${esc(this._text('unsaved'))} <strong>${esc(this._presetLabel(presets.find((preset) => preset.id === this.selection)))}</strong>. ${esc(this._text('saveApply'))}</p>` : ''}
+      <p class="model-rendering-hint">${esc(this._text(policy.lamps === 'off' ? 'lampsOff' : 'lampsInherit'))} ${esc(this._text('unchanged'))}</p>
+      ${this.card._config?.lights === 'off' ? `<p class="model-rendering-hint">${esc(this._text('cardLightsOff'))}</p>` : ''}
+      ${this.message ? `<p role="status">${esc(this._message(this.message))}</p>` : ''}
+      ${issues.length ? `<ul role="status">${issues.map((issue) => `<li>${esc(this._message(issue))}</li>`).join('')}</ul>` : ''}`;
   }
 
   updatePreviews(container) {
@@ -120,13 +130,14 @@ export class ModelRenderingEditor {
     }
     const save = root.querySelector('[data-act="model-rendering-save"]');
     if (save) save.disabled = !this.dirty || !this._evaluation().policy.valid || this._evaluation().issues.length > 0;
+    this._translateCaptions(root);
   }
   render() {
     if (this.disposed) return '';
     this._ensure();
     const disabled = this._readOnly() || this._contextIssue() ? 'disabled' : '';
     const extra = presets.some((preset) => preset.id === this.selection) ? '' : `<option value="${esc(this.selection)}" selected disabled>${this.selection === 'invalid' ? 'Invalid saved settings — choose a replacement' : 'Imported custom settings — kept unchanged'}</option>`;
-    return `<section data-model-rendering-editor data-taylors3d-ui="model-rendering-editor"><style>
+    return this._captions(`<section data-model-rendering-editor data-taylors3d-ui="model-rendering-editor"><style>
       [data-model-rendering-editor]{color:var(--primary-text-color,#212121);margin-bottom:20px}
       [data-model-rendering-editor] label{display:flex;flex-direction:column;gap:5px;margin:10px 0}
       [data-model-rendering-editor] select,[data-model-rendering-editor] button{box-sizing:border-box;min-height:44px;max-width:100%;font:inherit;color:var(--primary-text-color,#212121);background:var(--secondary-background-color,var(--ha-card-background,var(--card-background-color,#f5f5f5)));border:1px solid var(--divider-color,#888);border-radius:9px;padding:8px}
@@ -134,12 +145,12 @@ export class ModelRenderingEditor {
       [data-model-rendering-editor] :focus-visible{outline:3px solid var(--primary-color,#03a9f4);outline-offset:2px}[data-model-rendering-editor] .model-rendering-actions{display:flex;gap:7px;flex-wrap:wrap}
       [data-model-rendering-editor] .model-rendering-hint{color:var(--secondary-text-color,#666)}[data-model-rendering-editor] p,[data-model-rendering-editor] li{overflow-wrap:anywhere}
       </style><h3>Model shading</h3>
-      <p class="model-rendering-hint">Choose how the card displays your model. These choices do not bake new shadows or change your real lights.</p>
+      <p class="model-rendering-hint">${this._help('intro')}</p>
       <label>Display choice<select data-field="model-rendering-preset" ${disabled}>${extra}${presets.map((preset) => `<option value="${preset.id}" ${this.selection === preset.id ? 'selected' : ''}>${preset.label}</option>`).join('')}</select></label>
-      <p class="model-rendering-hint">No realtime shadows stops computed shadows. Authored shading also turns off the card’s lamp illumination; existing textures remain. Materials that use scene lighting still respond to the sun and ambient light.</p>
+      <p class="model-rendering-hint">${this._help('policyHelp')}</p>
       <div data-model-rendering-status aria-live="polite">${this._statusHtml()}</div>
       <div class="model-rendering-actions"><button type="button" data-act="model-rendering-save" ${!this.dirty || this._evaluation().issues.length ? 'disabled' : ''}>Save shading</button><button type="button" data-act="model-rendering-cancel">Cancel</button></div>
-      <h4>What is in this model?</h4><div data-model-rendering-report>${this._reportHtml()}</div></section>`;
+      <h4>What is in this model?</h4><div data-model-rendering-report>${this._reportHtml()}</div></section>`);
   }
   onChange(field, element) {
     if (this.disposed || field !== `${prefix}preset` || !element) return false;

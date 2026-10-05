@@ -8,6 +8,7 @@ import { buildPresence, buildVehicles, buildVacuums } from '../src/tracked-entit
 const state = (value, name, attributes = {}) => ({ state: value, attributes: { friendly_name: name, ...attributes }, last_changed: '2026-10-05T10:00:00Z', last_updated: '2026-10-05T10:00:00Z' });
 function setup({ layout = {}, config = {} } = {}) {
   const card = {
+    isConnected: true, _editing: true, _loading: false, _edit: { tab: 'tracking' },
     _layout: { pins: { 'device:lamp': { x: 1, y: 2, floor_id: 'ground' } }, ...layout }, _config: { layout_key: 'default', ...config },
     _roomList: [
       { room: { id: 'lounge', area_id: 'lounge', polygon: [[0, 0], [4, 0], [4, 3], [0, 3]] }, floorId: 'ground' },
@@ -15,6 +16,7 @@ function setup({ layout = {}, config = {} } = {}) {
       { room: { id: 'driveway', name: 'Driveway', outdoor: true, polygon: [[0, -4], [4, -4], [4, -1], [0, -1]] }, floorId: 'ground' },
     ], _floors: [{ id: 'ground', name: 'Ground floor', elevation: 0 }, { id: 'first', name: 'First floor', elevation: 3 }],
     _hass: {
+      user: { id: 'current-admin', is_admin: true, is_active: true }, connection: { connected: true }, auth: {},
       areas: { lounge: { name: 'Lounge' }, bedroom: { name: 'Bedroom' } },
       states: {
         'binary_sensor.motion': state('on', 'Lounge motion', { device_class: 'motion' }),
@@ -48,10 +50,11 @@ function setup({ layout = {}, config = {} } = {}) {
   host.addEventListener('change', (event) => { editor.onChange(event.target.dataset.field, event.target); editor.updatePreviews(host); });
   host.addEventListener('input', (event) => editor.onInput(event.target.dataset.field, event.target));
   host.addEventListener('click', (event) => { const button = event.target.closest('[data-act]'); if (button && !button.disabled) editor.onClick(button.dataset.act, button); });
-  host.innerHTML = editor.render();
+  host.innerHTML = editor.render(); editor.updatePreviews(host);
   const change = (field, value, index) => {
     const control = [...host.querySelectorAll(`[data-field="trk-${field}"]`)].find((node) => index === undefined || Number(node.dataset.index) === index);
     expect(control, `field ${field}`).toBeTruthy();
+    control.focus();
     if (control.type === 'checkbox') control.checked = value; else control.value = value;
     control.dispatchEvent(new Event('change', { bubbles: true }));
   };
@@ -81,6 +84,101 @@ function chooseRoomLocation(ctx) {
   ctx.click('add'); ctx.change('kind', 'room_location'); ctx.change('entity', 'sensor.room'); ctx.change('room-source', 'sensor.room');
   ctx.click('add-map'); ctx.change('map-value', 'Living Room', 0); ctx.change('map-room', 'lounge', 0);
 }
+
+describe('supported visual options and current metadata picker filters', () => {
+  it.each(['ov-opacity', 'screen-name', undefined])('leaves input %s to its own editor without observing or consuming it', (field) => {
+    const ctx = setup(); chooseActivity(ctx);
+    const before = structuredClone(ctx.editor.draft), foreign = document.createElement('input');
+    foreign.value = 'Another editor draft'; document.body.append(foreign); foreign.focus();
+    const observe = vi.spyOn(ctx.editor, 'observe');
+    expect(ctx.editor.onInput(field, foreign)).toBe(false);
+    expect(observe).not.toHaveBeenCalled(); expect(ctx.editor.draft).toEqual(before);
+    ctx.assertNoHA();
+  });
+  it('saves explicit marker colour, size, heading and inactive display in one history entry without HA actions', () => {
+    const ctx = setup({ layout: { presence_bindings: [activity] } }); ctx.click('edit', 0);
+    ctx.change('color', '#a1b2c3'); ctx.change('size', '1.25'); ctx.change('heading', '-90'); ctx.change('show-inactive', true);
+    expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled(); ctx.click('save');
+    expect(ctx.card._layout.presence_bindings[0]).toMatchObject({ color: '#a1b2c3', size: 1.25, heading: -90, show_inactive: true });
+    expect(ctx.card.commitFeatureLayout).toHaveBeenCalledOnce();
+    const result = buildPresence({ hass: ctx.card._hass, bindings: ctx.card._layout.presence_bindings, rooms: ctx.card._roomList, floors: ctx.card._floors, now: Date.now() });
+    expect(result.records[0]).toMatchObject({ color: '#a1b2c3', size: 1.25, heading: 270 });
+    ctx.card._hass.states[activity.entity].state = 'off';
+    const inactive = buildPresence({ hass: ctx.card._hass, bindings: ctx.card._layout.presence_bindings, rooms: ctx.card._roomList, floors: ctx.card._floors, now: Date.now() });
+    expect(inactive.records[0]).toMatchObject({ active: false, shown: true, color: '#8d9199', size: 1.25 });
+    expect(ctx.card._history.undo().layout.presence_bindings[0]).toEqual(activity); ctx.assertNoHA();
+  });
+
+  it.each([['color', '#fff'], ['size', '0.09'], ['size', '5.01'], ['heading', 'not-a-number']])('rejects an edited invalid %s=%s without changing the saved source', (field, value) => {
+    const ctx = setup({ layout: { presence_bindings: [activity] } }); ctx.click('edit', 0); ctx.change(field, value); ctx.click('save');
+    expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled(); expect(ctx.card._layout.presence_bindings[0]).toBe(activity); ctx.assertNoHA();
+  });
+
+  it('preserves malformed imported appearance and unknown extensions on a label-only edit until deliberate repair', () => {
+    const saved = { ...activity, color: { imported: 'keep' }, size: 'legacy', heading: null, show_inactive: 'legacy', vendor: { keep: [1, 2] } };
+    const ctx = setup({ layout: { presence_bindings: [saved] } }); ctx.click('edit', 0); ctx.change('label', 'New label'); ctx.click('save');
+    expect(ctx.card._layout.presence_bindings[0]).toMatchObject({ label: 'New label', color: saved.color, size: saved.size, heading: null, show_inactive: 'legacy', vendor: saved.vendor });
+    expect(saved.label).toBeUndefined(); ctx.assertNoHA();
+  });
+
+  it('keeps a native appearance draft focused across unrelated readings and disables it after real source loss', () => {
+    const ctx = setup({ layout: { presence_bindings: [activity] } }); ctx.click('edit', 0);
+    const size = ctx.host.querySelector('[data-field="trk-size"]'); expect(size).toBeTruthy(); size.focus(); size.value = '1.20'; size.dispatchEvent(new Event('input', { bubbles: true }));
+    ctx.card._hass.states['light.lounge'] = state('off', 'Changed lamp'); ctx.editor.updatePreviews(ctx.host);
+    expect(ctx.host.querySelector('[data-field="trk-size"]')).toBe(size); expect(size.value).toBe('1.20'); expect(document.activeElement).toBe(size);
+    delete ctx.card._hass.states[activity.entity]; ctx.editor.updatePreviews(ctx.host); expect(size.disabled).toBe(true); ctx.click('save');
+    expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled(); ctx.assertNoHA();
+  });
+
+  it('offers interpolation only for measured vacuum coordinates and enforces the existing 0–2000ms bound', () => {
+    const ctx = setup(); chooseXY(ctx); ctx.change('interpolate-ms', '600'); ctx.click('save');
+    expect(ctx.card._layout.vacuum_bindings[0].interpolate_ms).toBe(600); ctx.click('edit', 0); ctx.change('interpolate-ms', '2001'); ctx.click('save');
+    expect(ctx.card.commitFeatureLayout).toHaveBeenCalledOnce(); expect(ctx.card._layout.vacuum_bindings[0].interpolate_ms).toBe(600); ctx.click('cancel');
+    ctx.click('add'); expect(ctx.host.querySelector('[data-field="trk-interpolate-ms"]')).toBeNull(); ctx.assertNoHA();
+  });
+
+  it.each(['presence', 'occupancy', 'count', 'event'])('uses the same explicit source-age rule for %s without replacing event expiry', (kind) => {
+    const ctx = setup(); if (kind === 'presence') chooseActivity(ctx); else { chooseVehicle(ctx, kind); if (kind === 'event') { ctx.change('timestamp-mode', 'state'); ctx.change('expires', '120'); } }
+    ctx.change('freshness-status-mode', 'timestamp'); ctx.change('freshness-status-timestamp-mode', 'last_updated'); ctx.change('freshness-status-age', '60'); ctx.click('save');
+    const key = kind === 'presence' ? 'presence_bindings' : 'vehicle_bindings', saved = ctx.card._layout[key][0];
+    expect(saved.freshness).toEqual({ timestamp_mode: 'last_updated', timestamp_format: 'iso', max_age_seconds: 60 });
+    if (kind === 'event') expect(saved.expires_seconds).toBe(120);
+    expect(ctx.card.commitFeatureLayout).toHaveBeenCalledOnce(); ctx.assertNoHA();
+  });
+
+  it('filters by current explicit or inherited area and unassigned metadata while retaining a selected out-of-filter source as saveable', () => {
+    const ctx = setup({ layout: { presence_bindings: [activity] } });
+    ctx.card._hass.entities = { ...ctx.card._hass.entities, [activity.entity]: { area_id: 'lounge' }, 'binary_sensor.occupancy': { device_id: 'room-device' } };
+    ctx.card._hass.devices = { 'room-device': { area_id: 'bedroom' } }; ctx.click('edit', 0);
+    ctx.change('area-filter', 'area:bedroom');
+    let choices = [...ctx.host.querySelector('[data-field="trk-entity"]').options];
+    expect(choices.find((entry) => entry.value === activity.entity).textContent).toContain('Outside current filter');
+    expect(choices.some((entry) => entry.value === 'binary_sensor.occupancy')).toBe(true); expect(choices.some((entry) => entry.value === 'binary_sensor.car')).toBe(false);
+    ctx.change('label', 'Kept exact source'); ctx.click('save'); expect(ctx.card._layout.presence_bindings[0].entity).toBe(activity.entity);
+    ctx.click('edit', 0); ctx.change('area-filter', 'unassigned'); choices = [...ctx.host.querySelector('[data-field="trk-entity"]').options];
+    expect(choices.some((entry) => entry.value === 'binary_sensor.car')).toBe(true); expect(choices.some((entry) => entry.value === 'binary_sensor.occupancy')).toBe(false); ctx.assertNoHA();
+  });
+
+  it('applies the current filter to the existing native calibration picker without changing its measured source or save eligibility', () => {
+    const ctx = setup(); chooseXY(ctx);
+    ctx.card._hass.entities = { ...ctx.card._hass.entities, 'sensor.position': { area_id: 'bedroom' }, 'vacuum.robot': { area_id: 'lounge' }, 'sensor.car_count': { area_id: 'lounge' } };
+    ctx.change('area-filter', 'area:lounge');
+    const picker = ctx.host.querySelector('[data-field="trk-cal-entity"]'), selected = [...picker.options].find((entry) => entry.value === 'sensor.position');
+    expect(picker.value).toBe('sensor.position'); expect(selected.disabled).toBe(true); expect(selected.textContent).toContain('Outside current filter');
+    expect([...picker.options].some((entry) => entry.value === 'sensor.car_count')).toBe(true);
+    picker.focus(); const original = picker; ctx.editor.updatePreviews(ctx.host);
+    expect(ctx.host.querySelector('[data-field="trk-cal-entity"]')).toBe(original); expect(document.activeElement).toBe(original);
+    ctx.click('save'); expect(ctx.card._layout.vacuum_bindings[0].position_source.entity).toBe('sensor.position'); ctx.assertNoHA();
+  });
+
+  it('offers inactive visibility only for supported maintained activity/vehicle markers, and clears edited optional appearance deliberately', () => {
+    const ctx = setup({ layout: { presence_bindings: [{ ...activity, color: '#aabbcc', size: 2, heading: 90 }] } }); ctx.click('edit', 0);
+    ctx.change('color', ''); ctx.change('size', ''); ctx.change('heading', ''); ctx.click('save');
+    for (const key of ['color', 'size', 'heading']) expect(ctx.card._layout.presence_bindings[0]).not.toHaveProperty(key);
+    ctx.section('vacuums'); ctx.click('add'); expect(ctx.host.querySelector('[data-field="trk-show-inactive"]')).toBeNull();
+    ctx.section('presence'); chooseRoomLocation(ctx); expect(ctx.host.querySelector('[data-field="trk-show-inactive"]')).toBeNull(); ctx.assertNoHA();
+  });
+});
 
 afterEach(() => { vi.useRealTimers(); document.body.replaceChildren(); });
 
@@ -430,12 +528,12 @@ describe('saved references, coordinates and history', () => {
   it('rejects duplicate binding IDs and keeps an unsupported saved type explicitly visible', () => {
     const ctx = setup({ layout: { presence_bindings: [activity, { ...activity }] } }); ctx.click('edit', 0); ctx.click('save');
     expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled(); expect(ctx.host.textContent).toContain('IDs must be unique');
-    ctx.click('cancel'); ctx.card._layout.presence_bindings = [{ ...activity, kind: 'imaginary' }]; ctx.host.innerHTML = ctx.editor.render(); ctx.click('edit', 0);
+    ctx.click('cancel'); ctx.card._layout.presence_bindings = [{ ...activity, kind: 'imaginary' }]; ctx.host.innerHTML = ctx.editor.render(); ctx.editor.updatePreviews(ctx.host); ctx.click('edit', 0);
     expect(ctx.host.querySelector('[data-field="trk-kind"]').value).toBe('imaginary'); expect(ctx.host.textContent).toContain('Unsupported saved type: imaginary');
   });
   it('reset/dispose drop drafts and further delegated events cannot save or call HA', () => {
     const ctx = setup(); chooseActivity(ctx); ctx.editor.reset(); expect(ctx.editor.draft).toBeNull();
-    ctx.host.innerHTML = ctx.editor.render();
+    ctx.host.innerHTML = ctx.editor.render(); ctx.editor.updatePreviews(ctx.host);
     chooseActivity(ctx); ctx.editor.dispose(); expect(ctx.editor.render()).toBe('');
     expect(ctx.editor.onChange('trk-label', { value: 'late' })).toBe(false); expect(ctx.editor.onClick('trk-save')).toBe(false); ctx.editor.updatePreviews(ctx.host);
     expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled(); ctx.assertNoHA();

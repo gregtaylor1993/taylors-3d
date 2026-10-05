@@ -1,6 +1,8 @@
 // Future scene-preview editor. Drafts describe local light appearance, never a
 // Home Assistant scene definition. Only the separate Activate action calls HA.
+import { editorExtraNotice, readEditorExtraNotice, editorExtraText, editorExtraCaption, updateEditorExtraCaptions, editorExtraDiagnostic } from './editor-extra-localization.js';
 import { entityChoices, entityMetadata, formatEntityValue } from './entity-metadata.js';
+import { EntityAreaFilter } from './entity-area-filter.js';
 import { lightCapabilities } from './light-state.js';
 import { readScenePreviews, validateScenePreview, captureLightSnapshot, sceneActivationAvailability, ScenePreviewController } from './scene-preview.js';
 
@@ -11,12 +13,10 @@ const finite = (value) => typeof value === 'number' && Number.isFinite(value);
 const number = (value) => typeof value === 'string' && value.trim() ? Number(value) : NaN;
 const prefix = 'scene-preview-';
 const defaults = () => ({ enabled: false, items: [] });
-const messages = (value) => (value?.diagnostics || []).map((diagnostic) => diagnostic.message);
 const rgbHex = (value) => Array.isArray(value) && value.length === 3 && value.every((channel) => finite(channel) && channel >= 0 && channel <= 255)
   ? '#' + value.map((channel) => Math.round(channel).toString(16).padStart(2, '0')).join('') : '#ffffff';
 const hexRgb = (value) => /^#[a-f0-9]{6}$/i.test(value) ? [1, 3, 5].map((index) => parseInt(value.slice(index, index + 2), 16)) : null;
 const option = (value, label, selected, disabled = false) => `<option value="${esc(value)}" ${value === selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}>${esc(label)}</option>`;
-const button = (action, label, attributes = '') => `<button type="button" data-act="${prefix}${action}" ${attributes}>${esc(label)}</button>`;
 
 /** Future root integration:
  * - render/onChange/onInput/onClick/updatePreviews/reset/cancel/dispose, like other editors.
@@ -31,6 +31,7 @@ const button = (action, label, attributes = '') => `<button type="button" data-a
  */
 export class ScenePreviewEditor {
   constructor(card, onRender = () => {}, { controller } = {}) {
+    this.areaFilter = new EntityAreaFilter();
     this.card = card; this.onRender = onRender; this.draft = null; this.selectedIndex = -1;
     this.dirty = false; this.disposed = false; this.message = null; this.previewToken = null;
     this.activationPending = false; this._generation = 0; this._modelIds = new WeakMap(); this._modelSeq = 0;
@@ -51,7 +52,15 @@ export class ScenePreviewEditor {
       },
     });
   }
+  _messages(value) { return (value?.diagnostics || []).map((diagnostic) => this._diagnostic(diagnostic)); }
+  _button(action, key, attributes = '') { return `<button type="button" data-act="${prefix}${action}" ${attributes}>${this._caption(key)}</button>`; }
   get hass() { return this.card._hass || {}; }
+  get message() { return readEditorExtraNotice(this.card._hass, this._message); }
+  set message(value) { this._message = value; }
+  _notice(key, parameters = {}) { return editorExtraNotice(key, parameters); }
+  _t(key, parameters = {}) { return editorExtraText(this.card._hass, key, parameters); }
+  _caption(key) { return editorExtraCaption(this.card._hass, key); }
+  _diagnostic(value) { return editorExtraDiagnostic(this.card._hass, value); }
   get effective() { return this.card._layout?.scene_previews ?? this.card._config?.scene_previews; }
   get items() { return Array.isArray(this.draft?.items) ? this.draft.items : []; }
   get selected() { return this.items[this.selectedIndex]; }
@@ -89,14 +98,14 @@ export class ScenePreviewEditor {
   _contextIssue() {
     if (this.baseContext !== this._contextKey() || this.baseValue !== JSON.stringify(this.effective)
       || this.baseConnection !== this.hass.connection || this.baseUser?.id !== this.hass.user?.id) {
-      return 'The layout, model, connection or saved preview settings changed. Your draft is kept. Cancel to load the latest settings before saving or previewing.';
+      return this._t('scene.context');
     }
     return null;
   }
   _referenceIssue(entity, domain) {
     const metadata = entityMetadata(this.hass, entity);
-    if (typeof entity !== 'string' || !entity.startsWith(`${domain}.`)) return `Choose an actual ${domain} entity.`;
-    if (!metadata.hasState || metadata.hidden || metadata.disabled || metadata.category) return `${entity}: this saved link is missing, hidden, disabled or diagnostic. Restore it, relink deliberately, or remove it.`;
+    if (typeof entity !== 'string' || !entity.startsWith(`${domain}.`)) return this._t('scene.chooseEntity', { domain });
+    if (!metadata.hasState || metadata.hidden || metadata.disabled || metadata.category) return this._t('scene.badLink', { entity });
     return null;
   }
   _itemChanged(item) {
@@ -104,20 +113,20 @@ export class ScenePreviewEditor {
     return JSON.stringify(original) !== JSON.stringify(item);
   }
   _saveIssues() {
-    const issues = messages(readScenePreviews(this.draft));
-    if (this.badImported) issues.push('The imported preview settings are malformed. Start a new preview list deliberately to replace them.');
-    if (this._readOnly()) issues.push('Only an administrator can edit scene previews.');
-    if (this.hass.connection?.connected !== true) issues.push('Wait for an established Home Assistant connection before saving preview settings.');
+    const issues = this._messages(readScenePreviews(this.draft));
+    if (this.badImported) issues.push(this._t('scene.badImport'));
+    if (this._readOnly()) issues.push(this._t('scene.admin'));
+    if (this.hass.connection?.connected !== true) issues.push(this._t('scene.waitConnection'));
     if (this._contextIssue()) issues.push(this._contextIssue());
     for (const item of this.items.filter((value) => this._itemChanged(value))) {
       const ref = this._referenceIssue(item?.scene_entity, 'scene'); if (ref) issues.push(ref);
-      if (this.items.filter((other) => other?.id === item?.id).length > 1) issues.push('Each scene preview needs its own unique saved ID. Remove or repair the duplicate deliberately.');
-      if (item?.scene_entity && this.items.filter((other) => other?.scene_entity === item.scene_entity).length > 1) issues.push('Use each Home Assistant scene only once in the saved preview list. Remove or relink the duplicate deliberately.');
+      if (this.items.filter((other) => other?.id === item?.id).length > 1) issues.push(this._t('scene.duplicateId'));
+      if (item?.scene_entity && this.items.filter((other) => other?.scene_entity === item.scene_entity).length > 1) issues.push(this._t('scene.duplicateScene'));
       // Empty mappings can still activate a saved scene. They cannot pretend to
       // preview its non-light devices. Only deliberately changed targets need
       // current capabilities; untouched saved entries are retained verbatim.
       const checked = validateScenePreview(this.hass, item);
-      issues.push(...checked.diagnostics.filter((diagnostic) => !(diagnostic.code === 'lights' && Array.isArray(item?.lights) && !item.lights.length)).map((diagnostic) => diagnostic.message));
+      issues.push(...checked.diagnostics.filter((diagnostic) => !(diagnostic.code === 'lights' && Array.isArray(item?.lights) && !item.lights.length)).map((diagnostic) => this._diagnostic(diagnostic)));
     }
     return [...new Set(issues)];
   }
@@ -129,9 +138,9 @@ export class ScenePreviewEditor {
   }
   _activationIssues() {
     const saved = this._savedSelected();
-    if (!saved) return ['Save and enable this exact scene link before activating it.'];
+    if (!saved) return [this._t('scene.saveBeforeActivate')];
     if (this._contextIssue()) return [this._contextIssue()];
-    return messages(sceneActivationAvailability(this.hass, saved.scene_entity));
+    return this._messages(sceneActivationAvailability(this.hass, saved.scene_entity));
   }
   _activationButton(event) {
     const button = event.target?.closest?.(`[data-act="${prefix}activate"]`);
@@ -223,14 +232,14 @@ export class ScenePreviewEditor {
     intent.consumed = true; return true;
   }
   _previewIssues() {
-    const issues = messages(this._draftValidation());
-    if (this.selected) issues.push(...messages(sceneActivationAvailability(this.hass, this.selected.scene_entity)));
-    if (!readScenePreviews(this.effective).enabled || this.draft.enabled !== true) issues.push('Save enabled scene previews before previewing a draft.');
-    if (!this.selected) issues.push('Choose a scene preview.');
-    if (this._readOnly()) issues.push('Draft previews are available to administrators.');
-    if (this.card._scenePreviewAvailable?.(true) === false) issues.push('Show this connected card in the Scenes editor before previewing a draft. Hidden, detached or loading cards cannot show a preview.');
+    const issues = this._messages(this._draftValidation());
+    if (this.selected) issues.push(...this._messages(sceneActivationAvailability(this.hass, this.selected.scene_entity)));
+    if (!readScenePreviews(this.effective).enabled || this.draft.enabled !== true) issues.push(this._t('scene.saveEnabled'));
+    if (!this.selected) issues.push(this._t('scene.choosePreview'));
+    if (this._readOnly()) issues.push(this._t('scene.draftAdmin'));
+    if (this.card._scenePreviewAvailable?.(true) === false) issues.push(this._t('scene.showEditor'));
     if (this._contextIssue()) issues.push(this._contextIssue());
-    if (this.ownsController && typeof this.card.previewSceneLights !== 'function') issues.push('The local scene preview renderer is not connected.');
+    if (this.ownsController && typeof this.card.previewSceneLights !== 'function') issues.push(this._t('scene.noRenderer'));
     return [...new Set(issues)];
   }
   _stopOwned() {
@@ -239,67 +248,67 @@ export class ScenePreviewEditor {
   }
   _changed() { this._stopOwned(); this.dirty = true; this.message = null; this.previewStatus = null; }
   _choices(domain, selected = '') {
-    return entityChoices(this.hass, { domains: [domain], selected,
-      ...(domain === 'light' ? { capability: (metadata) => lightCapabilities(metadata.state).valid } : {}) }).map((choice) => {
+    return this.areaFilter.choices(this.hass, entityChoices(this.hass, { domains: [domain], selected,
+      ...(domain === 'light' ? { capability: (metadata) => lightCapabilities(metadata.state).valid } : {}) })).map((choice) => {
       // A stateless scene can legitimately report unknown before it reports an
       // activation time. Generic sensor metadata calls that unavailable.
       const restored = choice.state?.attributes?.restored;
       return domain === 'scene' && choice.selectable && choice.state?.state === 'unknown' && (restored === undefined || restored === false)
-        ? { ...choice, label: `${choice.name} (No activation time reported)` } : choice;
+        ? { ...choice, label: `${choice.name} (${this._t('scene.noTime')})` } : choice;
     });
   }
   _entityOptions(domain, selected = '') {
-    return option('', `Choose a ${domain} entity`, selected) + this._choices(domain, selected).map((entry) => option(entry.value, entry.label, selected, !entry.selectable)).join('');
+    return option('', this._t('scene.chooseSource', { domain }), selected) + this._choices(domain, selected).map((entry) => option(entry.value, entry.label, selected, !entry.selectable)).join('');
   }
   _selectOptions() {
-    return option('', 'Choose a saved preview', String(this.selectedIndex)) + this.items.map((item, index) => option(String(index),
-      plain(item) ? item.label || item.scene_entity || `Preview ${index + 1}` : `Malformed saved preview ${index + 1}`, String(this.selectedIndex))).join('');
+    return option('', this._t('scene.chooseSaved'), String(this.selectedIndex)) + this.items.map((item, index) => option(String(index),
+      plain(item) ? item.label || item.scene_entity || this._t('scene.defaultPreview', { number: index + 1 }) : this._t('scene.malformedPreview', { number: index + 1 }), String(this.selectedIndex))).join('');
   }
   _colorOptions(caps, mode = '') {
-    const choices = [{ value: '', label: 'Choose a preview colour' },
-      ...(caps.rgb ? [{ value: 'rgb', label: 'RGB colour' }] : []),
-      ...(caps.colorTemperature ? [{ value: 'kelvin', label: 'Colour temperature (Kelvin)' }] : [])];
-    if (mode && !choices.some((choice) => choice.value === mode)) choices.unshift({ value: mode, label: `Saved colour mode: ${mode}`, disabled: true });
+    const choices = [{ value: '', label: this._t('scene.chooseColor') },
+      ...(caps.rgb ? [{ value: 'rgb', label: this._t('scene.rgb') }] : []),
+      ...(caps.colorTemperature ? [{ value: 'kelvin', label: this._t('scene.kelvin') }] : [])];
+    if (mode && !choices.some((choice) => choice.value === mode)) choices.unshift({ value: mode, label: this._t('scene.savedMode', { mode }), disabled: true });
     return choices.map((choice) => option(choice.value, choice.label, mode, choice.disabled)).join('');
   }
   _kelvinHint(caps) {
-    return caps.colorTemperature ? `This light reports ${caps.minKelvin}–${caps.maxKelvin} K.` : 'Reported Kelvin limits are unavailable. No universal range is assumed.';
+    return caps.colorTemperature ? this._t('scene.kelvinReading', { min: caps.minKelvin, max: caps.maxKelvin }) : this._t('scene.noKelvin');
   }
   _rgbHint(target) {
     const rgb = target?.color?.rgb;
     return Array.isArray(rgb) && rgb.length === 3 && rgb.every((channel) => finite(channel) && channel >= 0 && channel <= 255)
-      ? 'This is your chosen visual target, not a current light reading.'
-      : 'No RGB target is saved yet. The picker starts at white; choose a colour or press Use chosen RGB colour deliberately.';
+      ? this._t('scene.chosenColor')
+      : this._t('scene.noRgb');
   }
   _targetHtml(target, index) {
     const binding = this.selected?.id ?? '', attrs = `data-binding="${esc(binding)}" data-target="${index}" data-entity="${esc(target?.entity ?? '')}"`;
-    if (!plain(target)) return `<section class="scene-preview-light"><p>Malformed saved light target ${index + 1}. It stays unchanged until removed.</p>${button('remove-light', 'Remove this target', attrs)}</section>`;
+    if (!plain(target)) return `<section class="scene-preview-light"><p>${esc(this._t('scene.badTarget', { number: index + 1 }))}</p>${this._button('remove-light', 'scene.removeTarget', attrs)}</section>`;
     const metadata = entityMetadata(this.hass, target.entity), caps = lightCapabilities(metadata.state);
     const reference = this._referenceIssue(target.entity, 'light');
     const blocked = this._readOnly() || this._contextIssue() || reference || !caps.valid;
     const disabled = blocked ? 'disabled' : '', mode = target.color?.mode ?? '';
-    return `<section class="scene-preview-light"><h4>${esc(metadata.name || target.entity || `Light ${index + 1}`)}</h4>
+    return `<section class="scene-preview-light"><h4>${esc(metadata.name || target.entity || this._t('scene.defaultLight', { number: index + 1 }))}</h4>
       <p data-scene-preview-reading="${index}" class="scene-preview-hint"></p>
-      <label>Light source<select data-field="${prefix}light-entity" ${attrs} ${this._readOnly() || this._contextIssue() ? 'disabled' : ''}>${this._entityOptions('light', target.entity)}</select></label>
-      <label>Desired visual state<select data-field="${prefix}light-state" ${attrs} ${disabled}>${option('', 'Choose on or off', target.state)}${option('on', 'On', target.state)}${option('off', 'Off', target.state)}</select></label>
-      <label>Preview brightness, 0 to 255<input type="number" inputmode="decimal" min="0" max="255" step="1" data-field="${prefix}light-brightness" ${attrs} value="${esc(target.brightness ?? '')}" ${blocked || !caps.brightness ? 'disabled' : ''}></label>
-      <label>Preview colour type<select data-field="${prefix}light-color-mode" ${attrs} ${blocked || !caps.rgb && !caps.colorTemperature ? 'disabled' : ''}>${this._colorOptions(caps, mode)}</select></label>
-      <p class="scene-preview-hint" data-scene-preview-capabilities="${index}">${caps.rgb || caps.colorTemperature ? 'Choose an explicit supported colour target for an on preview.' : 'This non-colour light uses a fixed visual fixture colour, not a measured colour.'}</p>
-      ${mode === 'rgb' ? `<label>Choose preview RGB colour<input type="color" data-field="${prefix}light-rgb" ${attrs} value="${rgbHex(target.color?.rgb)}" ${blocked || !caps.rgb ? 'disabled' : ''}></label>${button('use-rgb', 'Use chosen RGB colour', `${attrs} ${blocked || !caps.rgb ? 'disabled' : ''}`)}<p class="scene-preview-hint" data-scene-preview-rgb-hint="${index}" ${attrs}>${esc(this._rgbHint(target))}</p>` : ''}
-      ${mode === 'kelvin' ? `<label>Preview colour temperature, Kelvin<input type="number" inputmode="decimal" step="1" ${caps.minKelvin === null ? '' : `min="${caps.minKelvin}" max="${caps.maxKelvin}"`} data-field="${prefix}light-kelvin" ${attrs} value="${esc(target.color?.kelvin ?? '')}" ${blocked || !caps.colorTemperature ? 'disabled' : ''}></label><p class="scene-preview-hint" data-scene-preview-kelvin-limits="${index}">${esc(this._kelvinHint(caps))}</p>` : ''}
-      ${button('remove-light', 'Remove light target', `${attrs} ${this._readOnly() || this._contextIssue() ? 'disabled' : ''}`)}</section>`;
+      <label>${this._caption('scene.lightSource')}<select data-field="${prefix}light-entity" ${attrs} ${this._readOnly() || this._contextIssue() ? 'disabled' : ''}>${this._entityOptions('light', target.entity)}</select></label>
+      <label>${this._caption('scene.visualState')}<select data-field="${prefix}light-state" ${attrs} ${disabled}>${option('', this._t('scene.onOff'), target.state)}${option('on', this._t('scene.on'), target.state)}${option('off', this._t('scene.off'), target.state)}</select></label>
+      <label>${this._caption('scene.brightness')}<input type="number" inputmode="decimal" min="0" max="255" step="1" data-field="${prefix}light-brightness" ${attrs} value="${esc(target.brightness ?? '')}" ${blocked || !caps.brightness ? 'disabled' : ''}></label>
+      <label>${this._caption('scene.colorType')}<select data-field="${prefix}light-color-mode" ${attrs} ${blocked || !caps.rgb && !caps.colorTemperature ? 'disabled' : ''}>${this._colorOptions(caps, mode)}</select></label>
+      <p class="scene-preview-hint" data-scene-preview-capabilities="${index}">${caps.rgb || caps.colorTemperature ? this._t('scene.supportedColor') : this._t('scene.fixedColor')}</p>
+      ${mode === 'rgb' ? `<label>${this._caption('scene.chooseRgb')}<input type="color" data-field="${prefix}light-rgb" ${attrs} value="${rgbHex(target.color?.rgb)}" ${blocked || !caps.rgb ? 'disabled' : ''}></label>${this._button('use-rgb', 'scene.useRgb', `${attrs} ${blocked || !caps.rgb ? 'disabled' : ''}`)}<p class="scene-preview-hint" data-scene-preview-rgb-hint="${index}" ${attrs}>${esc(this._rgbHint(target))}</p>` : ''}
+      ${mode === 'kelvin' ? `<label>${this._caption('scene.temperature')}<input type="number" inputmode="decimal" step="1" ${caps.minKelvin === null ? '' : `min="${caps.minKelvin}" max="${caps.maxKelvin}"`} data-field="${prefix}light-kelvin" ${attrs} value="${esc(target.color?.kelvin ?? '')}" ${blocked || !caps.colorTemperature ? 'disabled' : ''}></label><p class="scene-preview-hint" data-scene-preview-kelvin-limits="${index}">${esc(this._kelvinHint(caps))}</p>` : ''}
+      ${this._button('remove-light', 'scene.removeLight', `${attrs} ${this._readOnly() || this._contextIssue() ? 'disabled' : ''}`)}</section>`;
   }
   _statusHtml() {
     const preview = this._previewIssues(), activation = this._activationIssues();
     const captured = this.selected?.captured_at;
     let capturedLabel = captured;
     if (finite(captured) && Math.abs(captured) <= 8.64e15) capturedLabel = new Date(captured).toISOString();
-    return `<p><strong>${this.previewToken !== null ? 'Local visual preview active. Home Assistant states have not changed.' : 'Preview stopped. The house follows current Home Assistant light readings.'}</strong></p>
-      ${captured !== undefined ? `<p>Current-light snapshot captured: ${esc(capturedLabel)}. This is not the Home Assistant scene definition.</p>` : ''}
+    return `<p><strong>${this.previewToken !== null ? this._t('scene.active') : this._t('scene.stopped')}</strong></p>
+      ${captured !== undefined ? `<p>${esc(this._t('scene.snapshot', { time: capturedLabel }))}</p>` : ''}
       ${this.message ? `<p role="status">${esc(this.message)}</p>` : ''}
       ${this.previewStatus?.error ? `<p role="alert">${esc(this.previewStatus.error)}</p>` : ''}
-      ${preview.length ? `<p class="scene-preview-hint">Preview: ${preview.map(esc).join(' ')}</p>` : ''}
-      ${activation.length ? `<p class="scene-preview-hint">Activation: ${activation.map(esc).join(' ')}</p>` : ''}
+      ${preview.length ? `<p class="scene-preview-hint">${this._caption('scene.previewLabel')} ${preview.map(esc).join(' ')}</p>` : ''}
+      ${activation.length ? `<p class="scene-preview-hint">${this._caption('scene.activationLabel')} ${activation.map(esc).join(' ')}</p>` : ''}
       ${this._saveIssues().length ? `<ul>${this._saveIssues().map((message) => `<li>${esc(message)}</li>`).join('')}</ul>` : ''}`;
   }
   render() {
@@ -314,20 +323,21 @@ export class ScenePreviewEditor {
       [data-scene-preview-editor] :focus-visible{outline:3px solid var(--primary-color,#03a9f4);outline-offset:2px}[data-scene-preview-editor] .scene-preview-actions{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0}
       [data-scene-preview-editor] .scene-preview-light{border-top:1px solid var(--divider-color,#888);padding:8px 0}[data-scene-preview-editor] .scene-preview-hint{color:var(--secondary-text-color,#666)}[data-scene-preview-editor] p,[data-scene-preview-editor] li{overflow-wrap:anywhere}
       [data-scene-preview-editor] button{cursor:pointer}[data-scene-preview-editor] :disabled{opacity:.6;cursor:default}
-      </style><h3>Scene light previews</h3><p>These are your explicit visual light targets. Home Assistant scenes may also control other devices, which this light preview does not represent. A scene name or last-activation timestamp does not reveal its intended light settings.</p>
-      <label class="scene-preview-check"><input type="checkbox" data-field="${prefix}enabled" ${this.draft.enabled === true ? 'checked' : ''} ${disabled}> Enable saved scene previews</label>
-      <label>Saved visual preview<select data-field="${prefix}binding">${this._selectOptions()}</select></label>
-      <div class="scene-preview-actions">${button('add', 'Add scene preview', disabled)}${button('remove', 'Remove selected preview', `${disabled} ${selected ? '' : 'disabled'}`)}${button('repair', 'Start a new preview list', `${this.badImported || !Array.isArray(this.draft.items) ? '' : 'hidden'} ${disabled}`)}</div>
-      ${plain(selected) ? `<label>Preview label<input type="text" data-field="${prefix}label" data-binding="${esc(selected.id)}" value="${esc(selected.label ?? '')}" ${disabled}></label>
-      <label>Home Assistant scene<select data-field="${prefix}scene-entity" data-binding="${esc(selected.id)}" ${disabled}>${this._entityOptions('scene', selected.scene_entity)}</select></label>
-      <p class="scene-preview-hint">Activate sends the real saved scene to Home Assistant. Preview and Capture current lights send no device commands.</p>
-      ${Array.isArray(selected.lights) ? selected.lights.map((target, index) => this._targetHtml(target, index)).join('') : '<p>Malformed saved light list. Remove this preview deliberately to replace it.</p>'}
-      <label>New light target<select data-field="${prefix}new-light" ${disabled}>${this._entityOptions('light', '')}</select></label>
-      <div class="scene-preview-actions">${button('add-light', 'Add light target', `${disabled} data-binding="${esc(selected.id)}"`)}${button('capture', 'Capture these current lights', `${disabled} data-binding="${esc(selected.id)}"`)}</div>
-      <p class="scene-preview-hint">Capture stores the selected lights as they are now, including lights that are off. It does not read or create the Home Assistant scene. You can then edit your desired visual targets.</p>
-      <div class="scene-preview-actions">${button('preview', 'Preview draft lights', `${this._previewIssues().length ? 'disabled' : ''} data-binding="${esc(selected.id)}"`)}${button('stop', 'Stop preview', this.previewToken === null ? 'disabled' : '')}${button('activate', 'Activate saved scene', `${this.activationPending || this._activationIssues().length ? 'disabled' : ''} data-binding="${esc(selected.id)}"`)}</div>` : ''}
+      </style><h3>${this._caption('scene.title')}</h3><p>${this._caption('scene.intro')}</p>
+      <label class="scene-preview-check"><input type="checkbox" data-field="${prefix}enabled" ${this.draft.enabled === true ? 'checked' : ''} ${disabled}> ${this._caption('scene.enable')}</label>
+      <label>${this._caption('scene.saved')}<select data-field="${prefix}binding">${this._selectOptions()}</select></label>
+      ${this.areaFilter.render(this.hass, `${prefix}area-filter`)}
+      <div class="scene-preview-actions">${this._button('add', 'scene.add', disabled)}${this._button('remove', 'scene.remove', `${disabled} ${selected ? '' : 'disabled'}`)}${this._button('repair', 'scene.newList', `${this.badImported || !Array.isArray(this.draft.items) ? '' : 'hidden'} ${disabled}`)}</div>
+      ${plain(selected) ? `<label>${this._caption('scene.label')}<input type="text" data-field="${prefix}label" data-binding="${esc(selected.id)}" value="${esc(selected.label ?? '')}" ${disabled}></label>
+      <label>${this._caption('scene.entity')}<select data-field="${prefix}scene-entity" data-binding="${esc(selected.id)}" ${disabled}>${this._entityOptions('scene', selected.scene_entity)}</select></label>
+      <p class="scene-preview-hint">${this._caption('scene.actionHelp')}</p>
+      ${Array.isArray(selected.lights) ? selected.lights.map((target, index) => this._targetHtml(target, index)).join('') : `<p>${this._caption('scene.badLightList')}</p>`}
+      <label>${this._caption('scene.newLight')}<select data-field="${prefix}new-light" ${disabled}>${this._entityOptions('light', '')}</select></label>
+      <div class="scene-preview-actions">${this._button('add-light', 'scene.addLight', `${disabled} data-binding="${esc(selected.id)}"`)}${this._button('capture', 'scene.capture', `${disabled} data-binding="${esc(selected.id)}"`)}</div>
+      <p class="scene-preview-hint">${this._caption('scene.captureHelp')}</p>
+      <div class="scene-preview-actions">${this._button('preview', 'scene.preview', `${this._previewIssues().length ? 'disabled' : ''} data-binding="${esc(selected.id)}"`)}${this._button('stop', 'scene.stop', this.previewToken === null ? 'disabled' : '')}${this._button('activate', 'scene.activate', `${this.activationPending || this._activationIssues().length ? 'disabled' : ''} data-binding="${esc(selected.id)}"`)}</div>` : ''}
       <div data-scene-preview-status aria-live="polite">${this._statusHtml()}</div>
-      <div class="scene-preview-actions">${button('save', 'Save scene previews', `${!this.dirty || this._saveIssues().length ? 'disabled' : ''}`)}${button('cancel', 'Cancel')}</div></section>`;
+      <div class="scene-preview-actions">${this._button('save', 'scene.save', `${!this.dirty || this._saveIssues().length ? 'disabled' : ''}`)}${this._button('cancel', 'common.cancel')}</div></section>`;
   }
   _syncSelect(select, options) {
     if (!select) return;
@@ -353,6 +363,8 @@ export class ScenePreviewEditor {
       const root = container.matches?.('[data-scene-preview-editor]') ? container : container.querySelector('[data-scene-preview-editor]');
       if (!root) return; this.container = root;
       this._bindActivationRoot(root); this._revalidateActivationPresses();
+      updateEditorExtraCaptions(root, this.card._hass);
+      this.areaFilter.update(this.hass, root, `${prefix}area-filter`);
       const status = root.querySelector('[data-scene-preview-status]'), html = this._statusHtml();
       if (status && status.innerHTML !== html) status.innerHTML = html;
       const blocked = this._readOnly() || !!this._contextIssue() || this.hass.connection?.connected !== true;
@@ -372,17 +384,18 @@ export class ScenePreviewEditor {
       }
       this._syncSelect(root.querySelector(`[data-field="${prefix}scene-entity"]`), this._entityOptions('scene', this.selected?.scene_entity));
       this._syncSelect(root.querySelector(`[data-field="${prefix}new-light"]`), this._entityOptions('light', ''));
+      for (const input of root.querySelectorAll(`[data-field="${prefix}light-state"]`)) { const target = this._target(input); if (target) this._syncSelect(input, option('', this._t('scene.onOff'), target.state) + option('on', this._t('scene.on'), target.state) + option('off', this._t('scene.off'), target.state)); }
       for (const input of root.querySelectorAll(`[data-field="${prefix}light-entity"]`)) this._syncSelect(input, this._entityOptions('light', this.selected?.lights?.[Number(input.dataset.target)]?.entity));
       for (const reading of root.querySelectorAll('[data-scene-preview-reading]')) {
         const target = this.selected?.lights?.[Number(reading.dataset.scenePreviewReading)], metadata = entityMetadata(this.hass, target?.entity);
-        const text = `Reported Home Assistant state (not preview): ${formatEntityValue(this.hass, target?.entity)}. ${this._referenceIssue(target?.entity, 'light') || messages(lightCapabilities(metadata.state)).join(' ')}`;
+        const text = this._t('scene.actualReading', { value: formatEntityValue(this.hass, target?.entity), warning: this._referenceIssue(target?.entity, 'light') || this._messages(lightCapabilities(metadata.state)).join(' ') });
         if (reading.textContent !== text) reading.textContent = text;
       }
       for (const note of root.querySelectorAll('[data-scene-preview-kelvin-limits],[data-scene-preview-capabilities]')) {
         const target = this.selected?.lights?.[Number(note.dataset.scenePreviewKelvinLimits ?? note.dataset.scenePreviewCapabilities)];
         const caps = lightCapabilities(entityMetadata(this.hass, target?.entity).state);
         const text = note.dataset.scenePreviewKelvinLimits !== undefined ? this._kelvinHint(caps)
-          : caps.rgb || caps.colorTemperature ? 'Choose an explicit supported colour target for an on preview.' : 'This non-colour light uses a fixed visual fixture colour, not a measured colour.';
+          : caps.rgb || caps.colorTemperature ? this._t('scene.supportedColor') : this._t('scene.fixedColor');
         if (note.textContent !== text) note.textContent = text;
       }
       for (const note of root.querySelectorAll('[data-scene-preview-rgb-hint]')) {
@@ -410,6 +423,10 @@ export class ScenePreviewEditor {
   onChange(field, element) {
     if (this.disposed || !field?.startsWith(prefix) || !element) return false;
     this._ensure(); const name = field.slice(prefix.length);
+    if (name === 'area-filter') {
+      if (element.isConnected !== false && this.areaFilter.set(this.hass, element.value)) this.updatePreviews(element.closest('[data-scene-preview-editor]'));
+      return true;
+    }
     if (name === 'binding') {
       if (element.value === '') { this._stopOwned(); this.selectedIndex = -1; this.message = null; this.onRender(); return true; }
       const index = number(element.value); if (Number.isInteger(index) && index >= 0 && index < this.items.length) {
@@ -461,9 +478,9 @@ export class ScenePreviewEditor {
     this.updatePreviews(this.container);
     try {
       const result = await this.controller.activate(id, { expectedSceneEntity });
-      if (generation === this._generation && id === this.selected?.id && result.current !== false && !this._contextIssue()) this.message = result.ok ? 'Scene activation accepted by Home Assistant. Current readings remain authoritative; the visual targets are not a verified scene result.' : result.error || messages(result).join(' ') || 'Scene activation was not available.';
+      if (generation === this._generation && id === this.selected?.id && result.current !== false && !this._contextIssue()) this.message = result.ok ? this._notice('scene.accepted') : result.error || this._messages(result).join(' ') || this._notice('scene.unavailable');
     } catch (error) {
-      if (generation === this._generation) this.message = error?.message || 'Scene activation failed.';
+      if (generation === this._generation) this.message = error?.message || this._notice('scene.failed');
     } finally {
       if (generation === this._generation) { this.activationPending = false; this.updatePreviews(this.container); }
     }
@@ -479,10 +496,10 @@ export class ScenePreviewEditor {
     if (name === 'preview') {
       if (this._previewIssues().length) { this.message = this._previewIssues().join(' '); this.updatePreviews(this.container); return true; }
       const result = this.controller.previewDraft(clone(this.selected)); this.previewToken = result.ok ? result.token : null;
-      this.message = result.ok ? null : messages(result).join(' '); this.updatePreviews(this.container); return true;
+      this.message = result.ok ? null : this._messages(result).join(' '); this.updatePreviews(this.container); return true;
     }
     if (name === 'save') {
-      if (!this.dirty || this._saveIssues().length || typeof this.card.commitFeatureLayout !== 'function') { this.message = this._saveIssues()[0] || 'No changes to save.'; this.updatePreviews(this.container); return true; }
+      if (!this.dirty || this._saveIssues().length || typeof this.card.commitFeatureLayout !== 'function') { this.message = this._saveIssues()[0] || this._notice('scene.noChanges'); this.updatePreviews(this.container); return true; }
       this._stopOwned(); this.card.commitFeatureLayout({ scene_previews: clone(this.draft) }); this.reset(); this.onRender(); return true;
     }
     if (name === 'repair') {
@@ -511,7 +528,7 @@ export class ScenePreviewEditor {
     } else if (name === 'capture') {
       if (!Array.isArray(this.selected?.lights) || !this.selected.lights.length) return true;
       const result = captureLightSnapshot(this.hass, this.selected.lights.map((target) => target?.entity), { now: Date.now() });
-      if (!result.valid) { this.message = messages(result).join(' '); this.updatePreviews(this.container); return true; }
+      if (!result.valid) { this.message = this._messages(result).join(' '); this.updatePreviews(this.container); return true; }
       const old = new Map(this.selected.lights.map((target) => [target.entity, target]));
       this.selected.lights = result.lights.map((target) => {
         const preserved = { ...old.get(target.entity) }; delete preserved.state; delete preserved.brightness; delete preserved.color;

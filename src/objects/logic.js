@@ -1,32 +1,58 @@
 // Pure logic for model objects: binding, chains, colour, budget, sun. No Three.js here.
 import { readLightAppearance } from '../light-state.js';
+import { entityMetadata } from '../entity-metadata.js';
 const isOn = (s) => !!s && s.state === 'on';
 const bad = (s) => !s || s.state === 'unavailable' || s.state === 'unknown'
   || s.attributes?.restored === true || (s.attributes && Object.hasOwn(s.attributes, 'restored') && typeof s.attributes.restored !== 'boolean');
 
-export function bindObjects(objects, layoutObjects = {}, states = {}) {
+const fullHass = (hass) => hass && typeof hass === 'object' && !Array.isArray(hass);
+// Keep the exact reference for repair, separate from the current effective binding.
+// Unavailable entities remain selected; metadata exclusion and absent state do not bind.
+function bindingEvidence(entity, hass) {
+  const requestedEntity = typeof entity === 'string' && entity ? entity : null;
+  if (!requestedEntity) return { entity: null, requestedEntity, missing: false, filtered: false, filterReason: '' };
+  const metadata = entityMetadata(hass, requestedEntity);
+  const missing = !metadata.hasState;
+  const filtered = !!(metadata.disabled || metadata.hidden || metadata.category);
+  const filterReason = missing ? 'missing' : metadata.disabled ? 'disabled' : metadata.hidden ? 'hidden' : metadata.category || '';
+  return { entity: !missing && !filtered ? requestedEntity : null, requestedEntity, missing, filtered, filterReason };
+}
+
+/** Optional full current hass enables shared eligibility and exact requestedEntity diagnostics.
+ * Without it, the existing state-only return shape remains unchanged. No saved data is repaired.
+ */
+export function bindObjects(objects, layoutObjects = {}, states = {}, hass) {
   const out = new Map();
   for (const o of objects) {
     const saved = layoutObjects[o.id] || {};
     const hidden = !!saved.hidden;
     if (saved.entity !== undefined) {
       const entity = saved.entity || null;
+      if (fullHass(hass)) {
+        out.set(o.id, { ...bindingEvidence(entity, hass), auto: false, hidden });
+        continue;
+      }
       out.set(o.id, { entity: entity && states[entity] ? entity : null, auto: false, missing: !!entity && !states[entity], hidden });
       continue;
     }
     const s = (o.suggest || {}).entity;
+    if (fullHass(hass)) {
+      out.set(o.id, { ...bindingEvidence(s, hass), auto: true, hidden });
+      continue;
+    }
     out.set(o.id, { entity: s && states[s] ? s : null, auto: true, missing: !!s && !states[s], hidden });
   }
   return out;
 }
 
-// Group controllers that exist in HA. A controller entity HA doesn't know (a typo, a removed
-// entity, a literal "none") is ignored: the group behaves as if it had no controller.
-export function effectiveGroups(groups = {}, states = {}) {
+// State-only callers retain existing controllers only. With full hass, excluded/missing saved
+// IDs remain warning records (entity:null), so they cannot enter the chain or be replaced by name.
+export function effectiveGroups(groups = {}, states = {}, hass) {
   const out = {};
   for (const [name, g] of Object.entries(groups || {})) {
     const e = g && typeof g.entity === 'string' ? g.entity : null;
-    if (e && states[e]) out[name] = { ...g, entity: e };
+    const value = e && (fullHass(hass) ? { ...g, ...bindingEvidence(e, hass) } : states[e] ? { ...g, entity: e } : null);
+    if (value) Object.defineProperty(out, name, { value, enumerable: true, writable: true, configurable: true });
   }
   return out;
 }

@@ -19,7 +19,7 @@ describe('current house category memberships', () => {
   it('returns fixed readable titles and sorted exact IDs without name inference', () => {
     const hass = fixture();
     add(hass, 'light.z', 'on', { friendly_name: 'A light' }); add(hass, 'light.a', 'off', { friendly_name: 'Z light' });
-    add(hass, 'switch.light_named', 'on'); add(hass, 'sensor.tesla_light', '20');
+    add(hass, 'switch.light_named', 'on'); add(hass, 'sensor.brand_named_light', '20');
     expect(read(hass, 'lights')).toEqual({ id: 'lights', title: 'Lights', entityIds: ['light.a', 'light.z'], emptyText: 'No current visible lights are available.' });
     expect(read(hass, 'media')).toMatchObject({ title: 'Media', entityIds: [], emptyText: expect.stringContaining('media players') });
     expect(read(hass, 'cars')).toMatchObject({ title: 'Cars', entityIds: [], emptyText: expect.stringContaining('Edit → Tracking') });
@@ -81,7 +81,7 @@ describe('current house category memberships', () => {
 describe('explicit saved vehicle sources', () => {
   it('lists only exact enabled flat saved entity and identity_entity references, deduplicated', () => {
     const hass = fixture();
-    for (const id of ['binary_sensor.driveway', 'sensor.plate', 'device_tracker.named_tesla', 'sensor.car_count', 'camera.car_camera', 'sensor.other']) add(hass, id, 'unavailable');
+    for (const id of ['binary_sensor.driveway', 'sensor.plate', 'device_tracker.named_vehicle', 'sensor.car_count', 'camera.car_camera', 'sensor.other']) add(hass, id, 'unavailable');
     const layout = { vehicle_bindings: [
       { id: 'drive', kind: 'occupancy', entity: 'binary_sensor.driveway', identity_entity: 'sensor.plate' },
       { id: 'count', enabled: true, entity: 'sensor.car_count', identity_entity: 'sensor.plate' },

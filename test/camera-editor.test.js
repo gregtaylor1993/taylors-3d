@@ -40,6 +40,47 @@ function setup({ layout = {}, config = {}, anchors = [anchor()], states = {}, en
 }
 afterEach(() => document.body.replaceChildren());
 
+describe('curve detail and current metadata picker filters', () => {
+  it('uses default 24 curve segments without materializing it on an unrelated edit, then saves an explicit 64', () => {
+    const { card, input, change, click } = setup({ layout: { camera_coverage: { 'camera.front': { ...configured } } } });
+    expect(input('cov-segments').value).toBe('24'); change('cov-range', '9'); click('cov-save');
+    expect(card._layout.camera_coverage['camera.front']).not.toHaveProperty('segments');
+    change('cov-segments', '64'); click('cov-save'); expect(card._layout.camera_coverage['camera.front'].segments).toBe(64);
+    expect(card._hass.callService).not.toHaveBeenCalled();
+  });
+
+  it.each(['1', '65', '2.5'])('does not save invalid curve detail %s', (value) => {
+    const { card, change, click } = setup({ layout: { camera_coverage: { 'camera.front': { ...configured } } } });
+    change('cov-segments', value); click('cov-save'); expect(card.commitFeatureLayout).not.toHaveBeenCalled(); expect(card._layout.camera_coverage['camera.front']).toEqual(configured);
+  });
+
+  it('retains imported unknown fields when changing supported curve detail and preserves invalid raw detail until repaired', () => {
+    const saved = { ...configured, segments: 100, vendor: { keep: [1, 2] } };
+    const { card, input, change, click } = setup({ layout: { camera_coverage: { 'camera.front': saved } } });
+    expect(input('cov-segments').value).toBe('100'); click('cov-save'); expect(card.commitFeatureLayout).not.toHaveBeenCalled();
+    change('cov-segments', '16'); click('cov-save'); expect(card._layout.camera_coverage['camera.front']).toMatchObject({ segments: 16, vendor: saved.vendor }); expect(saved.segments).toBe(100);
+  });
+
+  it('retains source, anchor and focused detail draft through current readings but rejects save after real source loss', () => {
+    const { card, editor, host, input, change, click } = setup({ layout: { camera_coverage: { 'camera.front': { ...configured } } } });
+    const detail = input('cov-segments'); expect(detail).toBeTruthy(); detail.focus(); change('cov-segments', '12', 'input');
+    card._hass.states['sensor.temperature'].state = '20'; editor.updatePreviews(host); expect(input('cov-segments')).toBe(detail); expect(document.activeElement).toBe(detail); expect(detail.value).toBe('12');
+    delete card._hass.states['camera.front']; editor.updatePreviews(host); expect(detail.disabled).toBe(true); click('cov-save'); expect(card.commitFeatureLayout).not.toHaveBeenCalled();
+  });
+
+  it('filters cameras by inherited area without readding unrelated anchors and keeps the selected out-of-filter source exact', () => {
+    const { card, editor, host, input, change, click } = setup({ layout: { camera_coverage: { 'camera.front': { ...configured } } },
+      anchors: [anchor(), anchor('device:garden', 'camera.garden')],
+      entities: { 'camera.front': { area_id: 'front' }, 'camera.garden': { device_id: 'garden-device' } }, devices: { 'garden-device': { area_id: 'garden' } } });
+    card._hass.areas = { front: { name: 'Front' }, garden: { name: 'Garden' } }; editor.updatePreviews(host); change('cov-area-filter', 'area:garden');
+    expect(input('cov-camera').value).toBe('camera.front'); expect([...input('cov-camera').options].find((entry) => entry.value === 'camera.front').textContent).toContain('Outside current filter');
+    expect([...input('cov-camera').options].some((entry) => entry.value === 'camera.garden')).toBe(true);
+    change('cov-range', '9'); click('cov-save'); expect(card._layout.camera_coverage['camera.front'].range).toBe(9);
+    change('cov-area-filter', 'unassigned'); expect([...input('cov-camera').options].some((entry) => entry.value === 'camera.garden')).toBe(false);
+    expect(input('cov-camera').value).toBe('camera.front'); expect(card._hass.callService).not.toHaveBeenCalled();
+  });
+});
+
 describe('camera coverage visual configuration', () => {
   it('lists actual cameras including unavailable streams and filters hidden/diagnostic choices', () => {
     const hass = { states: { 'camera.z': camera('Z camera', 'unavailable'), 'camera.a': camera('A camera'), 'camera.hidden': camera('Hidden'), 'camera.diagnostic': camera('Diagnostic'), 'light.fake': camera('Not a camera') }, entities: { 'camera.hidden': { hidden_by: 'user' }, 'camera.diagnostic': { entity_category: 'diagnostic' } } };

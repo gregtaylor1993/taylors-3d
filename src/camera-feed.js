@@ -4,6 +4,8 @@
 // Ancestor capture handlers must skip [data-taylors3d-ui]. Escape intentionally bubbles
 // to the containing device popup. onMoreInfo(entityId) runs after the feed is removed.
 import { entityMetadata } from './entity-metadata.js';
+import { localize, localeInfo } from './localization.js';
+import liveCaptions from './translations/live-camera-scenes.js';
 
 const STOP_EVENTS = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'click',
   'dblclick', 'mousedown', 'mousemove', 'mouseup', 'touchstart', 'touchmove', 'touchend',
@@ -58,6 +60,7 @@ export class CameraFeedController {
     this._card = null;
     this._entityId = null;
     this._status = 'closed';
+    this._statusKey = null;
     this._session = 0;
     this._disposed = false;
     this._capabilities = null;
@@ -82,6 +85,22 @@ export class CameraFeedController {
   get status() { return this._status; }
   get nativeCard() { return this._card; }
 
+  _text(key) {
+    const full = `live.camera.${key}`, language = localeInfo(this.hass).resolved;
+    return localize(this.hass, full, {}, liveCaptions[language]?.[full] ?? liveCaptions.en[full] ?? '');
+  }
+  _refreshCaptions() {
+    if (!this.el) return;
+    this.el.setAttribute('aria-label', this._text('aria'));
+    this._title.textContent = this.hass?.states?.[this._entityId]?.attributes?.friendly_name || this._entityId || this._text('title');
+    this._help.textContent = this._text('help');
+    this._closeButton.textContent = this._text('close');
+    this._retryButton.textContent = this._text('retry');
+    this._infoButton.textContent = this._text('controls');
+    this._infoButton.setAttribute('aria-label', this._text('controlsAria'));
+    if (this._statusKey) this._statusEl.textContent = this._text(this._statusKey);
+  }
+
   async open(entityId, hass = this.hass) {
     if (this._disposed) return false;
     this.close();
@@ -95,7 +114,7 @@ export class CameraFeedController {
       this._block(problem);
       return false;
     }
-    this._setStatus('loading', 'Opening camera…');
+    this._setStatus('loading', 'opening');
     try {
       const [capabilities, helpers] = await Promise.all([
         this._fetchCapabilities(hass, entityId), this._loadHelpers(),
@@ -122,12 +141,11 @@ export class CameraFeedController {
       if (!this._current(session)) return false;
       this._removeCard();
       const code = errorCode(error);
-      const message = DENIED.has(code) ? 'Home Assistant did not allow access to this camera.'
-        : code === 'not_found' || code === 'entity_not_found' ? 'Camera entity was not found.'
-          : error?.message === 'camera_helpers' ? 'Home Assistant camera controls are not available here. Try All controls.'
-            : 'Could not open the camera view. Retry or use All controls.';
+      const messageKey = DENIED.has(code) ? 'denied'
+        : code === 'not_found' || code === 'entity_not_found' ? 'missing'
+          : error?.message === 'camera_helpers' ? 'helpers' : 'openFailed';
       this._blockedByState = false;
-      this._setStatus('error', message);
+      this._setStatus('error', messageKey);
       return false;
     }
   }
@@ -135,7 +153,7 @@ export class CameraFeedController {
   update(hass) {
     this.hass = hass;
     if (!this.isOpen) return;
-    this._title.textContent = hass?.states?.[this._entityId]?.attributes?.friendly_name || this._entityId || 'Camera';
+    this._refreshCaptions();
     const problem = this._problem();
     if (problem) { this._block(problem); return; }
     if ((hass?.connection || null) !== this._connection && (this._status === 'ready' || this._status === 'loading')) {
@@ -146,7 +164,7 @@ export class CameraFeedController {
       this._card.hass = hass;
       this._setReadyStatus();
     } else if (this._blockedByState) {
-      this._setStatus('error', 'Camera is available. Choose Retry to open the view.');
+      this._setStatus('error', 'available');
     } else {
       this._refreshButtons();
     }
@@ -158,19 +176,18 @@ export class CameraFeedController {
 
   _problem() {
     if (typeof this._entityId !== 'string' || !/^camera\.[^\s.]+$/.test(this._entityId)) {
-      return { status: 'error', message: 'Choose a camera entity.' };
+      return { status: 'error', messageKey: 'choose' };
     }
-    if (!this.el?.isConnected) return { status: 'error', message: 'Camera view is not on screen.' };
+    if (!this.el?.isConnected) return { status: 'error', messageKey: 'detached' };
     if (!this.hass || this.hass.connected === false || this.hass.connection?.connected === false) {
-      return { status: 'disconnected', message: 'Home Assistant is disconnected. Reconnect, then choose Retry.' };
+      return { status: 'disconnected', messageKey: 'disconnected' };
     }
     const state = this.hass.states?.[this._entityId];
-    if (!state) return { status: 'unavailable', message: 'Camera entity was not found.' };
-    if (entityMetadata(this.hass, this._entityId).disabled) return { status: 'unavailable', message: 'Camera is disabled in Home Assistant.' };
+    if (!state) return { status: 'unavailable', messageKey: 'missing' };
+    if (entityMetadata(this.hass, this._entityId).disabled) return { status: 'unavailable', messageKey: 'disabled' };
     if (['unavailable', 'unknown', 'off'].includes(state.state)) {
-      const message = state.state === 'unknown' ? 'Camera state is unknown.'
-        : state.state === 'off' ? 'Camera is off.' : 'Camera is unavailable.';
-      return { status: 'unavailable', message };
+      const messageKey = state.state === 'unknown' ? 'unknown' : state.state === 'off' ? 'off' : 'unavailable';
+      return { status: 'unavailable', messageKey };
     }
     return null;
   }
@@ -196,21 +213,20 @@ export class CameraFeedController {
     this.el = element('section', 'taylors3d-camera-feed');
     this.el.dataset.taylors3dUi = 'camera-feed';
     this.el.dataset.entity = typeof this._entityId === 'string' ? this._entityId : '';
-    this.el.setAttribute('aria-label', 'Camera view');
     const style = element('style', '', STYLE);
-    this._title = element('div', 't3d-camera-title', this.hass?.states?.[this._entityId]?.attributes?.friendly_name || this._entityId || 'Camera');
+    this._title = element('div', 't3d-camera-title');
     this._statusEl = element('p', 't3d-camera-status');
     this._statusEl.setAttribute('role', 'status');
     this._statusEl.setAttribute('aria-live', 'polite');
     this._viewport = element('div', 't3d-camera-viewport');
-    const help = element('p', 't3d-camera-help', 'For current pictures, choose your integration’s live-view camera entity. This view is muted.');
+    this._help = element('p', 't3d-camera-help');
     const actions = element('div', 't3d-camera-actions');
-    this._closeButton = button('Close view', 'close-camera');
-    this._retryButton = button('Retry', 'retry-camera');
-    this._infoButton = button('All controls', 'camera-more-info');
-    this._infoButton.setAttribute('aria-label', 'Camera: all controls');
+    this._closeButton = button('', 'close-camera');
+    this._retryButton = button('', 'retry-camera');
+    this._infoButton = button('', 'camera-more-info');
     actions.append(this._closeButton, this._retryButton, this._infoButton);
-    this.el.append(style, this._title, this._statusEl, this._viewport, help, actions);
+    this.el.append(style, this._title, this._statusEl, this._viewport, this._help, actions);
+    this._refreshCaptions();
     this.el.addEventListener('click', this._click);
     for (const name of STOP_EVENTS) this.el.addEventListener(name, this._stop);
     this.root.append(this.el);
@@ -225,12 +241,13 @@ export class CameraFeedController {
     if (tree !== this.root.ownerDocument) this._observer.observe(tree, { childList: true, subtree: true });
   }
 
-  _setStatus(status, message) {
+  _setStatus(status, messageKey) {
     this._status = status;
+    this._statusKey = messageKey;
     if (!this.el) return;
     this.el.dataset.status = status;
     this.el.setAttribute('aria-busy', String(status === 'loading'));
-    this._statusEl.textContent = message;
+    this._statusEl.textContent = this._text(messageKey);
     this._viewport.hidden = !this._card;
     this._refreshButtons();
   }
@@ -238,7 +255,7 @@ export class CameraFeedController {
   _setReadyStatus() {
     const advertisedStream = this._capabilities?.frontend_stream_types?.some?.((type) => STREAM_TYPES.has(type));
     this._blockedByState = false;
-    this._setStatus('ready', advertisedStream ? 'Camera stream · muted' : 'Camera view / preview · muted');
+    this._setStatus('ready', advertisedStream ? 'stream' : 'preview');
   }
 
   _refreshButtons() {
@@ -253,7 +270,7 @@ export class CameraFeedController {
     if (this._card || this._status === 'loading') this._session++;
     this._removeCard();
     this._blockedByState = true;
-    this._setStatus(problem.status, problem.message);
+    this._setStatus(problem.status, problem.messageKey);
   }
 
   _removeCard() {
@@ -272,7 +289,7 @@ export class CameraFeedController {
       if (this._disposed || this.isOpen || this._session !== session || !this.root.isConnected) return;
       this._entityId = entityId;
       this._createUI();
-      this._setStatus('error', 'Could not open All controls. Please try again.');
+      this._setStatus('error', 'controlsFailed');
     }
   }
 
@@ -287,10 +304,11 @@ export class CameraFeedController {
       this.el.remove();
     }
     this.el = null;
-    this._title = this._statusEl = this._viewport = null;
+    this._title = this._statusEl = this._viewport = this._help = null;
     this._closeButton = this._retryButton = this._infoButton = null;
     this._entityId = null;
     this._status = 'closed';
+    this._statusKey = null;
     this._connection = null;
     this._blockedByState = false;
   }

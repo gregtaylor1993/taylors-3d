@@ -1,0 +1,53 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Taylor's 3D",
+        "description": "Speichert die Layouts von Taylor's 3D in Home Assistant, damit alle Benutzer und Geräte denselben Plan sehen, und lädt die Karte auf allen Dashboards."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Taylor's 3D ist bereits eingerichtet."
+    }
+  },
+  "services": {
+    "select_view": {
+      "name": "Kameravoreinstellung auswählen",
+      "description": "Wählt eine gespeicherte Ansicht auf einer geöffneten Karte von Taylor's 3D. Geben Sie den Panelnamen, die Karten-ID oder beides an. Nicht verfügbare oder mehrdeutige Ziele und unbekannte Ansichten melden einen Aktionsfehler.",
+      "fields": {
+        "layout_key": {
+          "name": "Layout-Schlüssel",
+          "description": "Der auf der gewünschten Karte konfigurierte layout_key."
+        },
+        "preset": {
+          "name": "Voreinstellung",
+          "description": "Die gespeicherte Ansichts-ID oder ihr exakter, eindeutiger Name."
+        },
+        "panel": {
+          "name": "Panel",
+          "description": "Der im Reiter Ansichten für diesen Browser gespeicherte Panelname oder automation_panel aus der Konfiguration. Geben Sie diesen oder eine Karten-ID an."
+        },
+        "card_id": {
+          "name": "Karten-ID",
+          "description": "Die auf der Karte konfigurierte automation_card_id. Geben Sie diese oder einen Panelnamen an."
+        },
+        "mode": {
+          "name": "Kameramodus",
+          "description": "Optionale Überschreibung. Sonst gilt der gespeicherte Modus der Ansicht oder der aktuelle Modus der Karte."
+        },
+        "return_after": {
+          "name": "Zurückkehren nach",
+          "description": "Optionale Sekunden bis zur Wiederherstellung der vorherigen Ansicht und Kamera. Null oder keine Angabe behält die ausgewählte Ansicht bei. Eine Berührung oder eine neue passende Anfrage bricht die Rückkehr ab."
+        }
+      }
+    }
+  },
+  "selector": {
+    "camera_mode": {
+      "options": {
+        "3d": "3D",
+        "top": "Draufsicht"
+      }
+    }
+  }
+}

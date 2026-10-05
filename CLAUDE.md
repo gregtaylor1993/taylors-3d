@@ -141,12 +141,34 @@ a Mower position (GPS derived from map coordinates). Inspect the real entities i
 iiseppi/sunseeker_local_control (MQTT).
 
 ## Companion integration
+Furniture uses a separate owned `FurnitureLayer` in the existing scene, outside
+the house root/export/manifest and realtime light pool. `FurnitureCoordinator`
+keeps one authenticated client and published catalogue; stale account, layout,
+model root/alignment or floor contexts clear temporary previews. The Furniture
+editor saves one history step per explicit Save. Native dragging uses the active
+perspective/Top camera and SOURCE floor coordinates; Edit assembles split floors.
+Use the control's root `activeElement` when retaining focused decimal input.
+Local licensed ZIP storage is content-addressed and registered during integration
+setup. Admin imports preserve original ZIP/licence/model bytes; viewer asset
+reads remain authenticated. `tools/create-furniture-pack.py` validates a new
+original licensed pack and refuses overwrite. `npm run check:furniture` exercises
+real textured assets and native controls with simulated HA transport.
+
 `custom_components/taylors3d/`: manifest.json, `__init__.py` with `async_setup` (enabled by
 `taylors3d:` in configuration.yaml), `homeassistant.helpers.storage.Store` (key
 `taylors3d.layouts`), websocket commands `taylors3d/layout/get` {key} and
 `taylors3d/layout/set` {key, layout} (set requires admin).
 
 ## Repo / delivery
+
+Home Assistant entity metadata is shared by marker names, reported values,
+object binding/action eligibility and feature pickers. Objects/Mower/Overlays
+area filters are temporary UI state; saved missing/filtered links remain exact
+warning choices. An explicit missing floor is retained and not silently mapped
+to Ground. All saved room outlines stay reachable even with model-area links.
+The metadata native fixture uses separate drawn/model areas deliberately and
+tests real controls, tagged GLB popups, current Test gates and zero passive HA
+actions in both source and built card (`npm run check:metadata`).
 - GitHub (`origin`) is the main remote; HACS installs it as an Integration from release
   `taylors3d.zip` (integration with the card bundled; it registers the card via
   add_extra_js_url). Manual: copy `custom_components/taylors3d/` after `npm run build`.

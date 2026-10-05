@@ -5,6 +5,9 @@
 import * as E from './editor.js';
 import { roomFloorId, LEVEL_SPACING } from './layout.js';
 import { pointInPolygon, signedArea } from './placement.js';
+import { localize, localeKey, localeInfo } from './localization.js';
+import coreCaptions, { markCoreCaptions, updateCoreCaptions } from './translations/editor-core.js';
+import { ownedRuntimeDetails, runtimeNoticeText } from './runtime-notices.js';
 import { buildMarkers, areaName } from './registry.js';
 import { readSource, calibrationError, overlayUrl } from './mower.js';
 import { readImagePixels, planToPixel, medianColor } from './mower-image.js';
@@ -17,6 +20,7 @@ import { actionTarget } from './objects/popup.js';
 import { historyShortcut, isNativeEditing } from './history.js';
 import { OverlayEditor } from './overlay-editor.js';
 import { CameraEditor } from './camera-editor.js';
+import { RoomActionsEditor } from './room-actions-editor.js';
 import { TrackingEditor } from './tracking-editor.js';
 import { WeatherEditor } from './weather-editor.js';
 import { SecurityEditor } from './security-editor.js';
@@ -26,6 +30,9 @@ import { AmbientIdleEditor } from './ambient-idle-editor.js';
 import { WallPresentationEditor } from './wall-presentation-editor.js';
 import { FloorPresentationEditor } from './floor-presentation-editor.js';
 import { HouseSummaryEditor } from './house-summary-editor.js';
+import { FurnitureEditor } from './furniture-editor.js';
+import { FurnitureDrag } from './furniture-drag.js';
+import { DashboardBackupEditor } from './dashboard-backup-editor.js';
 import { entityChoices, registryIssues } from './entity-metadata.js';
 
 const DENSE_TRIS = 150000;
@@ -33,6 +40,7 @@ const DENSE_TRIS = 150000;
 const CLICK_SLOP_PX = 5;
 const SNAP_PX = 10; // snap radius never smaller than this many screen pixels
 const activeEditors = new Set(); // window shortcuts belong to the focused card
+const coreNotices = new WeakMap(); // Display metadata never changes the saved/action message contract.
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
@@ -59,6 +67,7 @@ export class EditMode {
     this._generation = 0;
     this._overlayEditor = new OverlayEditor(card, () => this.render());
     this._cameraEditor = new CameraEditor(card, () => this.render());
+    this._roomActionsEditor = new RoomActionsEditor(card, () => this.render());
     this._trackingEditor = new TrackingEditor(card, () => this.render());
     this._weatherEditor = new WeatherEditor(card, () => this.render());
     this._securityEditor = new SecurityEditor(card, () => this.render());
@@ -67,6 +76,17 @@ export class EditMode {
     this._ambientIdleEditor = new AmbientIdleEditor(card, () => this.render());
     this._floorPresentationEditor = new FloorPresentationEditor(card, () => this.render());
     this._houseSummaryEditor = new HouseSummaryEditor(card, () => this.render());
+    this._dashboardBackupEditor = new DashboardBackupEditor(card, () => this.render());
+    this._furnitureEditor = new FurnitureEditor(card, () => this.render());
+    this._furnitureDrag = new FurnitureDrag(card, { editor: this._furnitureEditor,
+      getLayer: () => card._furnitureLayer,
+      onSelect: (id) => {
+        const index = this._furnitureEditor.draft?.instances?.findIndex((row) => row?.id === id);
+        if (index >= 0 && index !== this._furnitureEditor.selectedIndex) {
+          this._furnitureEditor.selectedIndex = index;
+          this.render();
+        }
+      } });
     this._wallPresentationEditor = new WallPresentationEditor(card, () => this.render(), {
       onBeginPick: (pick) => this.beginWallSurfacePick(pick),
       onCancelPick: () => this.beginWallSurfacePick(null),
@@ -158,7 +178,11 @@ export class EditMode {
 
   // card detached while editing / attached again: window listeners off / on (state kept)
   detach() {
+    this._backupDetached = true;
+    this._dashboardBackupEditor.setActive(false);
+    this._furnitureDrag.cancel();
     this._cameraEditor.cancel();
+    this._roomActionsEditor.reset();
     this._trackingEditor.cancel();
     this._weatherEditor.reset();
     this._securityEditor.reset();
@@ -174,12 +198,16 @@ export class EditMode {
     this._endSlider();
     this._endWindowDrag();
     this._closeMenu();
+    this._furnitureEditor.reset();
   }
 
   // Permanent editor replacement only. Detach/reattach keeps the editor usable.
   dispose() {
     this.detach();
+    this._dashboardBackupEditor.dispose();
+    this._furnitureDrag.dispose(); this._furnitureEditor.dispose();
     this._cameraEditor.dispose();
+    this._roomActionsEditor.dispose();
     this._trackingEditor.dispose();
     this._weatherEditor.dispose();
     this._securityEditor.dispose();
@@ -191,6 +219,8 @@ export class EditMode {
   }
 
   attach() {
+    this._backupDetached = false;
+    this._dashboardBackupEditor.setActive(this.card._editing === true && this.tab === 'data');
     activeEditors.add(this);
     window.addEventListener('keydown', this._onKey);
     window.addEventListener('pointerup', this._onSliderRelease);
@@ -221,6 +251,12 @@ export class EditMode {
 
   // called by the card after every rebuild
   afterUpdate() {
+    const positionCommit = this._modelPositionCommit;
+    this._modelPositionCommit = null;
+    this._syncOwnedLabels();
+    this._roomActionsEditor.observe();
+    this._dashboardBackupEditor.onStates();
+    this._furnitureDrag.update();
     if (this.tab === 'house' && this.card._config?.layout_style !== 'house') {
       this._houseSummaryEditor.reset(); this.tab = 'rooms';
     }
@@ -228,6 +264,14 @@ export class EditMode {
     this.card._applyMarkerSelection(this.selectedMarker);
     this.refreshOverlay();
     const active = this.panel.getRootNode().activeElement;
+    if (this.tab === 'rooms' && this.panel.contains(active) && active?.closest?.('[data-room-actions-editor]')) {
+      this._roomActionsEditor.updatePreviews(this.panel);
+      return;
+    }
+    if (this.tab === 'mower' && this.panel.contains(active) && active?.dataset?.field === 'mower-img-min-pixels') {
+      this._syncMowerImageFields();
+      return;
+    }
     if (this.tab === 'cameras' && this.panel.contains(active) && active?.dataset?.field?.startsWith('cov-')) {
       this._cameraEditor.updatePreviews(this.panel);
       return;
@@ -236,11 +280,16 @@ export class EditMode {
       this._trackingEditor.updatePreviews(this.panel);
       return;
     }
+    if (this.tab === 'overlays' && this.panel.contains(active)
+      && (active?.dataset?.field?.startsWith('ovr-') || active?.dataset?.act?.startsWith('ovr-'))) {
+      this._overlayEditor.updatePreviews(this.panel);
+      return;
+    }
     if (this.tab === 'environment' && this.panel.contains(active) && active?.dataset?.field?.startsWith('env-weather-')) {
       this._weatherEditor.updatePreviews(this.panel);
       return;
     }
-    if (this.tab === 'security' && this.panel.contains(active) && active?.dataset?.field?.startsWith('sec-')) {
+    if (this.tab === 'security' && this.panel.contains(active) && (active?.dataset?.field?.startsWith('sec-') || active?.dataset?.act?.startsWith('sec-'))) {
       this._securityEditor.updatePreviews(this.panel);
       return;
     }
@@ -263,6 +312,17 @@ export class EditMode {
       this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel);
       return;
     }
+    const retainPositionCommit = this.tab === 'model' && !this._sliding && positionCommit
+      && positionCommit.scope === this._modelPositionScope && positionCommit.layout === this.layout
+      && positionCommit.hass === this.hass && this._modelPositionAllowed(positionCommit.element);
+    if (this.tab === 'model' && (this.panel.contains(active) && active?.dataset?.field?.startsWith('md-position-') || retainPositionCommit)) {
+      // Exact numeric values are committed on change. Preserve the typed text
+      // while HA readings arrive, including an unfinished decimal or blank.
+      this._modelRenderingEditor.updatePreviews(this.panel);
+      this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel);
+      this._syncModelPositionFields(retainPositionCommit);
+      return;
+    }
     if (this.tab === 'scenes' && this.panel.contains(active)
       && (active?.dataset?.field?.startsWith('scene-preview-') || active?.dataset?.act?.startsWith('scene-preview-'))) {
       this._scenePreviewEditor.updatePreviews(this.panel);
@@ -271,6 +331,11 @@ export class EditMode {
     if (this.tab === 'idle' && this.panel.contains(active)
       && (active?.dataset?.field?.startsWith('ambient-idle-') || active?.dataset?.act?.startsWith('ambient-idle-'))) {
       this._ambientIdleEditor.updatePreviews(this.panel);
+      return;
+    }
+    if (this.tab === 'furniture' && this.panel.contains(active)
+      && (active?.dataset?.field?.startsWith('furniture-') || active?.dataset?.act?.startsWith('furniture-'))) {
+      this._furnitureEditor.updatePreviews(this.panel);
       return;
     }
     if (this.tab === 'house' && this.panel.contains(active)
@@ -315,6 +380,9 @@ export class EditMode {
 
   // Key changes/reloads discard transient tools before another layout can receive their results.
   cancelHistoryGestures() {
+    this._dashboardBackupEditor.reset();
+    this._roomActionsEditor.reset();
+    this._furnitureDrag.cancel(); this._furnitureEditor.reset();
     this._generation++;
     // A cancelled drag can leave a transient pose while saved positions are unchanged.
     // Force the next rebuild to restore those saved marker positions.
@@ -348,7 +416,8 @@ export class EditMode {
       if (!button) continue;
       button.disabled = this._historyBusy() || !history?.[action === 'undo' ? 'canUndo' : 'canRedo'];
       const label = history?.[action === 'undo' ? 'undoLabel' : 'redoLabel'];
-      button.title = `${action === 'undo' ? 'Undo' : 'Redo'}${label ? ': ' + label : ''}`;
+      button.textContent = localize(this.hass, `history.${action}`);
+      button.title = label ? localize(this.hass, `history.${action}Named`, { label }) : localize(this.hass, `history.${action}`);
       button.setAttribute('aria-label', button.title);
     }
   }
@@ -358,6 +427,9 @@ export class EditMode {
     const history = this.card._history;
     const method = action === 'undo' ? 'undoEdit' : 'redoEdit';
     if (!history?.[action === 'undo' ? 'canUndo' : 'canRedo'] || typeof this.card[method] !== 'function') return false;
+    this._dashboardBackupEditor.reset();
+    this._roomActionsEditor.reset();
+    this._furnitureDrag.cancel(); this._furnitureEditor.reset();
     this.message = null;
     this.confirmDelete = false;
     this._trackingEditor.reset();
@@ -444,11 +516,13 @@ export class EditMode {
   }
 
   canvasDown(e) {
+    if (this.tab === 'furniture') return;
     this._down = e.button === 0 ? [e.clientX, e.clientY] : null;
     this._wallPointerToken = e.button === 0 ? this._wallSurfacePick()?.token ?? null : null;
   }
 
   canvasMove(e) {
+    if (this.tab === 'furniture') return;
     const trackingPick = this._trackingPlanPick();
     if (trackingPick) {
       const point = this._planPoint(e, trackingPick.floorId);
@@ -463,6 +537,7 @@ export class EditMode {
   }
 
   canvasUp(e) {
+    if (this._furnitureDrag.up(e) || this.tab === 'furniture') { this._down = null; return; }
     const d = this._down;
     this._down = null;
     const wallToken = this._wallPointerToken; this._wallPointerToken = null;
@@ -472,6 +547,7 @@ export class EditMode {
   }
 
   _planPoint(e, floorId, z = 0) {
+    if (floorId && !this.floors.some((floor) => floor.id === floorId)) return null;
     return this.view.planPoint(e.clientX, e.clientY, this.view.floorElevation(floorId) + z);
   }
 
@@ -489,7 +565,7 @@ export class EditMode {
       if (point?.length >= 2 && point.every(Number.isFinite)) this._trackingEditor.acceptPlanPoint(point.slice(0, 2), trackingPick.floorId, trackingPick.token);
       this.refreshOverlay(); return;
     }
-    if (this.tab === 'tracking' || this.tab === 'scenes' || this.tab === 'idle' || this.tab === 'house') return; // Source/appearance edits never fall through into room selection.
+    if (this.tab === 'data' || this.tab === 'tracking' || this.tab === 'scenes' || this.tab === 'idle' || this.tab === 'house' || this.tab === 'furniture') return; // Source/appearance edits never fall through into room selection.
     if (this.pivoting) {
       this._setPivot(e);
       return;
@@ -575,26 +651,26 @@ export class EditMode {
     if (pk.busy) return;
     const owner = this.view.pickModel(e.clientX, e.clientY);
     if (!owner) {
-      this.message = { text: "Click on a room's floor", warn: true };
+      this.message = this._coreNotice('pickFloorNotice', {}, { warn: true });
       this.render();
       return;
     }
     if (owner.kind === 'room' || owner.kind === 'zone') {
       const cur = this.layout.model || {};
       this.picking = null;
-      this.message = { text: `Linked ${owner.label || owner.id} to ${areaName(this.hass, pk.areaId)}` };
+      this.message = this._coreNotice('linkedNotice', { name: owner.label || owner.id, area: areaName(this.hass, pk.areaId) });
       this.setModelProps({ rooms: { ...(cur.rooms || {}), [owner.id]: { ...(cur.rooms || {})[owner.id], area: pk.areaId } } });
       this.refreshOverlay();
       return;
     }
     if (owner.hit.up === false) {
-      this.message = { text: "Click on a room's floor", warn: true };
+      this.message = this._coreNotice('pickFloorNotice', {}, { warn: true });
       this.render();
       return;
     }
     pk.busy = true;
     pk.poly = null;
-    this.message = { text: 'Tracing…' };
+    this.message = this._coreNotice('tracing');
     this.render();
     const mesh = owner.hit.object, hit = owner.hit.point;
     setTimeout(() => {
@@ -604,9 +680,9 @@ export class EditMode {
         const r = this._traceOutline(mesh, hit);
         pk.poly = r.poly;
         pk.floorId = this.activeFloor();
-        this.message = r.note ? { text: r.note, warn: true } : null;
+        this.message = r.note === "Used the floor piece's bounding rectangle — reshape it if needed" ? this._coreNotice('traceRectangleNotice', {}, { warn: true }) : r.note ? { text: r.note, warn: true } : null;
       } catch (err) {
-        this.message = { text: `Could not trace this floor: ${err.message}`, error: true };
+        this.message = this._coreNotice('traceError', { error: err.message }, { error: true });
       }
       this.refreshOverlay();
       this.render();
@@ -647,6 +723,7 @@ export class EditMode {
   }
 
   selectRoom(id) {
+    if (this.tab === 'data' && id) return;
     this.selectedRoom = id;
     this.selectedMarker = null;
     this.doorMode = false;
@@ -658,6 +735,7 @@ export class EditMode {
   }
 
   selectMarker(id) {
+    if (this.tab === 'data' && id) return;
     this.selectedMarker = id;
     this.selectedRoom = null;
     this.doorMode = false;
@@ -810,6 +888,7 @@ export class EditMode {
 
   // Overlay move tool: grab the pointer before OrbitControls sees it (capture phase on the stage).
   canvasDownCapture(e) {
+    if (this.tab === 'furniture') { this._furnitureDrag.down(e); return; }
     const o = this.mower().overlay;
     if (!this.overlayMove || !o || e.button !== 0) return;
     e.stopPropagation();
@@ -840,47 +919,56 @@ export class EditMode {
 
   // live values in the Mower tab, without re-rendering the panel
   onStates() {
+    this._syncOwnedLabels();
+    this._roomActionsEditor.observe();
+    if (this.tab === 'rooms') this._roomActionsEditor.updatePreviews(this.panel);
+    this._dashboardBackupEditor.onStates();
+    if (this.tab === 'data') return;
+    this._furnitureDrag.update();
+    if (this.tab === 'furniture') { this._furnitureEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'house') { this._houseSummaryEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'idle') { this._ambientIdleEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'scenes') { this._scenePreviewEditor.updatePreviews(this.panel); return; }
-    if (this.tab === 'model') { this._modelRenderingEditor.updatePreviews(this.panel); this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel); this._syncStageClasses(); return; }
+    if (this.tab === 'model') { this._modelRenderingEditor.updatePreviews(this.panel); this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel); this._syncModelPositionFields(); this._syncStageClasses(); return; }
     if (this.tab === 'security') { this._securityEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'tracking') { this._trackingEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'environment') { this._weatherEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'cameras') { this._cameraEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'overlays') { this._overlayEditor.updatePreviews(this.panel); return; }
     if (this.tab !== 'mower') return;
+    this._syncMowerImageFields();
     const el = this.panel.querySelector('.mower-live');
     if (el) el.innerHTML = this._mowerLiveHtml();
   }
 
   _mowerLiveHtml() {
     const m = this.mower();
+    if (m.floor_id && !this.floors.some((floor) => floor.id === m.floor_id)) return `${this._coreCaption('mowerMissingFloor')}<b>${esc(m.floor_id)}</b>${this._coreCaption('mowerRepairFloor')}`;
     const st = m.entity && this.hass.states[m.entity];
-    if (!m.entity) return m.source === 'image' ? 'Pick the mower entity: its marker follows the icon found on the map image.' : 'Pick the entity that reports the mower position.';
-    if (!st) return `Entity <b>${esc(m.entity)}</b> not found.`;
+    if (!m.entity) return this._coreCaption(m.source === 'image' ? 'pickMowerImageEntity' : 'pickMowerEntity');
+    if (!st) return this._coreCaption('missingMowerEntity', { id: m.entity });
     if (m.source === 'image') return this._mowerImageHtml();
     const r = readSource(st, m);
     if (!r) return m.source === 'xy'
-      ? `No numeric <b>${esc(m.x_attr || 'x')}</b> / <b>${esc(m.y_attr || 'y')}</b> attributes on ${esc(m.entity)}.`
-      : `No latitude/longitude on ${esc(m.entity)} (state: ${esc(st.state)}).`;
+      ? this._coreCaption('mowerNoXY', { x: m.x_attr || 'x', y: m.y_attr || 'y', id: m.entity })
+      : this._coreCaption('mowerNoGps', { id: m.entity, state: st.state });
     const live = this.card._mowerLive;
     const raw = r.raw.map((v) => (m.source === 'xy' ? fmt(v) : v.toFixed(6))).join(', ');
-    const plan = live && live.floorId ? `on plan (${fmt(live.x)}, ${fmt(live.y)})` : 'not on the plan yet: add a calibration point';
-    return `Reading ${raw}<br>${plan}`;
+    const plan = live && live.floorId ? this._coreCaption('mowerOnPlan', { x: fmt(live.x), y: fmt(live.y) }) : this._coreCaption('mowerCalibrate');
+    return `${this._coreCaption('mowerReading', { value: raw })}<br>${plan}`;
   }
 
   _mowerImageHtml() {
     const m = this.mower();
     const ic = m.image || {};
-    if (!m.overlay || !m.overlay.entity) return 'Add the map overlay below and align it with the plan: that alignment is the calibration.';
-    if (!ic.color) return 'Pick the mower icon colour on the map (below).';
+    if (!m.overlay || !m.overlay.entity) return this._coreCaption('mowerAddOverlay');
+    if (!ic.color) return this._coreCaption('mowerPickColour');
     const r = this.card._imageResult;
     const live = this.card._mowerLive;
     if (r && r.error) return `<span style="color: var(--error-color, #db4437)">${esc(r.error)}</span>`;
-    if (r && r.missing) return 'Mower icon not found' + (live && live.floorId ? ` (last seen at ${fmt(live.x)}, ${fmt(live.y)})` : '') + '.';
-    if (r && live && live.floorId) return `Found at ${fmt(live.x)}, ${fmt(live.y)} (${r.count} px)`;
-    return 'Looking for the mower icon…';
+    if (r && r.missing) return this._coreCaption(live && live.floorId ? 'mowerLastSeen' : 'mowerNotFound', { x: fmt(live?.x), y: fmt(live?.y) });
+    if (r && live && live.floorId) return this._coreCaption('mowerFound', { x: fmt(live.x), y: fmt(live.y), count: r.count });
+    return this._coreCaption('mowerLooking');
   }
 
   // Colour under a plan point in the map image: median of the 5x5 pixels around it.
@@ -890,14 +978,14 @@ export class EditMode {
     const ic = m.image || {};
     const entity = ic.entity || (o && o.entity);
     const url = entity && overlayUrl(this.hass, entity, Date.now());
-    if (!url || !o) { this.message = { text: 'Set the map overlay first.', error: true }; this.render(); return; }
+    if (!url || !o) { this.message = this._coreNotice('overlayFirst', {}, { error: true }); this.render(); return; }
     try {
       const img = await readImagePixels(url);
       const q = planToPixel(x, y, img.imgW, img.imgH, o);
       const k = img.width / img.imgW;
       const px = Math.floor(q.px * k), py = Math.floor(q.py * k);
       if (px < 0 || py < 0 || px >= img.width || py >= img.height) {
-        this.message = { text: 'That point is outside the map image.', error: true };
+        this.message = this._coreNotice('outsideImage', {}, { error: true });
         this.render();
         return;
       }
@@ -908,7 +996,7 @@ export class EditMode {
       this.setMower({ image: { tolerance: 40, min_pixels: 4, ...ic, color } });
     } catch (e) {
       console.warn('taylors3d: could not read the mower map image', e);
-      this.message = { text: "Can't read the map image.", error: true };
+      this.message = this._coreNotice('imageError', {}, { error: true });
       this.render();
     }
   }
@@ -940,13 +1028,14 @@ export class EditMode {
     };
 
     const room = preview || this.room(this.selectedRoom);
-    if (room && room.polygon) {
+    if (room && room.polygon && this.floors.some((floor) => floor.id === this.floorOf(room))) {
       const fid = this.floorOf(room);
       fills.push({ points: room.polygon, floorId: fid, color, opacity: 0.16 });
       lines.push({ points: room.polygon, closed: true, floorId: fid, color });
       room.polygon.forEach(([x, y], i) => {
         const el = handle('v' + i, 'vertex', x, y, fid, (e, h) => this._vertexDown(e, room.id, i, h));
-        el.title = 'Drag to move, right-click to delete';
+        el.title = this._coreText('cornerTitle');
+        el.dataset.coreTitle = 'cornerTitle';
         el.oncontextmenu = (e) => {
           e.preventDefault();
           const r = this.room(room.id);
@@ -957,7 +1046,8 @@ export class EditMode {
         room.polygon.forEach((a, i) => {
           const b = room.polygon[(i + 1) % room.polygon.length];
           const el = handle('m' + i, 'mid', (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, fid, (e, h) => this._midDown(e, room.id, i, h));
-          el.title = 'Drag to add a corner';
+          el.title = this._coreText('midpointTitle');
+          el.dataset.coreTitle = 'midpointTitle';
         });
       }
       (room.doors || []).forEach(([x, y], i) => handle('d' + i, 'door', x, y, fid));
@@ -985,7 +1075,7 @@ export class EditMode {
         if (points.length > 1) lines.push({ points: points.map((point) => [point.x, point.y]), closed: false, floorId: calibration.floorId, color });
         for (const point of points) if ([point.x, point.y].every(Number.isFinite)) {
           const element = handle('trk-cal-' + point.index, 'draw calibration', point.x, point.y, calibration.floorId);
-          element.textContent = point.label || String(point.index + 1); element.title = 'Draft calibration point ' + element.textContent;
+          element.textContent = point.label || String(point.index + 1); element.title = this._coreText('calibrationPointTitle', { label: element.textContent });
           element.setAttribute('aria-label', element.title); element.style.pointerEvents = 'none';
         }
         if (Array.isArray(calibration.mapped) && calibration.mapped.every(Number.isFinite)) handle('trk-mapped', 'cursor', calibration.mapped[0], calibration.mapped[1], calibration.floorId);
@@ -1025,7 +1115,7 @@ export class EditMode {
 
   _vertexDown(e, roomId, index) {
     if (e.button !== 0) return;
-    if (this.tab === 'idle' || this.tab === 'house' || this._wallSurfacePick()) return;
+    if (this.tab === 'data' || this.tab === 'idle' || this.tab === 'house' || this.tab === 'furniture' || this._wallSurfacePick()) return;
     e.stopPropagation();
     e.preventDefault();
     this._startWindowDrag({ kind: 'vertex', roomId, index, start: [e.clientX, e.clientY], moved: false });
@@ -1033,7 +1123,7 @@ export class EditMode {
 
   _midDown(e, roomId, edge) {
     if (e.button !== 0) return;
-    if (this.tab === 'idle' || this.tab === 'house' || this._wallSurfacePick()) return;
+    if (this.tab === 'data' || this.tab === 'idle' || this.tab === 'house' || this.tab === 'furniture' || this._wallSurfacePick()) return;
     e.stopPropagation();
     e.preventDefault();
     this._startWindowDrag({ kind: 'mid', roomId, edge, start: [e.clientX, e.clientY], moved: false });
@@ -1042,7 +1132,7 @@ export class EditMode {
   markerDown(m, e) {
     if (e.button !== 0) return;
     e.stopPropagation();
-    if (this.tab === 'tracking' || this.tab === 'scenes' || this.tab === 'idle' || this.tab === 'house' || this.drawing || this.doorMode || this.calibrating || this.colorPick || this._trackingPlanPick() || this._wallSurfacePick()) return;
+    if (this.tab === 'data' || this.tab === 'tracking' || this.tab === 'scenes' || this.tab === 'idle' || this.tab === 'house' || this.tab === 'furniture' || this.drawing || this.doorMode || this.calibrating || this.colorPick || this._trackingPlanPick() || this._wallSurfacePick()) return;
     if (m.id === this.card._mowerMarkerId) {
       this.selectMarker(m.id); // positioned live, nothing to drag
       return;
@@ -1176,13 +1266,110 @@ export class EditMode {
   }
 
   // ---------- panel ----------
+  _coreText(key, params = {}, language = localeInfo(this.hass).resolved) {
+    const full = `editorCore.${key}`, fallback = coreCaptions[language]?.[full] ?? coreCaptions.en[full] ?? '';
+    return language === 'en' ? fallback.replace(/\{([A-Za-z_]+)\}/g, (match, id) => ['string', 'number', 'boolean'].includes(typeof params[id]) ? String(params[id]) : match)
+      : localize(this.hass, full, params, fallback);
+  }
+  _coreCaption(key, params = {}, tag = 'span') {
+    return `<${tag} data-core-caption="${key}" data-core-params="${esc(JSON.stringify(params))}">${esc(this._coreText(key, params))}</${tag}>`;
+  }
+  _coreOption(key, params, attributes) {
+    return `<option data-core-caption="${key}" data-core-params="${esc(JSON.stringify(params || {}))}" ${attributes}>${esc(this._coreText(key, params))}</option>`;
+  }
+  _coreAttribute(key, params = {}, attribute = 'title') {
+    return `data-core-${attribute}="${key}" data-core-params="${esc(JSON.stringify(params))}" ${attribute}="${esc(this._coreText(key, params))}"`;
+  }
+  _coreNotice(key, params = {}, flags = {}) {
+    return this._coreNoticeParts([{ key, params }], flags);
+  }
+  _coreNoticeParts(parts, flags = {}) {
+    const notice = { text: parts.map((part) => part.key ? this._coreText(part.key, part.params, 'en') : part.literal || '').join(''), ...flags };
+    coreNotices.set(notice, { source: notice.text, parts }); return notice;
+  }
+  _coreErrorNotice(error) {
+    const notice = { text: error.message, error: true };
+    if (ownedRuntimeDetails(error)) coreNotices.set(notice, { source: notice.text, runtimeError: error });
+    return notice;
+  }
+  _messageText() {
+    const caption = this.message && coreNotices.get(this.message);
+    if (caption?.source === this.message?.text && caption.runtimeError) return runtimeNoticeText(this.hass, caption.runtimeError);
+    return caption?.source === this.message?.text ? caption.parts.map((part) => part.key ? this._coreText(part.key, part.params) : part.literal || '').join('') : this.message?.text;
+  }
+  _coreFilterReason(reason) {
+    const key = { 'filtered entity': 'filtered', missing: 'filterMissing', hidden: 'filterHidden', disabled: 'filterDisabled', diagnostic: 'filterDiagnostic', config: 'filterConfig' }[reason];
+    return key ? this._coreCaption(key) : esc(reason);
+  }
+  _coreAutoFloorOption(binding, attributes) {
+    const name = binding.floor ? (this.floors.find((floor) => floor.id === binding.floor) || {}).name || binding.floor : '';
+    return this._coreOption(binding.auto ? binding.floor ? 'autoName' : 'autoNoFloor' : 'auto', { name }, attributes);
+  }
+  _coreIssueCaption(issue, owned = false) {
+    // The Data screen supplies only freshly computed registryIssues here. Its
+    // structured codes stay stable in every language; external diagnostics
+    // must retain their own wording even if they happen to reuse a known code.
+    if (!owned) return esc(issue.message);
+    const known = ['area', 'floor', 'entity', 'device', 'room', 'anchor'];
+    if (known.includes(issue.kind) && issue.code === `missing_${issue.kind}`) return this._coreCaption(`saved${issue.kind[0].toUpperCase()}${issue.kind.slice(1)}Issue`, { id: issue.id });
+    if (issue.code === 'entity_no_state' && issue.kind === 'entity') return this._coreCaption('entityNoStateIssue', { id: issue.id });
+    return esc(issue.message);
+  }
   _saveText() {
-    return { saving: 'Saving…', saved: 'Saved', failed: 'Save failed' }[this.saveState] || '';
+    const key = { saving: 'edit.saving', saved: 'edit.saved', failed: 'edit.saveFailed' }[this.saveState];
+    return key ? localize(this.hass, key) : '';
+  }
+
+  _syncOwnedLabels(force = false) {
+    const key = localeKey(this.hass);
+    if (!force && this._ownedLabelsKey === key) return;
+    this._ownedLabelsKey = key;
+    for (const button of this.panel.querySelectorAll('.tabs [data-act="tab"]')) button.textContent = localize(this.hass, `edit.tabs.${button.dataset.id}`, {}, button.textContent);
+    this.panel.querySelector('.history-controls')?.setAttribute('aria-label', localize(this.hass, 'history.aria'));
+    this.updateHistoryState();
+    const state = this.panel.querySelector('.save-state'), backend = this.panel.querySelector('.storage-backend');
+    if (state) state.textContent = this._saveText();
+    if (backend) backend.textContent = this._backendLabel();
+    // Only caption spans change; the native file input and typed feature fields
+    // keep their actual nodes and unfinished intent when HA changes language.
+    for (const node of this.panel.querySelectorAll('[data-single-layout-text]')) node.textContent = localize(this.hass, `edit.singleLayout.${node.dataset.singleLayoutText}`);
+    updateCoreCaptions(this.panel, (caption, params) => this._coreText(caption, params));
+    updateCoreCaptions(this.menu, (caption, params) => this._coreText(caption, params));
+    for (const element of this._handles.values()) if (element.dataset.coreTitle) element.title = this._coreText(element.dataset.coreTitle);
+    const message = this.panel.querySelector('.tab-body > .msg');
+    if (message && this.message && message.textContent !== this._messageText()) message.textContent = this._messageText();
   }
 
   render() {
+    this._dashboardBackupEditor.setActive(!this._backupDetached && this.card._editing === true && this.tab === 'data');
     if (this.tab === 'house' && this.card._config?.layout_style !== 'house') {
       this._houseSummaryEditor.reset(); this.tab = 'rooms';
+    }
+    // Keep the whole backup subtree connected during Data redraws. Native file
+    // selections, summary focus and a valid held press cannot be reconstructed
+    // by serializing HTML or briefly removing/reinserting the same element.
+    if (this.tab === 'data' && this._renderedTab === 'data' && this.panel.querySelector('[data-dashboard-backup-editor]')) {
+      const active = this.panel.getRootNode().activeElement;
+      const tabBody = this.panel.querySelector('.tab-body');
+      let message = tabBody.querySelector(':scope > .msg');
+      if (this.message) {
+        if (!message) { message = document.createElement('div'); tabBody.prepend(message); }
+        message.className = `msg ${this.message.error ? 'error' : this.message.warn ? 'warn' : ''}`;
+        message.textContent = this._messageText();
+      } else message?.remove();
+      const old = this.panel.querySelector('[data-single-layout-data]');
+      const template = document.createElement('template'); template.innerHTML = this._singleLayoutData();
+      old?.replaceWith(template.content.firstElementChild);
+      markCoreCaptions(this.panel.querySelector('[data-single-layout-data]'), 'data');
+      this._syncOwnedLabels(true);
+      this._dashboardBackupEditor.updatePreviews(this.panel);
+      this.updateHistoryState();
+      this.panel.querySelector('.save-state').textContent = this._saveText();
+      this.panel.querySelector('.foot span:last-child').textContent = this._backendLabel();
+      if (active?.dataset?.act?.startsWith('history-') && active.disabled) {
+        this.panel.querySelector('.history-controls button:not(:disabled)')?.focus({ preventScroll: true });
+      }
+      return;
     }
     if (this._sliding) { this._renderHeld = true; this.updateHistoryState(); return; }
     // a rebuild must not move the panel under the user: keep scroll position and the focused control
@@ -1199,7 +1386,7 @@ export class EditMode {
     this._renderedTab = this.tab;
     const hasObjects = this._hasObjects();
     if (this.tab === 'objects' && !hasObjects) this.tab = 'devices';
-    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ...(hasObjects ? [['objects', 'Objects']] : []), ['overlays', 'Overlays'], ['cameras', 'Cameras'], ['tracking', 'Tracking'], ['security', 'Security'], ['environment', 'Environment'], ['scenes', 'Scenes'], ['idle', 'Idle'], ['mower', 'Mower'], ['views', 'Views'], ['model', 'Model'], ...(this.card._config?.layout_style === 'house' ? [['house', 'House']] : []), ['data', 'Data']];
+    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ...(hasObjects ? [['objects', 'Objects']] : []), ['overlays', 'Overlays'], ['cameras', 'Cameras'], ['tracking', 'Tracking'], ['security', 'Security'], ['environment', 'Environment'], ['scenes', 'Scenes'], ['idle', 'Idle'], ['mower', 'Mower'], ['views', 'Views'], ['model', 'Model'], ['furniture', 'Furniture'], ...(this.card._config?.layout_style === 'house' ? [['house', 'House']] : []), ['data', 'Data']];
     const body = {
       rooms: () => this._roomsTab(), devices: () => this._devicesTab(), objects: () => this._objectsTab(), mower: () => this._mowerTab(), views: () => this._viewsTab(),
       model: () => this._modelTab(), data: () => this._dataTab(),
@@ -1211,25 +1398,31 @@ export class EditMode {
       scenes: () => this._scenePreviewEditor.render(),
       idle: () => this._ambientIdleEditor.render(),
       house: () => this._houseSummaryEditor.render(),
+      furniture: () => `<p><button data-act="library-refresh">${this._coreCaption('libraryRefresh')}</button></p>${this._furnitureEditor.render()}${this._furnitureLibraryDetails()}`,
     }[this.tab]();
-    const msg = this.message ? `<div class="msg ${this.message.error ? 'error' : this.message.warn ? 'warn' : ''}">${esc(this.message.text)}</div>` : '';
+    const msg = this.message ? `<div class="msg ${this.message.error ? 'error' : this.message.warn ? 'warn' : ''}">${esc(this._messageText())}</div>` : '';
     this.panel.innerHTML = `
-      <div class="tabs">${tabs.map(([id, label]) => `<button data-act="tab" data-id="${id}" class="${this.tab === id ? 'on' : ''}">${label}</button>`).join('')}</div>
-      <div class="row history-controls" role="group" aria-label="Edit history" style="padding: 4px 12px">
-        <button data-act="history-undo" style="min-height: 44px" disabled>Undo</button>
-        <button data-act="history-redo" style="min-height: 44px" disabled>Redo</button>
+      <div class="tabs">${tabs.map(([id, label]) => `<button data-act="tab" data-id="${id}" class="${this.tab === id ? 'on' : ''}">${esc(localize(this.hass, `edit.tabs.${id}`, {}, label))}</button>`).join('')}</div>
+      <div class="row history-controls" role="group" aria-label="${esc(localize(this.hass, 'history.aria'))}" style="padding: 4px 12px">
+        <button data-act="history-undo" style="min-height: 44px" disabled>${esc(localize(this.hass, 'history.undo'))}</button>
+        <button data-act="history-redo" style="min-height: 44px" disabled>${esc(localize(this.hass, 'history.redo'))}</button>
         <span class="dim" style="font-size: 11px">Ctrl / ⌘ Z</span>
       </div>
       <div class="tab-body">${msg}${body}</div>
-      <div class="foot"><span class="save-state">${this._saveText()}</span><span>${esc(this._backendLabel())}</span></div>`;
+      <div class="foot"><span class="save-state">${this._saveText()}</span><span class="storage-backend">${esc(this._backendLabel())}</span></div>`;
+    markCoreCaptions(this.panel, this.tab);
+    this._syncOwnedLabels(true);
     this.updateHistoryState();
     if (this.tab === 'tracking') this._trackingEditor.updatePreviews(this.panel);
     if (this.tab === 'environment') this._weatherEditor.updatePreviews(this.panel);
     if (this.tab === 'security') this._securityEditor.updatePreviews(this.panel);
-    if (this.tab === 'model') { this._modelRenderingEditor.updatePreviews(this.panel); this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel); this._syncStageClasses(); }
+    if (this.tab === 'model') { this._modelRenderingEditor.updatePreviews(this.panel); this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel); this._syncModelPositionFields(); this._syncStageClasses(); }
     if (this.tab === 'scenes') this._scenePreviewEditor.updatePreviews(this.panel);
     if (this.tab === 'idle') this._ambientIdleEditor.updatePreviews(this.panel);
     if (this.tab === 'house') this._houseSummaryEditor.updatePreviews(this.panel);
+    if (this.tab === 'furniture') this._furnitureEditor.updatePreviews(this.panel);
+    if (this.tab === 'data') this._dashboardBackupEditor.updatePreviews(this.panel);
+    if (this.tab === 'rooms') this._roomActionsEditor.updatePreviews(this.panel);
     const newBody = this.panel.querySelector('.tab-body');
     if (newBody && scroll) newBody.scrollTop = scroll;
     if (focusKey) {
@@ -1245,7 +1438,7 @@ export class EditMode {
   }
 
   _backendLabel() {
-    return { shared: 'Shared storage', user: 'Per-user storage', browser: 'Browser storage' }[this.card._store.backend] || '';
+    return localize(this.hass, `edit.storage.${this.card._store.backend}`);
   }
 
   _areas() {
@@ -1257,10 +1450,10 @@ export class EditMode {
     const d = this.drawing;
     if (d) {
       return `<section class="box">
-        <h3>Drawing: ${esc(areaName(this.hass, d.areaId))}</h3>
+        <h3>${this._coreCaption('drawing', { name: areaName(this.hass, d.areaId) })}</h3>
         <p class="hint">Click the corners on the plan. Points snap to 5 cm and to existing corners, so shared walls line up.
         Click the first point or press Enter to finish, Backspace removes the last point, Esc cancels.</p>
-        <p>${d.points.length} point${d.points.length === 1 ? '' : 's'}</p>
+        <p>${this._coreCaption(d.points.length === 1 ? 'pointsOne' : 'pointsMany', { count: d.points.length })}</p>
         <div class="row"><button data-act="finish" ${d.points.length < 3 ? 'disabled' : ''} class="primary">Finish</button>
         <button data-act="undo-point" ${d.points.length ? '' : 'disabled'}>Undo point</button>
         <button data-act="cancel-draw">Cancel</button></div></section>`;
@@ -1268,9 +1461,9 @@ export class EditMode {
     const pk = this.picking;
     if (pk) {
       return `<section class="box">
-        <h3>Pick: ${esc(areaName(this.hass, pk.areaId))}</h3>
-        ${pk.busy ? '<p class="hint">Tracing…</p>' : pk.poly
-    ? `<p>${pk.poly.length} corners</p><div class="row"><button data-act="pick-use" class="primary">Use this outline</button>
+        <h3>${this._coreCaption('picking', { name: areaName(this.hass, pk.areaId) })}</h3>
+        ${pk.busy ? `<p class="hint">${this._coreCaption('tracing')}</p>` : pk.poly
+    ? `<p>${this._coreCaption('corners', { count: pk.poly.length })}</p><div class="row"><button data-act="pick-use" class="primary">Use this outline</button>
         <button data-act="pick-draw">Draw instead</button></div>`
     : "<p class=\"hint\">Click on this room's floor in the model.</p>"}
         <div class="row"><button data-act="pick-cancel">Cancel</button></div></section>`;
@@ -1281,21 +1474,24 @@ export class EditMode {
     let out = '';
     if (sel) {
       const areaOpts = areas.map((a) => `<option value="${esc(a.area_id)}" ${a.area_id === sel.area_id ? 'selected' : ''}>${esc(a.name)}</option>`);
-      if (sel.area_id && !areas.some((a) => a.area_id === sel.area_id)) areaOpts.unshift(`<option selected value="${esc(sel.area_id)}">${esc(sel.area_id)} (missing)</option>`);
+      if (sel.area_id && !areas.some((a) => a.area_id === sel.area_id)) areaOpts.unshift(this._coreOption('missingArea', { id: sel.area_id }, `selected value="${esc(sel.area_id)}"`));
       const fid = this.floorOf(sel);
-      const floorOpts = this.floors.map((f) => `<option value="${esc(f.id)}" ${f.id === fid ? 'selected' : ''}>${esc(f.name)}</option>`).join('');
-      const doors = (sel.doors || []).map((p, i) => `<li>Door ${i + 1} <span class="dim">(${fmt(p[0])}, ${fmt(p[1])})</span> <button class="link" data-act="del-door" data-i="${i}">Remove</button></li>`).join('');
+      const missingFloor = fid && !this.floors.some((floor) => floor.id === fid);
+      const floorOpts = (missingFloor ? this._coreOption('missingFloor', { id: fid }, `selected value="${esc(fid)}"`) : '')
+        + this.floors.map((f) => `<option value="${esc(f.id)}" ${f.id === fid ? 'selected' : ''}>${esc(f.name)}</option>`).join('');
+      const doors = (sel.doors || []).map((p, i) => `<li>${this._coreCaption('doorNumber', { count: i + 1 })} <span class="dim">(${fmt(p[0])}, ${fmt(p[1])})</span> <button class="link" data-act="del-door" data-i="${i}">Remove</button></li>`).join('');
       out += `<section class="box">
         <h3>${esc(areaName(this.hass, sel.area_id))}</h3>
         <label>Area <select data-field="room-area">${areaOpts.join('')}</select></label>
         <label>Floor <select data-field="room-floor">${floorOpts}</select></label>
+        ${missingFloor ? '<p class="note warn">This saved room has no current floor location. Choose its replacement deliberately; its outline is retained.</p>' : ''}
         <label class="check"><input type="checkbox" data-field="room-outdoor" ${sel.outdoor ? 'checked' : ''}> Outdoor (no walls)</label>
-        <div class="sub">Doors</div>
-        <ul class="plain">${doors || '<li class="dim">No doors</li>'}</ul>
-        <button data-act="door-mode" class="${this.doorMode ? 'primary' : ''}">${this.doorMode ? 'Click a wall on the plan…' : 'Add door'}</button>
+        <div class="sub">${this._coreCaption('doors')}</div>
+        <ul class="plain">${doors || `<li class="dim">${this._coreCaption('noDoors')}</li>`}</ul>
+        <button data-act="door-mode" class="${this.doorMode ? 'primary' : ''}">${this._coreCaption(this.doorMode ? 'clickWall' : 'addDoor')}</button>
         <p class="hint">Drag corners to reshape. Drag an edge midpoint to add a corner, right-click a corner to delete it.</p>
         <div class="row">
-          <button data-act="delete-room" class="danger">${this.confirmDelete ? 'Really delete?' : 'Delete room'}</button>
+          <button data-act="delete-room" class="danger">${this._coreCaption(this.confirmDelete ? 'reallyDelete' : 'deleteRoom')}</button>
           <button data-act="deselect">Done</button>
         </div></section>`;
     }
@@ -1305,36 +1501,36 @@ export class EditMode {
     for (const a of areas) (byFloor.get(a.floor_id) || byFloor.get('')).push(a);
     for (const [fid, list] of byFloor) {
       if (!list.length) continue;
-      const fname = fid ? this.floors.find((f) => f.id === fid).name : 'No floor';
-      out += `<div class="sub">${esc(fname)}</div><ul class="list">`;
+      const fname = fid ? esc(this.floors.find((f) => f.id === fid).name) : this._coreCaption('noFloor');
+      out += `<div class="sub">${fname}</div><ul class="list">`;
       for (const a of list) {
         const mr = (this.card._modelRooms || []).find((x) => x.area_id === a.area_id);
-        if (mr) {
-          out += `<li><span class="name">${esc(a.name)}</span><span class="pill ok">model</span>
-            <button data-act="tab" data-id="model">Model</button></li>`;
-          continue;
-        }
-        const r = rooms.find((x) => x.area_id === a.area_id);
-        out += `<li class="${r && r.id === this.selectedRoom ? 'sel' : ''}"><span class="name">${esc(a.name)}</span>
-          <span class="pill ${r ? 'ok' : 'missing'}">${r ? 'drawn' : 'missing'}</span>
-          ${r ? `<button data-act="select-room" data-id="${esc(r.id)}">Select</button>` : `${this.view.model ? `<button data-act="pick" data-id="${esc(a.area_id)}">Pick</button>` : ''}<button data-act="draw" data-id="${esc(a.area_id)}">Draw</button>`}</li>`;
+        // A model link must not hide existing saved outlines, including a
+        // stale second outline whose explicit floor needs deliberate repair.
+        const saved = rooms.filter((x) => x.area_id === a.area_id);
+        const selects = saved.map((r) => `<button data-act="select-room" data-id="${esc(r.id)}">${this._coreCaption('select')}${saved.length > 1 ? ` ${esc(r.name || r.id)}` : ''}</button>`).join('');
+        out += `<li class="${saved.some((r) => r.id === this.selectedRoom) ? 'sel' : ''}"><span class="name">${esc(a.name)}</span>
+          <span class="pill ${mr || saved.length ? 'ok' : 'missing'}">${this._coreCaption(mr ? 'modelBadge' : saved.length ? 'drawn' : 'missing')}</span>
+          ${mr ? `<button data-act="tab" data-id="model">${this._coreCaption('model')}</button>` : ''}${selects}
+          ${!mr && !saved.length ? `${this.view.model ? `<button data-act="pick" data-id="${esc(a.area_id)}">Pick</button>` : ''}<button data-act="draw" data-id="${esc(a.area_id)}">Draw</button>` : ''}</li>`;
       }
       out += '</ul>';
     }
     const orphans = rooms.filter((r) => !(this.hass.areas || {})[r.area_id]);
     if (orphans.length) {
-      out += '<div class="sub">Rooms without an HA area</div><ul class="list">';
-      for (const r of orphans) out += `<li><span class="name">${esc(r.area_id || r.id)}</span><button data-act="select-room" data-id="${esc(r.id)}">Select</button></li>`;
+      out += `<div class="sub">${this._coreCaption('roomOrphans')}</div><ul class="list">`;
+      for (const r of orphans) out += `<li><span class="name">${esc(r.area_id || r.id)}</span><button data-act="select-room" data-id="${esc(r.id)}">${this._coreCaption('select')}</button></li>`;
       out += '</ul>';
     }
     if (!areas.length) out += '<p class="hint">No areas in Home Assistant yet. Create areas under Settings → Areas.</p>';
 
+    out += this._roomActionsEditor.render();
     // floor heights come from the model when there is one; the table is for model-less layouts
     if (this.view.model) return out;
     const stored = new Set((this.layout.floors || []).map((f) => f.id));
     const haFloors = new Set(Object.keys(this.hass.floors || {}));
-    out += `<details class="advanced" ${this._advancedOpen ? 'open' : ''}><summary>Advanced (no model)</summary>
-      <div class="sub">Floors</div><table class="floors"><tr><th></th><th>Elevation m</th><th>Height m</th><th></th></tr>`;
+    out += `<details class="advanced" ${this._advancedOpen ? 'open' : ''}><summary>${this._coreCaption('advanced')}</summary>
+      <div class="sub">${this._coreCaption('floors')}</div><table class="floors"><tr><th></th><th>${this._coreCaption('elevation')}</th><th>${this._coreCaption('floorHeight')}</th><th></th></tr>`;
     for (const f of this.floors) {
       out += `<tr><td>${esc(f.name)}</td>
         <td><input type="number" step="0.05" data-field="floor-elevation" data-id="${esc(f.id)}" value="${fmt(f.elevation)}"></td>
@@ -1369,7 +1565,7 @@ export class EditMode {
       }
       out += `<section class="box"><h3>${esc(m.name)}</h3>
         <p class="dim">${esc(m.entityId)}${m.areaId ? ' · ' + esc(areaName(this.hass, m.areaId)) : ''}</p>
-        <p>${attached ? `Attached to ${esc((target && target.obj.label) || attached)}${target ? '' : ' (not in the model)'}` : pinned ? 'Pinned' : 'Auto placed'}</p>
+        <p>${attached ? this._coreCaption(target ? 'attached' : 'attachedMissing', { name: (target && target.obj.label) || attached }) : this._coreCaption(pinned ? 'pinned' : 'autoPlaced')}</p>
         ${pos ? `<label>Height above floor (m) <input type="number" step="0.05" min="0" data-field="marker-z" value="${fmt(pos.z)}"></label>` : ''}
         <div class="row">
           ${attached ? '<button data-act="detach">Detach</button>' : ''}
@@ -1378,20 +1574,20 @@ export class EditMode {
           <button data-act="deselect-marker">Done</button>
         </div></section>`;
     }
-    out += `<p class="hint">Drag any marker on the plan to pin it there${this.view.model ? ' (it sticks to the model surface; drop on a model object to attach it, hold Alt for a free drag)' : ''}. Click a marker to select it.</p>`;
+    out += `<p class="hint">${this._coreCaption(this.view.model ? 'dragModelMarker' : 'dragMarker')}</p>`;
 
     const unplaced = all.filter((x) => !hidden.includes(x.id) && !hidden.includes(x.entityId) && !(this.card._positions || new Map()).has(x.id));
-    out += `<div class="sub">Devices without a room (${unplaced.length})</div>`;
+    out += `<div class="sub">${this._coreCaption('unplaced', { count: unplaced.length })}</div>`;
     if (unplaced.length) {
       out += '<ul class="list">';
       for (const x of unplaced) {
-        out += `<li><span class="name">${esc(x.name)}<span class="dim"> · ${x.areaId ? esc(areaName(this.hass, x.areaId)) : 'no area'}</span></span>
+        out += `<li><span class="name">${esc(x.name)}<span class="dim"> · ${x.areaId ? esc(areaName(this.hass, x.areaId)) : this._coreCaption('noArea')}</span></span>
           <button data-act="place" data-id="${esc(x.id)}">Place</button></li>`;
       }
       out += '</ul>';
     } else out += '<p class="dim">Every device is on the plan.</p>';
 
-    out += `<div class="sub">Hidden (${hidden.length})</div>`;
+    out += `<div class="sub">${this._coreCaption('hiddenCount', { count: hidden.length })}</div>`;
     if (hidden.length) {
       out += '<ul class="list">';
       for (const id of hidden) {
@@ -1425,8 +1621,8 @@ export class EditMode {
     const listFor = (type) => {
       const d = DOMAINS[type];
       const selected = objs.filter((o) => (DOMAINS[o.type] ? o.type : 'other') === type)
-        .map((o) => this.layout.objects?.[o.id]?.entity || bindings.get(o.id)?.entity).filter(Boolean);
-      return entityChoices(this.hass, { domains: d, selected });
+        .map((o) => this.layout.objects?.[o.id]?.entity || bindings.get(o.id)?.requestedEntity || bindings.get(o.id)?.entity).filter(Boolean);
+      return entityChoices(this.hass, { domains: d, selected, ...this._objectPickerFilter() });
     };
     const types = [...new Set(objs.map((o) => (DOMAINS[o.type] ? o.type : 'other')))];
     const datalists = types.map((t) => `<datalist id="fp-obj-${t}">${listFor(t).map((x) => `<option value="${esc(x.value)}">${esc(x.label)}${x.area?.name ? ' · ' + esc(x.area.name) : ''}</option>`).join('')}</datalist>`).join('');
@@ -1437,34 +1633,40 @@ export class EditMode {
       const saved = lo[o.id] || {};
       const explicit = saved.entity !== undefined;
       const sug = (o.suggest || {}).entity;
-      let badge = '', value = '', ph = 'auto: none';
+      let badge = '', value = '', ph = 'auto: none', phKey = 'autoNone', phParams = {};
       if (explicit) {
         value = saved.entity === null ? 'none' : saved.entity;
-        if (b.missing) badge = '<span class="badge warn">entity not found</span>';
-      } else if (b.entity) { badge = '<span class="badge">auto</span>'; ph = b.entity; } else if (sug) {
-        badge = '<span class="badge warn">entity not found</span>';
+        if (b.missing) badge = `<span class="badge warn">${this._coreCaption('entityMissing')}</span>`;
+      } else if (b.entity) { badge = `<span class="badge">${this._coreCaption('auto')}</span>`; ph = b.entity; phKey = null; } else if (sug) {
+        badge = `<span class="badge warn">${this._coreCaption('entityMissing')}</span>`;
         ph = `auto: ${sug}`;
+        phKey = 'autoEntity'; phParams = { id: sug };
       }
+      if (b.filtered) badge = `<span class="badge warn">${this._coreFilterReason(b.filterReason || 'filtered entity')}</span>`;
       const sel = this.objSel === o.id;
       // Test only where a tap could toggle something (not hidden, own entity or a known group controller)
-      const testable = !b.hidden && !!actionTarget(o, b, this.card._groups || {});
+      const target = !b.hidden && actionTarget(o, b, this.card._groups || {}, states);
+      const testable = !!target && (this.card._objectToggleCall ? !!this.card._objectToggleCall(target) : !b.filtered && !b.missing);
       return `<li class="obj${sel ? ' sel' : ''}${b.hidden ? ' hid' : ''}" data-obj="${esc(o.id)}">
         <div class="orow"><ha-icon icon="${ICONS[t] || 'mdi:cube-outline'}"></ha-icon><span class="name">${esc(o.label || o.id)}</span>${badge}
           ${testable ? `<button data-act="obj-test" data-id="${esc(o.id)}" title="Toggle it like a tap in the view">Test</button>` : ''}
           <label class="check"><input type="checkbox" data-field="obj-hidden" data-id="${esc(o.id)}" ${b.hidden ? 'checked' : ''}> Hide</label></div>
-        <input list="fp-obj-${t}" data-field="obj-entity" data-id="${esc(o.id)}" value="${esc(value)}" placeholder="${esc(ph)}" title="Empty: automatic; type none to leave it unbound">
-        ${o.group ? `<div class="dim">Group ${esc(o.group)}</div>` : ''}</li>`;
+        <input list="fp-obj-${t}" data-field="obj-entity" data-id="${esc(o.id)}" value="${esc(value)}" ${phKey ? this._coreAttribute(phKey, phParams, 'placeholder') : `placeholder="${esc(ph)}"`} title="Empty: automatic; type none to leave it unbound">
+        ${o.group ? `<div class="dim">${this._coreCaption('group', { id: o.group })}</div>` : ''}</li>`;
     };
     const levelOf = new Map(mb.manifest.levels.map((l) => [l.id, l]));
     const roomOf = new Map(mb.manifest.rooms.map((r) => [r.id, r]));
     const order = [...new Set([...mb.manifest.levels.map((l) => l.id), ...objs.map((o) => o.level)])];
-    let out = datalists + '<p class="hint">Bind each model object to a Home Assistant entity. Empty means automatic; "none" leaves it unbound. Click an object in the plan to find its row.</p>';
+    const areaOptions = [['all', 'All areas'], ['unassigned', 'Unassigned'], ...this._areas().map((area) => [`area:${area.area_id}`, area.name])];
+    if (this._objectPickerArea && !areaOptions.some(([id]) => id === this._objectPickerArea)) areaOptions.push([this._objectPickerArea, 'Missing selected area', 'missingSelectedArea']);
+    let out = datalists + `<label>Filter suggestions by area <select data-field="obj-picker-area">${areaOptions.map(([id, label, key]) => key ? this._coreOption(key, {}, `value="${esc(id)}" selected`) : `<option value="${esc(id)}" ${id === (this._objectPickerArea || 'all') ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select></label>`
+      + '<p class="hint">Bind each model object to a Home Assistant entity. Empty means automatic; "none" leaves it unbound. Click an object in the plan to find its row.</p>';
     out += '<ul class="otree">';
     for (const lid of order) {
       const inLevel = objs.filter((o) => o.level === lid);
       if (!inLevel.length) continue;
       const lv = levelOf.get(lid);
-      out += `<li class="room lvl"><span class="name">${esc(lv ? lv.label : lid || 'No level')}</span></li>`;
+      out += `<li class="room lvl"><span class="name">${lv ? esc(lv.label) : lid ? esc(lid) : this._coreCaption('noLevel')}</span></li>`;
       const roomIds = [...new Set(inLevel.map((o) => o.room || ''))];
       for (const rid of roomIds) {
         const list = inLevel.filter((o) => (o.room || '') === rid);
@@ -1472,7 +1674,7 @@ export class EditMode {
         const open = this.objExpanded.has(key) || list.some((o) => o.id === this.objSel);
         const r = roomOf.get(rid);
         out += `<li class="room" style="--d:1"><button class="link expand" data-act="obj-expand" data-key="${esc(key)}">${open ? '\u25be' : '\u25b8'}</button>
-          <span class="name">${esc(r ? r.label : rid ? rid : 'No room')}</span><span class="dim">${list.length}</span></li>`;
+          <span class="name">${r ? esc(r.label) : rid ? esc(rid) : this._coreCaption('noRoom')}</span><span class="dim">${list.length}</span></li>`;
         if (open) out += list.map(rowHtml).join('');
       }
     }
@@ -1480,12 +1682,14 @@ export class EditMode {
     const groups = [...new Set(objs.map((o) => o.group).filter(Boolean))].sort();
     if (groups.length) {
       const lg = this.layout.groups || {};
-      const gl = entityChoices(this.hass, { domains: ['light', 'switch'], selected: groups.map((id) => lg[id]?.entity).filter(Boolean) });
-      out += `<div class="sub">Groups</div><p class="hint">A group controller must be on too: a fixture is lit only while its own entity and the controller are both on.</p>
+      const gl = entityChoices(this.hass, { domains: ['light', 'switch'], selected: groups.map((id) => lg[id]?.entity).filter(Boolean), ...this._objectPickerFilter() });
+      out += `<div class="sub">${this._coreCaption('groups')}</div><p class="hint">A group controller must be on too: a fixture is lit only while its own entity and the controller are both on.</p>
         <datalist id="fp-grp-ents">${gl.map((x) => `<option value="${esc(x.value)}">${esc(x.label)}</option>`).join('')}</datalist>`;
       out += groups.map((g) => {
         const e = (lg[g] && lg[g].entity) || '';
-        const missing = e && !states[e] ? ' <span class="badge warn">entity not found</span>' : '';
+        const binding = this.card._groups?.[g];
+        const missing = binding?.filtered ? ` <span class="badge warn">${this._coreFilterReason(binding.filterReason || 'filtered entity')}</span>`
+          : e && !states[e] ? ` <span class="badge warn">${this._coreCaption('entityMissing')}</span>` : '';
         return `<label class="grp" data-grp="${esc(g)}">${esc(g)}${missing} <input list="fp-grp-ents" data-field="grp-entity" data-id="${esc(g)}"
         value="${esc(e)}" placeholder="no controller" title="Empty or none: no controller"></label>`;
       }).join('');
@@ -1510,16 +1714,21 @@ export class EditMode {
 
   _mowerTab() {
     const m = this.mower();
-    const states = this.hass.states;
-    const ids = Object.keys(states).sort();
-    const posIds = ids.filter((id) => /^(device_tracker|sensor|lawn_mower|vacuum)\./.test(id));
-    const picIds = ids.filter((id) => /^(image|camera)\./.test(id));
-    const datalist = (id, list) => `<datalist id="${id}">${list.map((x) => `<option value="${esc(x)}">`).join('')}</datalist>`;
-    const floorOpts = this.floors.map((f) => `<option value="${esc(f.id)}" ${f.id === this.card._mowerFloor() ? 'selected' : ''}>${esc(f.name)}</option>`).join('');
+    const posIds = this._mowerChoices(['device_tracker', 'sensor', 'lawn_mower', 'vacuum'], [m.entity]);
+    const picIds = this._mowerChoices(['image', 'camera'], [m.image?.entity, m.overlay?.entity]);
+    const datalist = (id, list) => `<datalist id="${id}">${list.map((choice) => `<option value="${esc(choice.value)}" ${choice.selectable ? '' : 'disabled'}>${esc(choice.label)}</option>`).join('')}</datalist>`;
+    const floorId = m.floor_id || this.card._mowerFloor();
+    const missingFloor = floorId && !this.floors.some((floor) => floor.id === floorId);
+    const floorOpts = (missingFloor ? this._coreOption('missingFloor', { id: floorId }, `selected value="${esc(floorId)}"`) : '')
+      + this.floors.map((f) => `<option value="${esc(f.id)}" ${f.id === floorId ? 'selected' : ''}>${esc(f.name)}</option>`).join('');
+    const areaOptions = [['all', 'All areas'], ['unassigned', 'Unassigned'], ...this._areas().map((area) => [`area:${area.area_id}`, area.name])];
+    if (this._mowerPickerArea && !areaOptions.some(([id]) => id === this._mowerPickerArea)) areaOptions.push([this._mowerPickerArea, 'Missing selected area', 'missingSelectedArea']);
+    const warnings = [...posIds, ...picIds].filter((choice) => choice.selected && (!choice.selectable || !choice.available));
     const cal = m.calibration || [];
     const err = calibrationError(cal, m.source === 'xy' ? 'xy' : 'gps');
-    const fitName = ['', 'shift only', 'shift, rotate, scale', 'affine (least squares)'][Math.min(cal.length, 3)];
-    let out = `<div class="sub">Position</div>
+    let out = `<label>Filter suggestions by area <select data-field="mower-picker-area">${areaOptions.map(([id, label, key]) => key ? this._coreOption(key, {}, `value="${esc(id)}" selected`) : `<option value="${esc(id)}" ${id === (this._mowerPickerArea || 'all') ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select></label>
+      ${warnings.map((choice) => `<p class="note warn" data-mower-link-warning>${this._coreCaption('savedMowerLink', { id: choice.value, label: choice.label })}</p>`).join('')}
+      <div class="sub">${this._coreCaption('position')}</div>
       <label>Entity <input list="fp-pos-ents" data-field="mower-entity" value="${esc(m.entity || '')}" placeholder="device_tracker.mower_position"></label>
       ${datalist('fp-pos-ents', posIds)}
       <label>Source <select data-field="mower-source">
@@ -1529,11 +1738,12 @@ export class EditMode {
       ${m.source === 'xy' ? `<div class="row"><label>x attribute <input data-field="mower-xattr" value="${esc(m.x_attr || 'x')}"></label>
         <label>y attribute <input data-field="mower-yattr" value="${esc(m.y_attr || 'y')}"></label></div>` : ''}
       <label>Floor <select data-field="mower-floor">${floorOpts}</select></label>
+      ${missingFloor ? '<p class="note warn">The saved floor is missing. Choose its replacement deliberately before placing the mower.</p>' : ''}
       <label class="check"><input type="checkbox" data-field="mower-trail" ${m.trail !== false ? 'checked' : ''}> Show trail (this session)</label>
       <p class="hint mower-live">${this._mowerLiveHtml()}</p>`;
     if (!m.entity) return out;
 
-    if (m.source !== 'image') out += this._calibrationHtml(m, cal, err, fitName);
+    if (m.source !== 'image') out += this._calibrationHtml(m, cal, err);
     else if (this.card._trail && this.card._trail.length) out += '<div class="row"><button data-act="trail-clear">Clear trail</button></div>';
     out += this._overlayHtml(m, picIds, datalist);
     if (m.source === 'image') out += this._mowerImageSection(m);
@@ -1541,11 +1751,40 @@ export class EditMode {
     return out;
   }
 
+  _objectPickerFilter() {
+    const area = this._objectPickerArea;
+    return area === 'unassigned' ? { areaId: null } : typeof area === 'string' && area.startsWith('area:') ? { areaId: area.slice(5) } : {};
+  }
+
+  _objectLinkAllowed(value, previous, type) {
+    if (!value || value.toLowerCase() === 'none' || value === previous) return true;
+    const domains = { light: ['light', 'switch'], light_strip: ['light', 'switch'], mower: ['lawn_mower'], dock: ['lawn_mower', 'binary_sensor'],
+      ev_charger: ['sensor', 'switch', 'binary_sensor'], climate: ['climate'], group: ['light', 'switch'] }[type];
+    if (entityChoices(this.hass, { domains, ...this._objectPickerFilter() }).some((choice) => choice.value === value && choice.selectable)) return true;
+    this.message = this._coreNotice('objectLinkNotice', {}, { error: true });
+    this.render(); return false;
+  }
+
+  _mowerChoices(domains, selected = [], useArea = true) {
+    const area = useArea && this._mowerPickerArea;
+    const filter = area === 'unassigned' ? { areaId: null } : typeof area === 'string' && area.startsWith('area:') ? { areaId: area.slice(5) } : {};
+    return entityChoices(this.hass, { domains, selected: selected.filter(Boolean), ...filter });
+  }
+
+  _mowerLinkAllowed(value, previous, domains) {
+    if (!value || value === previous) return true;
+    if (this._mowerChoices(domains).some((choice) => choice.value === value && choice.selectable)) return true;
+    this.message = this._coreNotice('mowerLinkNotice', {}, { error: true });
+    this.render();
+    return false;
+  }
+
   _mowerImageSection(m) {
     const ic = m.image || {};
     const o = m.overlay;
-    let out = '<div class="sub">Mower icon on the map</div>';
-    out += `<label>Image entity <input list="fp-pic-ents" data-field="mower-img-entity" value="${esc(ic.entity || '')}" placeholder="${esc((o && o.entity) || 'same as the overlay')}"></label>`;
+    this._mowerImageScope = { id: (this._mowerImageScope?.id || 0) + 1, owner: this._mowerImageOwner(), poisoned: false };
+    let out = `<div class="sub">${this._coreCaption('mowerIcon')}</div>`;
+    out += `<label>Image entity <input list="fp-pic-ents" data-field="mower-img-entity" value="${esc(ic.entity || '')}" ${o && o.entity ? `placeholder="${esc(o.entity)}"` : this._coreAttribute('sameOverlay', {}, 'placeholder')}></label>`;
     if (this.colorPick) {
       out += `<section class="box"><p>Click the mower icon on the map overlay. Esc cancels.</p>
         <div class="row"><button data-act="img-pick-cancel">Cancel</button></div></section>`;
@@ -1554,23 +1793,59 @@ export class EditMode {
     out += `<div class="row"><button data-act="img-pick" class="${ic.color || this.colorPick ? '' : 'primary'}" ${this.colorPick || !(o && o.entity) ? 'disabled' : ''}>Pick mower colour</button> ${sw}</div>`;
     if (ic.color) {
       const tol = ic.tolerance ?? 40;
-      out += `<label><span class="lab">Colour tolerance<span class="val" data-val="img-tolerance">${tol}</span></span>
+      out += `<label><span class="lab">${this._coreCaption('colourTolerance')}<span class="val" data-val="img-tolerance">${tol}</span></span>
         <input type="range" data-field="mower-img-tolerance" min="0" max="255" step="1" value="${tol}"></label>`;
     }
+    out += `<label><span data-mower-image-text="minimumPixels">${esc(localize(this.hass, 'mower.minimumPixels'))}</span><input type="number" min="0" step="1" style="min-height:44px"
+      data-field="mower-img-min-pixels" data-mower-image-scope="${this._mowerImageScope.id}" value="${esc(ic.min_pixels ?? 4)}"
+      ${this._mowerImageAllowed() ? '' : 'disabled'}></label>
+      <p class="hint" data-mower-image-text="minimumPixelsHint">${esc(localize(this.hass, 'mower.minimumPixelsHint'))}</p>
+      <p data-mower-image-warning data-mower-image-text="minimumPixelsStale" ${this._mowerImageAllowed() ? 'hidden' : ''}>${esc(localize(this.hass, 'mower.minimumPixelsStale'))}</p>`;
     out += `<p class="hint">Align the map overlay with the plan first: the alignment maps image pixels to the plan, so no
       calibration points are needed. Then pick the colour of the mower icon on the map.</p>`;
     return out;
   }
 
-  _calibrationHtml(m, cal, err, fitName) {
-    let out = `<div class="sub">Calibration (${cal.length} point${cal.length === 1 ? '' : 's'}${cal.length ? ': ' + fitName : ''})</div>`;
+  _mowerImageOwner() {
+    const card = this.card, hass = this.hass, mower = this.mower();
+    return [this._generation, card._config.layout_key, card._view?.model?.root,
+      hass.connection, hass.auth, hass.connection?.options?.auth,
+      JSON.stringify([hass.user?.id, hass.user?.is_admin, hass.user?.is_active, card.isConnected,
+        card._editing, card._loading, hass.connection?.connected, mower.source, mower.image, mower.overlay])];
+  }
+
+  _mowerImageAllowed(element = null) {
+    const scope = this._mowerImageScope, current = this._mowerImageOwner();
+    const allowed = !!scope && !scope.poisoned && scope.owner.every((value, index) => value === current[index])
+      && this.hass.user?.is_admin === true && this.hass.user?.is_active !== false
+      && this.card.isConnected !== false && this.card._editing !== false && !this.card._loading
+      && this.hass.connection?.connected === true;
+    if (scope && !allowed) scope.poisoned = true;
+    return allowed && (!element || this.panel.contains(element) && element.dataset.mowerImageScope === String(scope.id));
+  }
+
+  _syncMowerImageFields() {
+    if (!this._mowerImageScope) return;
+    const allowed = this._mowerImageAllowed();
+    for (const field of this.panel.querySelectorAll('[data-mower-image-scope]')) field.disabled = !allowed;
+    const warning = this.panel.querySelector('[data-mower-image-warning]');
+    if (warning) warning.hidden = allowed;
+    for (const caption of this.panel.querySelectorAll('[data-mower-image-text]')) {
+      const value = localize(this.hass, `mower.${caption.dataset.mowerImageText}`);
+      if (caption.textContent !== value) caption.textContent = value;
+    }
+  }
+
+  _calibrationHtml(m, cal, err) {
+    const fitKey = ['', 'fitShift', 'fitScale', 'fitAffine'][Math.min(cal.length, 3)];
+    let out = `<div class="sub">${this._coreCaption('calibrationStart')}${this._coreCaption(cal.length === 1 ? 'pointsOne' : 'pointsMany', { count: cal.length })}${cal.length ? ': ' + this._coreCaption(fitKey) : ''})</div>`;
     if (this.calibrating) {
       out += `<section class="box"><p>Click on the plan where the mower is right now.</p>
         <div class="row"><button data-act="cal-cancel">Cancel</button></div></section>`;
     }
     out += '<ul class="plain">' + cal.map((c, i) => `<li>${i + 1}. (${c.src.map((v) => (m.source === 'xy' ? fmt(v) : v.toFixed(6))).join(', ')}) → (${fmt(c.plan[0])}, ${fmt(c.plan[1])})
       <button class="link" data-act="cal-del" data-i="${i}">Remove</button></li>`).join('') + '</ul>';
-    if (cal.length >= 3) out += `<p class="dim">Fit error ${fmt(err)} m</p>`;
+    if (cal.length >= 3) out += `<p class="dim">${this._coreCaption('fitError', { value: fmt(err) })}</p>`;
     out += `<div class="row"><button data-act="cal-add" class="${this.calibrating ? '' : 'primary'}" ${this.calibrating ? 'disabled' : ''}>Add point</button>
       ${this.card._trail && this.card._trail.length ? '<button data-act="trail-clear">Clear trail</button>' : ''}</div>
       <p class="hint">"Add point" takes the current reading, then you click where the mower really is. One point aligns
@@ -1581,11 +1856,11 @@ export class EditMode {
   _overlayHtml(m, picIds, datalist) {
     let out = '';
     const o = m.overlay;
-    out += `<div class="sub">Map overlay</div>
+    out += `<div class="sub">${this._coreCaption('mapOverlay')}</div>
       <label>Image or camera entity <input list="fp-pic-ents" data-field="ov-entity" value="${esc((o && o.entity) || '')}" placeholder="image.mower_map"></label>
       ${datalist('fp-pic-ents', picIds)}`;
     if (o && o.entity) {
-      const slider = (f, label, min, max, step, v) => `<label><span class="lab">${label}<span class="val" data-val="${f}">${fmt(v)}</span></span>
+      const slider = (f, label, min, max, step, v) => `<label><span class="lab">${['x', 'y'].includes(f) ? label : this._coreCaption(f)}<span class="val" data-val="${f}">${fmt(v)}</span></span>
         <input type="range" data-field="ov-${f}" min="${min}" max="${max}" step="${step}" value="${v}"></label>`;
       out += slider('x', 'x (m)', -100, 100, 0.05, o.x ?? 0)
         + slider('y', 'y (m)', -100, 100, 0.05, o.y ?? 0)
@@ -1593,7 +1868,7 @@ export class EditMode {
         + slider('width', 'Width (m)', 1, 200, 0.1, o.width ?? 20)
         + slider('opacity', 'Opacity', 0, 1, 0.05, o.opacity ?? 0.6)
         + (o.entity.startsWith('camera.') ? slider('refresh', 'Refresh every (s)', 1, 120, 1, o.refresh ?? 10) : '');
-      out += `<div class="row"><button data-act="ov-move" class="${this.overlayMove ? 'primary' : ''}">${this.overlayMove ? 'Drag the map on the plan…' : 'Move with mouse'}</button>
+      out += `<div class="row"><button data-act="ov-move" class="${this.overlayMove ? 'primary' : ''}">${this._coreCaption(this.overlayMove ? 'dragMap' : 'moveMap')}</button>
         <button data-act="ov-remove">Remove overlay</button></div>`;
     }
     return out;
@@ -1611,11 +1886,14 @@ export class EditMode {
 
   // the card switched views (chip or select)
   onViewChanged() {
+    if (this.tab === 'data') this._dashboardBackupEditor.onStates();
+    this._furnitureDrag.update();
     this.vwSel = null;
     this._closeMenu();
     if (this.tab === 'views') this.render();
     if (this.tab === 'idle') this._ambientIdleEditor.updatePreviews(this.panel);
     if (this.tab === 'house') this._houseSummaryEditor.updatePreviews(this.panel);
+    if (this.tab === 'furniture') this._furnitureEditor.updatePreviews(this.panel);
     if (this.tab === 'model') { this._wallSurfacePick(); this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel); this._syncStageClasses(); }
     if (this.tab === 'tracking') {
       this._trackingPlanPick(); // Cancel a capture as soon as its floor is no longer displayed.
@@ -1623,6 +1901,17 @@ export class EditMode {
       this._syncStageClasses();
       this._trackingEditor.updatePreviews(this.panel);
     }
+  }
+
+  _furnitureLibraryDetails() {
+    const catalogue = this.card.furnitureCatalogue?.();
+    if (catalogue?.status !== 'ready' || !Array.isArray(catalogue.catalogue?.packs)) return '';
+    return `<details data-furniture-licences><summary>${this._coreCaption('packLicences')}</summary>
+      <p>${this._coreCaption('packLicenceHelp')}</p>
+      ${catalogue.catalogue.packs.map((pack) => `<section class="box"><h4>${esc(pack.manifest?.name || pack.pack_id)}</h4>
+        <p>${this._coreCaption('packAuthor')}${pack.manifest?.author ? esc(pack.manifest.author) : this._coreCaption('notSupplied')}${this._coreCaption('declaredLicence')}${pack.manifest?.license?.id ? esc(pack.manifest.license.id) : this._coreCaption('notSupplied')}.</p>
+        <p>${this._coreCaption('licenceFile')}${pack.manifest?.license?.file ? esc(pack.manifest.license.file) : this._coreCaption('notSupplied')}.</p>
+        <button data-act="library-export" data-pack="${esc(pack.pack_id)}">${this._coreCaption('downloadPack')}</button></section>`).join('')}</details>`;
   }
 
   _layoutRules(id) {
@@ -1654,7 +1943,7 @@ export class EditMode {
 
   _viewsTab() {
     const card = this.card;
-    const screen = `<section class="box"><label>Screen name (this browser)<input data-field="screen-name" maxlength="128" style="min-height:44px" value="${esc(this._panelNameDraft ?? card._panelName ?? '')}" placeholder="${esc(card._config.automation_panel || 'e.g. kitchen-wall')}"></label>
+    const screen = `<section class="box"><label>Screen name (this browser)<input data-field="screen-name" maxlength="128" style="min-height:44px" value="${esc(this._panelNameDraft ?? card._panelName ?? '')}" ${card._config.automation_panel ? `placeholder="${esc(card._config.automation_panel)}"` : this._coreAttribute('screenExample', {}, 'placeholder')}></label>
       <button data-act="save-screen-name" style="min-height:44px">Save screen name</button><p class="hint">Give each wall panel/browser a different name, e.g. kitchen-wall. This is saved only on this browser; your layout remains shared. Leave blank to use the card's screen name.</p></section>`;
     const views = card._views || [];
     const v = this._vwView();
@@ -1663,29 +1952,30 @@ export class EditMode {
     const lv = (this.layout.views || {})[v.id] || {};
     const i = views.indexOf(v);
     const visible = views.filter((x) => !x.hidden).length;
-    const opts = views.map((x) => `<option value="${esc(x.id)}" ${x.id === v.id ? 'selected' : ''}>${esc(x.label)}${x.hidden ? ' (hidden)' : ''}</option>`).join('');
-    const hideLabel = v.source === 'added' ? 'Delete view' : v.hidden ? 'Unhide' : 'Hide';
+    const opts = views.map((x) => x.hidden ? this._coreOption('hiddenView', { name: x.label }, `value="${esc(x.id)}" ${x.id === v.id ? 'selected' : ''}`) : `<option value="${esc(x.id)}" ${x.id === v.id ? 'selected' : ''}>${esc(x.label)}</option>`).join('');
+    const hideLabel = v.source === 'added' ? 'deleteView' : v.hidden ? 'unhideView' : 'hideView';
     const top = card._mode === 'top';
     let out = screen + `<p class="hint">Each view is a button on the card. Choose what it shows: click a part of the model, or use the eyes below.</p>
       <label>View <select data-field="vw-view">${opts}</select></label>
+      <p class="hint">${this._coreCaption('viewId')}<code data-view-id>${esc(v.id)}</code>${this._coreCaption('viewIdHelp')}</p>
       <label>Label <input data-field="vw-label" value="${esc(v.label)}"></label>
       <div class="row"><button data-act="vw-add">Add view</button>
-        <button data-act="vw-hide" ${!v.hidden && v.source !== 'added' && visible <= 1 ? 'disabled' : ''} class="${v.source === 'added' ? 'danger' : ''}">${hideLabel}</button>
+        <button data-act="vw-hide" ${!v.hidden && v.source !== 'added' && visible <= 1 ? 'disabled' : ''} class="${v.source === 'added' ? 'danger' : ''}">${this._coreCaption(hideLabel)}</button>
         <button data-act="vw-up" ${i <= 0 ? 'disabled' : ''} title="Move left">Up</button>
         <button data-act="vw-down" ${i < 0 || i >= views.length - 1 ? 'disabled' : ''} title="Move right">Down</button></div>
-      <div class="sub">Linked HA floors</div>
+      <div class="sub">${this._coreCaption('linkedFloors')}</div>
       <div class="floor-links">${this.floors.map((f) => `<label class="check"><input type="checkbox" data-field="vw-floor" data-id="${esc(f.id)}" ${st.floors.includes(f.id) ? 'checked' : ''}> ${esc(f.name)}</label>`).join('')}</div>
+      ${st.floors.filter((id) => !this.floors.some((floor) => floor.id === id)).map((id) => `<label class="check note warn" data-missing-view-floor><input type="checkbox" checked data-field="vw-floor" data-id="${esc(id)}"> ${this._coreCaption('missingViewFloor', { id })}</label>`).join('')}
       <p class="hint">Devices on linked floors show in this view. None checked: the view belongs to no floor (e.g. a garden view).</p>
-      <div class="sub">Camera${top ? ' (top view)' : ''}</div>
-      <p class="hint">${top ? (v.camera_top ? 'Top view opens with a saved centre and zoom.' : 'Top view keeps the current position.')
-    : v.camera ? 'Opens with a saved camera.' : 'Opens framing the house.'}</p>
+      <div class="sub">${this._coreCaption(top ? 'cameraTop' : 'camera')}</div>
+      <p class="hint">${this._coreCaption(top ? (v.camera_top ? 'savedTop' : 'currentTop') : v.camera ? 'savedCamera' : 'framedCamera')}</p>
       <div class="row"><button data-act="vw-save-cam" ${v.hidden ? 'disabled' : ''}>Save current view as start</button>
         <button data-act="vw-reset-cam" ${(top ? lv.camera_top : lv.camera) ? '' : 'disabled'}>Reset camera</button></div>
       <div class="row">${this.pivoting ? '<button data-act="vw-pivot-cancel">Cancel</button>'
     : `<button data-act="vw-pivot" ${v.hidden || v.id !== card._viewId ? 'disabled' : ''} title="Click a point: the camera rotates and zooms around it">Set rotation centre</button>`}</div>
       ${this.pivoting ? '<p class="hint">Click where the rotation centre should be (Esc cancels).</p>' : ''}
-      <label>Zoom towards <select data-field="vw-zoom-to">${[['', `Card default (${zoomToFor(null, card._config)})`], ['center', 'Centre'], ['cursor', 'Cursor']]
-    .map(([val, label]) => `<option value="${val}" ${(lv.zoom_to || '') === val ? 'selected' : ''}>${label}</option>`).join('')}</select></label>`;
+      <label>Zoom towards <select data-field="vw-zoom-to">${[['', 'cardDefault'], ['center', 'centre'], ['cursor', 'cursor']]
+    .map(([val, key]) => this._coreOption(key, { value: zoomToFor(null, card._config) }, `value="${val}" ${(lv.zoom_to || '') === val ? 'selected' : ''}`)).join('')}</select></label>`;
     out += this._sectionHtml(v, lv);
     if (this.view.model && !this.view.isTagged()) {
       out += `<label class="check"><input type="checkbox" data-field="vw-cut" ${(v.cut ?? v.id !== 'all') ? 'checked' : ''}> Cut at storey height</label>`;
@@ -1700,32 +1990,32 @@ export class EditMode {
       for (let k = idx.nodes.length - 1; k >= 0; k--) full[k] = !eff || (!!eff[k] && idx.nodes[k].children.every((c) => full[c]));
       const yamlRules = ((card._config.views || {})[v.id] || {}).rules;
       const yamlSels = new Set((Array.isArray(yamlRules) ? yamlRules : []).map((r) => r && (r.show ?? r.hide)));
-      const eyeTitle = { default: 'Default (from the model); click: show', shown: 'Shown here; click: hide', hidden: 'Hidden here; click: back to default' };
+      const eyeTitle = { default: 'eyeDefault', shown: 'eyeShown', hidden: 'eyeHidden' };
       const eyeIcon = { default: 'mdi:eye-outline', shown: 'mdi:eye', hidden: 'mdi:eye-off' };
       const row = (r, cls = '') => {
         const on = eff ? r.nodes.some((n) => eff[n]) : true;
         const part = on && !r.nodes.every((n) => full[n]);
         const state = ruleState(rules, r.sel);
         const picked = this.vwPick && this.vwPick.sel === r.sel ? ' picked' : '';
-        const vis = part ? ['Partly shown', 'mdi:circle-half-full'] : on ? ['Visible', 'mdi:cube-outline'] : ['Hidden', 'mdi:cube-off-outline'];
+        const vis = part ? ['partlyTitle', 'mdi:circle-half-full'] : on ? ['visibleTitle', 'mdi:cube-outline'] : ['hiddenTitle', 'mdi:cube-off-outline'];
         const open = this.vwExpanded.has(r.sel);
         const toggle = r.children && !r.sel.startsWith('level:')
-          ? `<button class="link expand" data-act="vw-expand" data-sel="${esc(r.sel)}" title="${open ? 'Hide' : 'Show'} its ${r.children} object(s)">${open ? '\u25be' : '\u25b8'}</button>` : '';
+          ? `<button class="link expand" data-act="vw-expand" data-sel="${esc(r.sel)}" ${this._coreAttribute(open ? 'hideObjects' : 'showObjects', { count: r.children })}>${open ? '\u25be' : '\u25b8'}</button>` : '';
         return `<li data-sel="${esc(r.sel)}" class="${cls}${on ? '' : ' off'}${part ? ' part' : ''}${picked}" style="--d:${r.depth}" title="${esc(r.path || r.sel)}">
-          <span class="state" title="${vis[0]} in this view"><ha-icon icon="${vis[1]}"></ha-icon></span>
-          <span class="name">${esc(r.label)}${part ? ' <span class="dim">partly</span>' : ''}</span>${toggle}
-          ${yamlSels.has(r.sel) ? '<span class="yaml" title="The card YAML has a rule for this part; it wins over this setting">YAML</span>' : ''}
-          <button class="eye ${state}" data-act="vw-eye" data-sel="${esc(r.sel)}" title="${eyeTitle[state]}"><ha-icon icon="${eyeIcon[state]}"></ha-icon></button></li>`;
+          <span class="state" ${this._coreAttribute(vis[0])}><ha-icon icon="${vis[1]}"></ha-icon></span>
+          <span class="name">${esc(r.label)}${part ? ` <span class="dim">${this._coreCaption('partly')}</span>` : ''}</span>${toggle}
+          ${yamlSels.has(r.sel) ? `<span class="yaml" ${this._coreAttribute('overrideTitle')}>${this._coreCaption('cardOverride')}</span>` : ''}
+          <button class="eye ${state}" data-act="vw-eye" data-sel="${esc(r.sel)}" ${this._coreAttribute(eyeTitle[state])}><ha-icon icon="${eyeIcon[state]}"></ha-icon></button></li>`;
       };
       const shownRows = tree.tree.filter((r) => !r.parent || r.parent.startsWith('level:') || this.vwExpanded.has(r.parent));
-      out += '<div class="sub">Model</div>';
+      out += `<div class="sub">${this._coreCaption('model')}</div>`;
       out += tree.tree.length ? '<ul class="vtree">' + shownRows.map((r) => row(r, r.sel.startsWith('level:') ? 'lvl' : '')).join('') + '</ul>'
         : '<p class="dim">No tagged levels or rooms.</p>';
-      if (tree.layers.length) out += '<div class="sub">Layers</div><ul class="vtree">' + tree.layers.map((r) => row(r)).join('') + '</ul>';
-      if (tree.groups.length) out += '<div class="sub">Model groups</div><ul class="vtree">' + tree.groups.map((r) => row(r)).join('') + '</ul>';
+      if (tree.layers.length) out += `<div class="sub">${this._coreCaption('layers')}</div><ul class="vtree">` + tree.layers.map((r) => row(r)).join('') + '</ul>';
+      if (tree.groups.length) out += `<div class="sub">${this._coreCaption('modelGroups')}</div><ul class="vtree">` + tree.groups.map((r) => row(r)).join('') + '</ul>';
       const gone = unmatchedSelectors(idx, rules);
       if (gone.length) {
-        out += '<div class="sub">Not in this model</div><ul class="vtree">' + gone.map((s) => `<li class="gone" data-sel="${esc(s)}"><span class="name">${esc(s)}</span>
+        out += `<div class="sub">${this._coreCaption('notInModel')}</div><ul class="vtree">` + gone.map((s) => `<li class="gone" data-sel="${esc(s)}"><span class="name">${esc(s)}</span>
           <button class="link" data-act="vw-rm" data-sel="${esc(s)}">Remove</button></li>`).join('') + '</ul>';
       }
     } else if (!this.view.model) {
@@ -1744,12 +2034,12 @@ export class EditMode {
     const dir = sectionDir(plane.normal);
     const [lo, hi] = this._sectionRange(dir.normal, box);
     const pos = Math.min(hi, Math.max(lo, sectionPos(plane)));
-    const opts = SECTION_DIRS.map((d) => `<option value="${d.id}" ${d.id === dir.id ? 'selected' : ''}>${d.label}</option>`).join('');
-    const src = lv.section ? 'Saved for this view.' : v.modelSection ? 'From the model.' : 'Default: through the middle of the house.';
-    return `<div class="sub">Side section</div>
-      <p class="hint">The Section button (box cutter) cuts the house here and looks at the cut face. ${src}</p>
+    const opts = SECTION_DIRS.map((d) => this._coreOption(`keep${d.id[0].toUpperCase()}${d.id.slice(1)}`, {}, `value="${d.id}" ${d.id === dir.id ? 'selected' : ''}`)).join('');
+    const src = lv.section ? 'sectionSaved' : v.modelSection ? 'sectionModel' : 'sectionDefault';
+    return `<div class="sub">${this._coreCaption('section')}</div>
+      <p class="hint">${this._coreCaption('sectionHelp')}${this._coreCaption(src)}</p>
       <label>Direction <select data-field="vw-sec-dir">${opts}</select></label>
-      <label><span class="lab">Position (m ${dir.normal[0] ? 'east' : 'north'})<span class="val" data-val="vw-sec-pos">${fmt(pos)}</span></span>
+      <label><span class="lab">${this._coreCaption(dir.normal[0] ? 'sectionEast' : 'sectionNorth')}<span class="val" data-val="vw-sec-pos">${fmt(pos)}</span></span>
         <input type="range" data-field="vw-sec-pos" min="${lo}" max="${hi}" step="0.05" value="${pos}"></label>
       <div class="row"><button data-act="vw-sec-reset" ${lv.section ? '' : 'disabled'}>Reset section</button></div>`;
   }
@@ -1785,7 +2075,7 @@ export class EditMode {
     card.leaveSection();
     const point = this.view.pivotPoint(e.clientX, e.clientY, this.view.floorElevation(card._floor));
     if (!point || !v) {
-      this.message = { text: 'Click on the model or the floor', warn: true };
+      this.message = this._coreNotice('pickPivotNotice', {}, { warn: true });
       this.render();
       return;
     }
@@ -1795,11 +2085,11 @@ export class EditMode {
       const cur = this.view.getTopCamera();
       const camera_top = { center: [Math.round(point[0] * 100) / 100 + 0, Math.round(-point[2] * 100) / 100 + 0], zoom: cur.zoom };
       this.view.setTopCamera(camera_top);
-      this.message = { text: `Top view of "${v.label}" now centres here.` };
+      this.message = this._coreNotice('topCentreNotice', { name: v.label });
       card.saveViewPatch(v.id, { camera_top, camera_mode: card._mode });
     } else {
       const camera = this.view.setPivot(point);
-      this.message = { text: `Rotation centre of "${v.label}" set.` };
+      this.message = this._coreNotice('pivotNotice', { name: v.label });
       card.saveViewPatch(v.id, { camera, camera_mode: card._mode });
     }
     this.render();
@@ -1814,7 +2104,7 @@ export class EditMode {
     if (!p) {
       this.vwPick = null;
       this.view.highlightModelNode(null);
-      this.message = { text: 'Click on a part of the model', warn: true };
+      this.message = this._coreNotice('pickModelNotice', {}, { warn: true });
       this.render();
       return;
     }
@@ -1832,10 +2122,10 @@ export class EditMode {
     const m = document.createElement('div');
     m.className = 'fp-pickmenu';
     m.innerHTML = `<div class="title" title="${esc(this.vwPick.sel)}">${esc(title)}</div>
-      <button data-act="vw-hide-here">Hide in this view</button>
-      <button data-act="vw-show-here">Show in this view</button>
-      <button data-act="vw-hide-all">Hide in all views</button>
-      <button data-act="vw-reveal">Reveal in tree</button>`;
+      <button data-act="vw-hide-here">${this._coreCaption('hideHere')}</button>
+      <button data-act="vw-show-here">${this._coreCaption('showHere')}</button>
+      <button data-act="vw-hide-all">${this._coreCaption('hideAll')}</button>
+      <button data-act="vw-reveal">${this._coreCaption('revealTree')}</button>`;
     m.addEventListener('click', (ev) => this._onMenuClick(ev));
     stage.append(m);
     const r = stage.getBoundingClientRect();
@@ -1957,10 +2247,10 @@ export class EditMode {
       case 'vw-save-cam':
         card.leaveSection();
         if (card._mode === 'top') {
-          this.message = { text: `Saved the current top view as the start of "${v.label}".` };
+          this.message = this._coreNotice('savedTopNotice', { name: v.label });
           card.saveViewPatch(v.id, { camera_top: this.view.getTopCamera(), camera_mode: card._mode });
         } else {
-          this.message = { text: `Saved the current camera as the start of "${v.label}".` };
+          this.message = this._coreNotice('savedCameraNotice', { name: v.label });
           card.saveViewPatch(v.id, { camera: this.view.getCamera(), camera_mode: card._mode });
         }
         this.render();
@@ -2035,13 +2325,17 @@ export class EditMode {
     else if (f === 'vw-zoom-to') card.saveViewPatch(v.id, { zoom_to: el.value || undefined });
     else if (f === 'vw-floor') {
       const cur = card._stateFor(v).floors;
-      const floors = this.floors.map((x) => x.id).filter((id) => (id === el.dataset.id ? el.checked : cur.includes(id)));
+      const changed = el.dataset.id;
+      if (!cur.includes(changed) && !this.floors.some((floor) => floor.id === changed)) return;
+      const floors = cur.filter((id) => id !== changed);
+      if (el.checked) floors.push(changed);
       card.saveViewPatch(v.id, { floors });
     }
   }
 
   // ---------- model ----------
   onModelLoaded(changed = true) {
+    this._dashboardBackupEditor.onStates();
     if (!changed) return; // same model re-placed (alignment, opacity): the panel is already current
     if (this._freshModel) { // a newly uploaded model: everything in it counts as seen
       this._freshModel = false;
@@ -2082,6 +2376,51 @@ export class EditMode {
     if (rerender) this.render();
   }
 
+  _modelPositionOwner() {
+    const card = this.card, hass = this.hass, model = this.layout.model;
+    return [this._generation, card._config, card._config.layout_key, card._view?.model?.root,
+      hass.connection, hass.auth, hass.connection?.options?.auth,
+      JSON.stringify([hass.user?.id, hass.user?.is_admin, hass.user?.is_active,
+        card.isConnected, card._editing, card._loading, hass.connection?.connected, card._config.model,
+        model?.version, model?.name, model?.size, model?.uploaded])];
+  }
+
+  _modelPositionAllowed(element = null) {
+    const scope = this._modelPositionScope, owner = this._modelPositionOwner();
+    const allowed = !!scope && !scope.poisoned && scope.owner.every((value, index) => value === owner[index])
+      && this.hass.user?.is_admin === true && this.hass.user?.is_active !== false && !this.card._loading
+      && this.card.isConnected !== false && this.card._editing !== false && !this.card._config.model
+      && (!this.hass.connection || this.hass.connection.connected === true) && !!this.layout.model;
+    if (scope && !allowed) { scope.poisoned = true; this._modelPositionCommit = null; }
+    return allowed && (!element || this.panel.contains(element) && element.dataset.modelPositionScope === String(scope.id));
+  }
+
+  _syncModelPositionFields(syncCompanions = false) {
+    if (!this._modelPositionScope) return;
+    const allowed = this._modelPositionAllowed(), active = this.panel.getRootNode().activeElement;
+    for (const field of this.panel.querySelectorAll('[data-model-position-scope]')) {
+      field.disabled = !allowed;
+      if (allowed && field !== active) {
+        const value = (this.layout.model.position || [0, 0, 0])['xyz'.indexOf(field.dataset.field.slice(-1))];
+        if (field.value !== String(value)) field.value = value;
+      }
+    }
+    if (syncCompanions && allowed && !this._sliding) {
+      for (const [index, axis, min, max] of [[0, 'x', -50, 50], [1, 'y', -50, 50], [2, 'z', -5, 5]]) {
+        const range = this.panel.querySelector(`[data-field="md-${axis}"]`);
+        if (!range || range === active) continue;
+        const value = (this.layout.model.position || [0, 0, 0])[index];
+        range.min = String(Math.min(min, Number.isFinite(value) ? value : min));
+        range.max = String(Math.max(max, Number.isFinite(value) ? value : max));
+        range.value = String(value);
+        const caption = this.panel.querySelector(`[data-val="${axis}"]`);
+        if (caption) caption.textContent = fmt(value);
+      }
+    }
+    const warning = this.panel.querySelector('[data-model-position-warning]');
+    if (warning) warning.hidden = allowed;
+  }
+
   _modelApi() {
     return `/api/taylors3d/model/${encodeURIComponent(this.card._config.layout_key)}`;
   }
@@ -2089,7 +2428,7 @@ export class EditMode {
   async _uploadModel(file) {
     const generation = this._generation, key = this.card._config.layout_key;
     if (!/\.glb$/i.test(file.name)) {
-      this.message = { text: 'Choose a .glb file (binary glTF). Export one with tools/export-glb.js.', error: true };
+      this.message = this._coreNotice('glbNotice', {}, { error: true });
       this.render();
       return;
     }
@@ -2105,7 +2444,7 @@ export class EditMode {
       if (!r.ok) throw new Error(j.message || 'Upload failed (HTTP ' + r.status + ')');
       const cur = this.layout.model || { position: [0, 0, 0], rotation: 0, scale: 1, opacity: 1 };
       this._freshModel = true;
-      this.message = { text: `Uploaded ${j.name} (${(j.size / 1048576).toFixed(1)} MB).` };
+      this.message = this._coreNotice('uploadedNotice', { name: j.name, size: (j.size / 1048576).toFixed(1) });
       this.commit({ ...this.layout, model: { ...cur, version: j.version, name: j.name, size: j.size, uploaded: new Date().toISOString() } });
       this.card.resetHistory?.(); // replaced GLB bytes cannot be restored by a configuration snapshot
     } catch (err) {
@@ -2138,42 +2477,45 @@ export class EditMode {
     // Display settings work independently of the model upload/storage route.
     const rendering = this._modelRenderingEditor.render() + this._wallPresentationEditor.render() + this._floorPresentationEditor.render();
     if (c.model) {
-      return rendering + `<p class="note warn">This card shows <b>${esc(c.model)}</b> from its YAML (<code>model:</code>).
-        Remove <code>model</code> and the <code>model_*</code> options from the card YAML to upload and align the model here.</p>`
+      return rendering + `<p class="note warn">${this._coreCaption('urlModel')}<b>${esc(c.model)}</b>${this._coreCaption('urlModelHelp')}</p>`
         + this._modelBindingsHtml();
     }
     if (this.card._store.backend !== 'shared') {
-      return rendering + `<p class="note warn">Uploading a model needs the Taylor's 3D integration (Settings → Devices &amp; services → Add integration).
-        Without it, put a .glb in /config/www and set <code>model: /local/house.glb</code> in the card YAML.</p>`;
+      return rendering + `<p class="note warn">${this._coreCaption('integrationNeeded')}<code>/local/house.glb</code>${this._coreCaption('integrationUrl')}</p>`;
     }
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(c.layout_key)) {
-      return rendering + `<p class="note warn">layout_key "${esc(c.layout_key)}" can only contain letters, digits, - and _ for model uploads.</p>`;
+      return rendering + `<p class="note warn">${this._coreCaption('layoutKeyHelp', { id: c.layout_key })}</p>`;
     }
     const m = this.layout.model;
-    let out = rendering + `<p class="hint">A 3D model of the house (.glb) shown under the plan. Parts tagged as levels, rooms and zones
-      (<code>fp</code> tags, see <a href="https://github.com/gregtaylor1993/taylors-3d/blob/main/docs/model-builder-guide.md" target="_blank" rel="noopener">docs/model-builder-guide.md</a>)
-      are shown per floor and become rooms; a tagged model shows whole levels (lower floors stay, upper ones are hidden); only an untagged model is cut at the top of the selected storey. It is stored in Home Assistant and only shown to logged-in users.</p>
-      <div class="row"><label class="button ${this.uploading ? 'disabled' : 'primary'}">${this.uploading ? 'Uploading ' + esc(this.uploading) + '…' : (m ? 'Replace model' : 'Upload .glb')}
+    let out = rendering + `<p class="hint">${this._coreCaption('modelIntro')}<code>fp</code>${this._coreCaption('modelTagHelp')}<a href="https://github.com/gregtaylor1993/taylors-3d/blob/main/docs/model-builder-guide.md" target="_blank" rel="noopener">docs/model-builder-guide.md</a>${this._coreCaption('modelIntroEnd')}</p>
+      <div class="row"><label class="button ${this.uploading ? 'disabled' : 'primary'}">${this._coreCaption(this.uploading ? 'uploading' : m ? 'replaceModel' : 'uploadModel', { name: this.uploading })}
       <input type="file" accept=".glb,model/gltf-binary" data-field="model-file" hidden ${this.uploading ? 'disabled' : ''}></label></div>`;
     if (!m) return out;
 
+    this._modelPositionScope = { id: (this._modelPositionScope?.id || 0) + 1,
+      owner: this._modelPositionOwner(), poisoned: false };
+
     const floorInfo = this._modelBindingsHtml();
     const [x, y, z] = m.position || [0, 0, 0];
-    const slider = (f, label, min, max, step, v) => `<label><span class="lab">${label}<span class="val" data-val="${f}">${fmt(v)}</span></span>
-      <input type="range" data-field="md-${f}" min="${min}" max="${max}" step="${step}" value="${v}"></label>`;
+    const slider = (f, _label, min, max, step, v) => `<label><span class="lab">${this._coreCaption({ x: 'east', y: 'north', z: 'up' }[f] || f)}<span class="val" data-val="${f}">${fmt(v)}</span></span>
+      <input type="range" data-field="md-${f}" min="${Math.min(min, Number.isFinite(v) ? v : min)}" max="${Math.max(max, Number.isFinite(v) ? v : max)}" step="${step}" value="${v}"></label>`;
     out += `<section class="box"><h3>${esc(m.name || 'house.glb')}</h3>
       <p class="dim">${m.size ? (m.size / 1048576).toFixed(1) + ' MB' : ''}${m.uploaded ? ' · ' + esc(new Date(m.uploaded).toLocaleString()) : ''}</p>
       </section>${floorInfo}
       <div class="row"><button data-act="model-fit">Frame model</button></div>
-      <div class="sub">Alignment</div>`
+      <div class="sub">${this._coreCaption('alignment')}</div>`
       + slider('x', 'East (m)', -50, 50, 0.05, x)
       + slider('y', 'North (m)', -50, 50, 0.05, y)
       + slider('z', 'Up (m)', -5, 5, 0.05, z)
+      + `<details class="advanced" ${this._advancedOpen ? 'open' : ''}><summary>${this._coreCaption('exactPosition')}</summary>
+        <p class="hint">Metres in the original house coordinates. These values do not include separated-floor display spacing.</p>
+        ${[['x', 'east', x], ['y', 'north', y], ['z', 'up', z]].map(([axis, key, value]) => `<label>${this._coreCaption(key)}<input type="number" step="any" style="min-height:44px" data-field="md-position-${axis}" data-model-position-scope="${this._modelPositionScope.id}" value="${esc(value)}"></label>`).join('')}
+        <p class="note warn" data-model-position-warning hidden>${this._coreCaption('positionStale')}</p></details>`
       + slider('rotation', 'Rotation (°)', -180, 180, 0.5, m.rotation || 0)
-      + slider('opacity', 'Opacity', 0.1, 1, 0.05, m.opacity ?? 1)
+      + slider('opacity', 'Opacity', 0, 1, 0.05, m.opacity ?? 1)
       + `<label>Scale <input type="number" step="any" min="0.0001" data-field="md-scale" value="${m.scale || 1}"></label>
       <p class="hint">Scale 0.01 for a model made in centimetres, 0.001 for millimetres.</p>
-      <div class="row"><button data-act="model-delete" class="danger">${this.confirmModelDelete ? 'Really remove?' : 'Remove model'}</button></div>`;
+      <div class="row"><button data-act="model-delete" class="danger">${this._coreCaption(this.confirmModelDelete ? 'reallyRemove' : 'removeModel')}</button></div>`;
     return out;
   }
 
@@ -2186,20 +2528,20 @@ export class EditMode {
       this._snapPending = true;
       Promise.resolve().then(() => { this._snapPending = false; if (!(this.layout.model && this.layout.model.known)) this._snapshotKnown(); });
     }
-    const s = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+    const s = (n, w) => this._coreCaption(`${w}${n === 1 ? 'One' : 'Many'}`, { count: n });
     const objCount = manifest.objects.length;
-    let out = `<div class="sub">In the model</div><p class="hint">${s(manifest.levels.length, 'level')},
+    let out = `<div class="sub">${this._coreCaption('inModel')}</div><p class="hint">${s(manifest.levels.length, 'level')},
       ${s(manifest.rooms.filter((r) => r.kind === 'room').length, 'room')}, ${s(manifest.rooms.filter((r) => r.kind === 'zone').length, 'zone')},
-      ${s(objCount, 'object')}${objCount ? ' (object controls come in a later version)' : ''}. Click a part of the model to find it here.</p>`;
+      ${s(objCount, 'object')}${objCount ? this._coreCaption('modelObjectsLater') : ''}${this._coreCaption('modelFindHelp')}</p>`;
     const ms = this.view.mergeStats;
     if (ms && ms.before) {
       const a = ms.after, b = ms.before;
       out += ms.enabled && a.meshes !== b.meshes
-        ? `<p class="dim" data-info="merge-stats">Draw calls: ${b.calls} → ${a.calls} (meshes ${b.meshes} → ${a.meshes})</p>`
-        : `<p class="dim" data-info="merge-stats">Draw calls: ${b.calls} (${b.meshes} meshes${ms.enabled ? '' : ', merging off'})</p>`;
+        ? `<p class="dim" data-info="merge-stats">${this._coreCaption('mergeChanged', { before: b.calls, after: a.calls, beforeMeshes: b.meshes, afterMeshes: a.meshes })}</p>`
+        : `<p class="dim" data-info="merge-stats">${this._coreCaption(ms.enabled ? 'mergeCount' : 'mergeOff', { calls: b.calls, meshes: b.meshes })}</p>`;
     }
     if (manifest.errors.length || manifest.warnings.length) {
-      out += `<details class="report" ${this._reportOpen ? 'open' : ''}><summary>${manifest.errors.length} error(s), ${manifest.warnings.length} warning(s)</summary>
+      out += `<details class="report" ${this._reportOpen ? 'open' : ''}><summary>${this._coreCaption('reportCounts', { errors: manifest.errors.length, warnings: manifest.warnings.length })}</summary>
         <button class="link" data-act="md-copy-report">Copy to clipboard</button><ul class="plain">`
         + manifest.errors.map((e) => `<li class="bad">${esc(e)}</li>`).join('')
         + manifest.warnings.map((w) => `<li class="dim">${esc(w)}</li>`).join('') + '</ul></details>';
@@ -2207,83 +2549,88 @@ export class EditMode {
     const added = notice.levels.added.length + notice.rooms.added.length;
     const missing = notice.levels.missing.length + notice.rooms.missing.length;
     if (added || missing) {
-      out += `<p class="note warn">Since the last setup: ${added} new part(s) (assigned automatically below, marked auto)
-        and ${missing} part(s) no longer in the model. <button class="link" data-act="md-ack">OK</button></p>`;
+      out += `<p class="note warn">${this._coreCaption('modelChanges', { added, missing })} <button class="link" data-act="md-ack">OK</button></p>`;
     }
     const sel = (k, id) => (this.modelPick && this.modelPick.kind !== 'untagged' && this.modelPick.id === id && k.includes(this.modelPick.kind) ? 'sel' : '');
 
     if (manifest.levels.length) {
       // which HA floor a level belongs to (devices, linked floors, elevations); what each view shows is set in Views
       const opts = (v, a) => [
-        ['auto', a.auto ? `auto (${a.floor ? (this.floors.find((f) => f.id === a.floor) || {}).name || a.floor : 'no floor'})` : 'auto'],
+        ['auto', '', 'auto'],
         ...this.floors.map((f) => [`floor:${f.id}`, f.name]),
-        ...(a.stale && a.floor && !this.floors.some((f) => f.id === a.floor) ? [[`floor:${a.floor}`, `Missing floor: ${a.floor}`]] : []),
-        ['none', 'no floor'],
-      ].map(([val, label]) => `<option value="${esc(val)}" ${val === v ? 'selected' : ''}>${esc(label)}</option>`).join('');
-      out += '<div class="sub">Levels: belongs to HA floor</div><table class="floors">' + manifest.levels.map((l) => {
+        ...(a.stale && a.floor && !this.floors.some((f) => f.id === a.floor) ? [[`floor:${a.floor}`, '', 'missingFloor']] : []),
+        ['none', '', 'noFloorLower'],
+      ].map(([val, label, key]) => key === 'auto' ? this._coreAutoFloorOption(a, `value="auto" ${val === v ? 'selected' : ''}`)
+        : key ? this._coreOption(key, { id: a.floor }, `value="${esc(val)}" ${val === v ? 'selected' : ''}`) : `<option value="${esc(val)}" ${val === v ? 'selected' : ''}>${esc(label)}</option>`).join('');
+      out += `<div class="sub">${this._coreCaption('levelFloors')}</div><table class="floors">` + manifest.levels.map((l) => {
         const a = levels[l.id];
         const v = a.auto ? 'auto' : a.floor ? `floor:${a.floor}` : 'none';
         return `<tr data-pick="level:${esc(l.id)}" class="${sel(['level'], l.id)}"><td title="${esc(l.role)}">${esc(l.label)}</td>
           <td><select data-field="md-level" data-id="${esc(l.id)}">${opts(v, a)}</select></td>
-          <td class="dim">${a.stale ? '<span class="bad">floor missing — choose a replacement or no floor</span>' : a.auto ? 'auto' : ''}</td></tr>`;
+          <td class="dim">${a.stale ? `<span class="bad">${this._coreCaption('floorGone')}</span>` : a.auto ? this._coreCaption('auto') : ''}</td></tr>`;
       }).join('') + '</table>';
     }
 
     if (manifest.rooms.length) {
       const areas = Object.values(this.hass.areas || {}).sort((a, b) => a.name.localeCompare(b.name));
-      const opts = (v, auto) => `<option value="auto" ${auto ? 'selected' : ''}>auto${auto && v ? ' (' + esc((this.hass.areas[v] || {}).name || v) + ')' : ''}</option>`
-        + `<option value="" ${!auto && !v ? 'selected' : ''}>— no area —</option>`
-        + (v && !this.hass.areas?.[v] ? `<option value="${esc(v)}" ${!auto ? 'selected' : ''}>Missing area: ${esc(v)}</option>` : '')
+      const opts = (v, auto) => this._coreOption(auto && v ? 'autoName' : 'auto', { name: (this.hass.areas[v] || {}).name || v }, `value="auto" ${auto ? 'selected' : ''}`)
+        + this._coreOption('noAreaOption', {}, `value="" ${!auto && !v ? 'selected' : ''}`)
+        + (v && !this.hass.areas?.[v] ? this._coreOption('missingModelArea', { id: v }, `value="${esc(v)}" ${!auto ? 'selected' : ''}`) : '')
         + areas.map((a) => `<option value="${esc(a.area_id)}" ${!auto && a.area_id === v ? 'selected' : ''}>${esc(a.name)}</option>`).join('');
-      out += '<div class="sub">Rooms and zones</div><table class="floors">' + manifest.rooms.map((r) => {
+      out += `<div class="sub">${this._coreCaption('roomsZones')}</div><table class="floors">` + manifest.rooms.map((r) => {
         const a = rooms[r.id];
-        const note = a.stale ? '<span class="bad">area missing — choose a replacement or no area</span>' : !levels[r.level] || !levels[r.level].floor
-          ? 'level not on a floor' : r.outlineFallback ? 'no outline' : a.auto ? 'auto' : '';
+        const note = a.stale ? `<span class="bad">${this._coreCaption('areaGone')}</span>` : !levels[r.level] || !levels[r.level].floor
+          ? this._coreCaption('unfloored') : r.outlineFallback ? this._coreCaption('noOutline') : a.auto ? this._coreCaption('auto') : '';
         return `<tr data-pick="${r.kind}:${esc(r.id)}" class="${sel(['room', 'zone'], r.id)}"><td title="${esc(r.kind)} in ${esc(r.level || '?')}">${esc(r.label)}</td>
           <td><select data-field="md-room" data-id="${esc(r.id)}">${opts(a.area, a.auto)}</select></td><td class="dim">${note}</td></tr>`;
       }).join('') + '</table>'
-        + '<p class="hint">Rooms from the model replace rooms drawn for the same area. <a href="/config/areas/dashboard" target="_top">Create areas in Home Assistant</a>.</p>';
+        + `<p class="hint">${this._coreCaption('modelRoomsHelp')}<a href="/config/areas/dashboard" target="_top">${this._coreCaption('createAreas')}</a>.</p>`;
     }
 
     const gone = [...diff.levels.missing.map((id) => ['levels', id]), ...diff.rooms.missing.map((id) => ['rooms', id])];
     if (gone.length) {
-      out += '<div class="sub">No longer in the model</div><ul class="plain">' + gone.map(([k, id]) =>
+      out += `<div class="sub">${this._coreCaption('gone')}</div><ul class="plain">` + gone.map(([k, id]) =>
         `<li><code>${esc(id)}</code> <button class="link" data-act="md-forget" data-kind="${k}" data-id="${esc(id)}">Forget</button></li>`).join('') + '</ul>';
     }
     if (this.modelPick && this.modelPick.kind === 'untagged') {
-      out += `<p class="note warn">“${esc(this.modelPick.path)}” is not tagged in the model, so it can't be assigned.
-        Ask the model builder to tag it (docs/model-builder-guide.md).</p>`;
+      out += `<p class="note warn">${this._coreCaption('untaggedHelp', { path: this.modelPick.path })}</p>`;
     }
     return out;
   }
 
   _dataTab() {
+    return `${this._singleLayoutData()}<div data-dashboard-backup-slot>${this._dashboardBackupEditor.render()}</div>`;
+  }
+
+  _singleLayoutData() {
     const b = this.card._store.backend;
     const info = {
-      shared: ['ok', "Shared: stored by the Taylor's 3D integration, every user and device sees the same layout."],
-      user: ['warn', "Per user: stored in your HA user data. Other users will not see this layout. Install the Taylor's 3D integration to share it."],
-      browser: ['warn', "This browser only: other browsers and devices will not see this layout. Install the Taylor's 3D integration to share it."],
-    }[b] || ['warn', 'Storage not loaded yet.'];
+      shared: ['ok', 'storageShared'],
+      user: ['warn', 'storageUser'],
+      browser: ['warn', 'storageBrowser'],
+    }[b] || ['warn', 'storageLoading'];
     const modelConfigured = !!(this.card._config.model || this.layout.model?.version);
     const resolvedReady = !this.card._loading && (!modelConfigured || !!this.view.model);
     const issues = registryIssues(this.hass, this.layout, this.card._config, {
       ready: resolvedReady, rooms: this.card._roomList, floors: this.card._floors,
       anchors: resolvedReady && Array.isArray(this.card._roomList) ? this.card.trackingAnchors?.() : undefined,
     });
-    const report = `<div class="sub">Saved Home Assistant links</div>${issues.length
-      ? `<p class="note warn">${issues.length} saved link(s) need attention. The layout and these choices are kept so you can repair them.</p><ul class="plain">${issues.map((issue) => `<li>${esc(issue.message)}<br><code>${esc(issue.path)}</code></li>`).join('')}</ul><p class="hint">Use Rooms or Model for area/floor links, Objects for model devices, Cameras for coverage, Overlays for sensors, Tracking for presence/vehicle/vacuum sources and positions, and Views for named-view floors. Choose the replacement deliberately, or clear the link.</p>`
-      : '<p class="hint">No missing saved links were found in the available Home Assistant data.</p>'}`;
-    return `<div class="sub">Storage</div><p class="note ${info[0]}">${esc(info[1])}</p>${report}
-      <div class="sub">Export / import</div>
-      <p class="hint">The layout is plain JSON (rooms in metres, x east, y north). Importing replaces the current layout.</p>
-      <div class="row"><button data-act="export">Export JSON</button>
-      <label class="button">Import JSON<input type="file" accept="application/json,.json" data-field="import" hidden></label></div>`;
+    const report = `<div class="sub">${this._coreCaption('savedLinks')}</div>${issues.length
+      ? `<p class="note warn">${this._coreCaption('linksAttention', { count: issues.length })}</p><ul class="plain">${issues.map((issue) => `<li>${this._coreIssueCaption(issue, true)}<br><code>${esc(issue.path)}</code></li>`).join('')}</ul><p class="hint">${this._coreCaption('linksRepairHelp')}</p>`
+      : `<p class="hint">${this._coreCaption('linksValid')}</p>`}`;
+    return `<section data-single-layout-data><div class="sub">${this._coreCaption('storage')}</div><p class="note ${info[0]}">${this._coreCaption(info[1])}</p>${report}
+      <div class="sub" data-single-layout-text="title">${esc(localize(this.hass, 'edit.singleLayout.title'))}</div>
+      <p class="hint" data-single-layout-text="help">${esc(localize(this.hass, 'edit.singleLayout.help'))}</p>
+      <div class="row"><button data-act="export" data-single-layout-text="export">${esc(localize(this.hass, 'edit.singleLayout.export'))}</button>
+      <label class="button"><span data-single-layout-text="import">${esc(localize(this.hass, 'edit.singleLayout.import'))}</span><input type="file" accept="application/json,.json" data-field="import" hidden></label></div></section>`;
   }
 
   _onPanelClick(e) {
     const btn = e.target.closest('[data-act]');
     if (!btn || btn.disabled) return;
     const id = btn.dataset.id;
+    if (this._dashboardBackupEditor.onClick(btn.dataset.act, btn)) return;
+    if (this._roomActionsEditor.onClick(btn.dataset.act, btn)) return;
     if (this._overlayEditor.onClick(btn.dataset.act, btn)) return;
     if (this._cameraEditor.onClick(btn.dataset.act, btn)) return;
     if (this._trackingEditor.onClick(btn.dataset.act, btn)) return;
@@ -2293,6 +2640,9 @@ export class EditMode {
     if (this._scenePreviewEditor.onClick(btn.dataset.act, btn)) return;
     if (this._ambientIdleEditor.onClick(btn.dataset.act, btn)) return;
     if (this._houseSummaryEditor.onClick(btn.dataset.act, btn)) return;
+    if (this._furnitureEditor.onClick(btn.dataset.act, btn)) return;
+    if (btn.dataset.act === 'library-refresh') { this.card.furnitureRefresh?.(); return; }
+    if (btn.dataset.act === 'library-export') { this.card.furnitureExportPack?.(btn.dataset.pack); return; }
     if (this._wallPresentationEditor.onClick(btn.dataset.act, btn)) return;
     if (this._floorPresentationEditor.onClick(btn.dataset.act, btn)) return;
     const sel = this.room(this.selectedRoom);
@@ -2305,15 +2655,19 @@ export class EditMode {
           const value = this.panel.querySelector('[data-field="screen-name"]')?.value || '';
           this.card.setPanelName(value);
           this._panelNameDraft = null;
-          this.message = { text: value.trim() ? 'Screen name saved on this browser.' : 'This browser now uses the card screen name.' };
-        } catch (error) { this.message = { text: error.message, error: true }; }
+          this.message = this._coreNotice(value.trim() ? 'screenSavedNotice' : 'screenDefaultNotice');
+        } catch (error) { this.message = this._coreErrorNotice(error); }
         this.render(); return;
       }
       case 'history-undo': this._runHistory('undo'); return;
       case 'history-redo': this._runHistory('redo'); return;
       case 'tab':
+        if (this.tab === 'rooms' && id !== 'rooms') this._roomActionsEditor.reset();
         if (id === 'house' && this.card._config?.layout_style !== 'house') return;
         if (id !== this.tab) {
+          this.card._endGesture?.();
+          this._furnitureDrag.cancel();
+          if (this.tab === 'furniture') this._furnitureEditor.reset();
           if (this.tab === 'cameras') this._cameraEditor.cancel();
           if (this.tab === 'tracking') this._trackingEditor.cancel();
           if (this.tab === 'environment') this._weatherEditor.reset();
@@ -2322,6 +2676,7 @@ export class EditMode {
           if (this.tab === 'scenes') this._scenePreviewEditor.reset();
           if (this.tab === 'idle') this._ambientIdleEditor.reset();
           if (this.tab === 'house') this._houseSummaryEditor.reset();
+          if (this.tab === 'data') this._dashboardBackupEditor.setActive(false);
           this.picking = null;
           this.pivoting = false;
           this.modelPick = null;
@@ -2330,7 +2685,7 @@ export class EditMode {
           this.view.highlightModelNode(null);
         }
         if (id !== 'objects') this.objSel = null;
-        if (id === 'scenes' || id === 'idle' || id === 'house') {
+        if (id === 'data' || id === 'scenes' || id === 'idle' || id === 'house' || id === 'furniture') {
           // Source/display settings must not leave a room tool or pinned
           // marker gesture active behind the form.
           this.drawing = this.calibrating = null;
@@ -2339,7 +2694,7 @@ export class EditMode {
           this.card._applyMarkerSelection(null);
         }
         this.tab = id;
-        if (id === 'idle' || id === 'house') {
+        if (id === 'data' || id === 'idle' || id === 'house' || id === 'furniture') {
           // A late release from an old room/device drag must not pin anything
           // after entering this settings-only tab. Remove old edit handles too.
           this._endWindowDrag(false);
@@ -2351,6 +2706,8 @@ export class EditMode {
         this.card._syncTracking?.();
         this.card._syncWeather?.();
         this.card._syncSecurity?.();
+        this.card._syncFurniture?.();
+        if (id === 'furniture') this.card.furnitureRefresh?.();
         this._syncStageClasses();
         break;
       case 'obj-expand':
@@ -2359,7 +2716,7 @@ export class EditMode {
         this.render();
         return;
       case 'obj-test':
-        if (!this.card.testObject(id)) this.message = { text: 'Nothing to toggle: bind a working entity first.', warn: true };
+        if (!this.card.testObject(id)) this.message = this._coreNotice('nothingToggleNotice', {}, { warn: true });
         this.render();
         return;
       case 'md-ack': this._snapshotKnown(); return;
@@ -2369,8 +2726,8 @@ export class EditMode {
         const { errors, warnings } = mb.manifest;
         const text = [...errors.map((t) => `Error: ${t}`), ...warnings.map((t) => `Warning: ${t}`)].join('\n');
         copyText(text).then((ok) => {
-          this.message = ok ? { text: `Copied ${errors.length + warnings.length} line(s).` }
-            : { text: 'Copy is blocked here; select the lines and copy them by hand.', error: true };
+          this.message = ok ? this._coreNotice('copiedNotice', { count: errors.length + warnings.length })
+            : this._coreNotice('clipboardNotice', {}, { error: true });
           this.render();
         });
         return;
@@ -2441,7 +2798,7 @@ export class EditMode {
       case 'cal-add': {
         const m = this.mower();
         const r = readSource(this.hass.states[m.entity], m);
-        if (!r) { this.message = { text: 'No position reading from the mower entity right now.', error: true }; break; }
+        if (!r) { this.message = this._coreNotice('mowerReadingNotice', {}, { error: true }); break; }
         this.calibrating = { src: r.raw };
         this.overlayMove = false;
         if (this.card._floor !== this.card._mowerFloor()) this.card._setFloor(this.card._mowerFloor());
@@ -2474,6 +2831,8 @@ export class EditMode {
   _onPanelChange(e) {
     const el = e.target;
     const f = el.dataset.field;
+    if (this._dashboardBackupEditor.onChange(f, el)) return;
+    if (this._roomActionsEditor.onChange(f, el)) return;
     if (this._overlayEditor.onChange(f, el)) return;
     if (this._cameraEditor.onChange(f, el)) return;
     if (this._trackingEditor.onChange(f, el)) return;
@@ -2483,6 +2842,7 @@ export class EditMode {
     if (this._scenePreviewEditor.onChange(f, el)) return;
     if (this._ambientIdleEditor.onChange(f, el)) return;
     if (this._houseSummaryEditor.onChange(f, el)) return;
+    if (this._furnitureEditor.onChange(f, el)) return;
     if (this._wallPresentationEditor.onChange(f, el)) return;
     if (this._floorPresentationEditor.onChange(f, el)) return;
     const sel = this.room(this.selectedRoom);
@@ -2490,6 +2850,7 @@ export class EditMode {
     else if (f === 'room-area' && sel) this.commit(E.upsertRoom(this.layout, { ...sel, area_id: el.value }));
     else if (f === 'room-outdoor' && sel) this.commit(E.upsertRoom(this.layout, { ...sel, outdoor: el.checked }));
     else if (f === 'room-floor' && sel) {
+      if (!this.floors.some((floor) => floor.id === el.value)) return;
       const area = this.hass.areas && this.hass.areas[sel.area_id];
       const next = { ...sel, floor_id: el.value };
       if (area && area.floor_id === el.value) delete next.floor_id;
@@ -2516,38 +2877,62 @@ export class EditMode {
         return;
       }
       this.commit(E.setPin(this.layout, this.selectedMarker, { x: pos.x, y: pos.y, z: v, floor_id: pos.floorId, on_model: this._onModel(this.selectedMarker) }, { grid: !pin }));
+    } else if (f === 'obj-picker-area') {
+      if (el.value !== 'all' && el.value !== 'unassigned' && !(el.value.startsWith('area:') && this.hass.areas?.[el.value.slice(5)])) return;
+      this._objectPickerArea = el.value; this.render();
     } else if (f === 'obj-entity') {
       const v = el.value.trim();
+      const object = this.card.modelBindings()?.manifest?.objects?.find((entry) => entry.id === el.dataset.id);
+      if (!object) return;
+      const previous = this.layout.objects?.[object.id]?.entity ?? this.card._bindings?.get(object.id)?.requestedEntity ?? this.card._bindings?.get(object.id)?.entity;
+      if (!this._objectLinkAllowed(v, previous, object.type)) return;
       this.commit(E.setObject(this.layout, el.dataset.id, { entity: v === '' ? undefined : v.toLowerCase() === 'none' ? null : v }));
       this.render();
     } else if (f === 'obj-hidden') {
       this.commit(E.setObject(this.layout, el.dataset.id, { hidden: el.checked }));
       this.render();
     } else if (f === 'grp-entity') {
-      this.commit(E.setGroup(this.layout, el.dataset.id, { entity: el.value.trim() }));
+      const value = el.value.trim();
+      if (!this.card.modelBindings()?.manifest?.objects?.some((object) => object.group === el.dataset.id)) return;
+      if (!this._objectLinkAllowed(value, this.layout.groups?.[el.dataset.id]?.entity, 'group')) return;
+      this.commit(E.setGroup(this.layout, el.dataset.id, { entity: value }));
+      this.render();
+    } else if (f === 'mower-picker-area') {
+      if (el.value !== 'all' && el.value !== 'unassigned' && !(el.value.startsWith('area:') && this.hass.areas?.[el.value.slice(5)])) return;
+      this._mowerPickerArea = el.value;
       this.render();
     } else if (f === 'mower-entity') {
-      this.setMower({ entity: el.value.trim() });
+      const value = el.value.trim();
+      if (!this._mowerLinkAllowed(value, this.mower().entity, ['device_tracker', 'sensor', 'lawn_mower', 'vacuum'])) return;
+      this.setMower({ entity: value });
     } else if (f === 'mower-source') {
       // readings of the other kind cannot be mixed into the same calibration
       this.setMower({ source: el.value, calibration: [] });
     } else if (f === 'mower-img-entity') {
       const ic = { ...(this.mower().image || {}) };
       const v = el.value.trim();
+      if (!this._mowerLinkAllowed(v, ic.entity, ['image', 'camera'])) return;
       if (v) ic.entity = v;
       else delete ic.entity;
       this.setMower({ image: ic });
     } else if (f === 'mower-img-tolerance') {
       this.setMower({ image: { ...(this.mower().image || {}), tolerance: Math.max(0, Math.min(255, Number(el.value) || 0)) } });
+    } else if (f === 'mower-img-min-pixels') {
+      if (!el.value.trim() || !this._mowerImageAllowed(el)) { this._syncMowerImageFields(); return; }
+      const value = Number(el.value);
+      if (!Number.isSafeInteger(value) || value < 0) return;
+      this.setMower({ image: { ...(this.mower().image || {}), min_pixels: value } });
     } else if (f === 'mower-xattr' || f === 'mower-yattr') {
       this.setMower({ [f === 'mower-xattr' ? 'x_attr' : 'y_attr']: el.value.trim() || (f === 'mower-xattr' ? 'x' : 'y') });
     } else if (f === 'mower-floor') {
+      if (!this.floors.some((floor) => floor.id === el.value)) return;
       this.card._setFloor(el.value);
       this.setMower({ floor_id: el.value });
     } else if (f === 'mower-trail') {
       this.setMower({ trail: el.checked });
     } else if (f === 'ov-entity') {
       const v = el.value.trim();
+      if (!this._mowerLinkAllowed(v, this.mower().overlay?.entity, ['image', 'camera'])) return;
       if (!v) this.setMower({ overlay: null });
       else {
         // first time: centre the map on the current view
@@ -2581,6 +2966,14 @@ export class EditMode {
       if (el.value === 'auto') delete rooms[el.dataset.id];
       else rooms[el.dataset.id] = { area: el.value || null };
       this.setModelProps({ rooms });
+    } else if (['md-position-x', 'md-position-y', 'md-position-z'].includes(f)) {
+      if (!el.value.trim() || !this._modelPositionAllowed(el)) { this._syncModelPositionFields(); return; }
+      const value = Number(el.value);
+      if (!Number.isFinite(value) || !this.layout.model) return;
+      const position = [...(this.layout.model.position || [0, 0, 0])];
+      position['xyz'.indexOf(f.slice(-1))] = value;
+      this.setModelProps({ position }, false);
+      this._modelPositionCommit = { scope: this._modelPositionScope, element: el, layout: this.layout, hass: this.hass };
     } else if (f === 'md-scale') {
       const v = Number(el.value);
       if (Number.isFinite(v) && v > 0) this.setModelProps({ scale: v }, false);
@@ -2598,6 +2991,8 @@ export class EditMode {
     const el = e.target;
     if (el.type === 'range') this._beginSlider();
     const f = el.dataset.field;
+    if (this._dashboardBackupEditor.onInput(f, el)) return;
+    if (this._roomActionsEditor.onInput(f, el)) return;
     if (this._trackingEditor.onInput(f, el)) return;
     if (this._weatherEditor.onInput(f, el)) return;
     if (this._securityEditor.onInput(f, el)) return;
@@ -2605,6 +3000,7 @@ export class EditMode {
     if (this._scenePreviewEditor.onInput(f, el)) return;
     if (this._ambientIdleEditor.onInput(f, el)) return;
     if (this._houseSummaryEditor.onInput(f, el)) return;
+    if (this._furnitureEditor.onInput(f, el)) return;
     if (this._wallPresentationEditor.onInput(f, el)) return;
     if (this._floorPresentationEditor.onInput(f, el)) return;
     if (f?.startsWith('cov-') && this._cameraEditor.onChange(f, el)) return;
@@ -2654,17 +3050,16 @@ export class EditMode {
       const l = E.mergeImport(fit.layout, raw, this.layout);
       this.selectedRoom = null;
       this.selectedMarker = null;
-      const parts = [`Imported ${l.rooms.length} rooms, ${Object.keys(l.pins).length} pins.`];
+      const parts = [{ key: 'importedNotice', params: { rooms: l.rooms.length, pins: Object.keys(l.pins).length } }];
       const mapped = Object.entries(floorMap);
       if (mapped.length) {
         const name = (id) => (this.hass.floors[id] && this.hass.floors[id].name) || id;
-        parts.push('Floors mapped to Home Assistant: ' + mapped.map(([a, b]) => `${a} → ${name(b)}`).join(', ') + '.');
+        parts.push({ literal: ' ' }, { key: 'mappedFloorsNotice', params: { mapping: mapped.map(([a, b]) => `${a} → ${name(b)}`).join(', ') } });
       }
       if (unknownAreas.length) {
-        parts.push(`${unknownAreas.length} area id${unknownAreas.length === 1 ? ' is' : 's are'} not in Home Assistant (${unknownAreas.join(', ')}): ` +
-          'pick the area for those rooms under Rooms → "Rooms without an HA area", or create the areas.');
+        parts.push({ literal: ' ' }, { key: unknownAreas.length === 1 ? 'unknownAreaNotice' : 'unknownAreasNotice', params: { count: unknownAreas.length, ids: unknownAreas.join(', ') } });
       }
-      this.message = { text: parts.join(' '), error: false, warn: unknownAreas.length > 0 };
+      this.message = this._coreNoticeParts(parts, { error: false, warn: unknownAreas.length > 0 });
       this.commit(l);
     } catch (err) {
       this.message = { text: err.message, error: true };

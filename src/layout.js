@@ -30,12 +30,13 @@ export function mergeFloors(hass, layout) {
   return out.sort((a, b) => a.elevation - b.elevation);
 }
 
-// room.floor_id, else the area's floor, else the lowest floor.
+// Exact saved room/area floor, else the initial lowest floor. Missing explicit
+// IDs remain unresolved; callers must not place them on a substitute floor.
 export function roomFloorId(room, hass, floors) {
-  if (room.floor_id && floors.some((f) => f.id === room.floor_id)) return room.floor_id;
+  if (room.floor_id) return room.floor_id;
   const area = hass.areas && hass.areas[room.area_id];
-  if (area && area.floor_id && floors.some((f) => f.id === area.floor_id)) return area.floor_id;
-  return floors[0].id;
+  if (area && area.floor_id) return area.floor_id;
+  return floors[0]?.id ?? null;
 }
 
 function distToSegment(p, a, b) {
@@ -103,7 +104,8 @@ export function markerPositions(markers, layout, hass, floors, attachAt = null) 
   for (const m of markers) {
     const pin = layout.pins && layout.pins[m.id];
     if (pin) {
-      const floorId = floorById.has(pin.floor_id) ? pin.floor_id : floors[0].id;
+      const floorId = pin.floor_id || floors[0]?.id;
+      if (!floorById.has(floorId)) continue;
       const at = pin.attach && attachAt ? attachAt(pin, floorId) : null;
       out.set(m.id, at ? { x: at.x, y: at.y, z: at.z, floorId, auto: false, attached: pin.attach }
         : { x: pin.x, y: pin.y, z: pin.z ?? 1.2, floorId, auto: false });
@@ -116,6 +118,7 @@ export function markerPositions(markers, layout, hass, floors, attachAt = null) 
   }
   for (const [room, ms] of perRoom) {
     const floorId = roomFloorId(room, hass, floors);
+    if (!floorById.has(floorId)) continue;
     const placed = autoPlace(room, ms, floorById.get(floorId).height);
     for (const [id, p] of placed) out.set(id, { ...p, floorId });
   }

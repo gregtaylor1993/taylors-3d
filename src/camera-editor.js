@@ -1,6 +1,9 @@
 // Camera coverage settings are layout data. Editing never opens a stream or calls HA services.
 import { COVERAGE_LIMITS, normaliseCoverage, coverageSector } from './camera-coverage.js';
 import { entityChoices, entityMetadata } from './entity-metadata.js';
+import { localize } from './localization.js';
+import { renderAdvancedCaptions, updateAdvancedCaptions } from './translations/advanced-settings.js';
+import { editorDetailText, editorDetailSpan, updateEditorDetails, editorOwnedMessage } from './editor-runtime-details.js';
 
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const plain = (value) => !!value && typeof value === 'object' && [Object.prototype, null].includes(Object.getPrototypeOf(value));
@@ -12,10 +15,22 @@ const option = (value, label, selected) => `<option value="${esc(value)}" ${valu
 const numeric = (value) => typeof value === 'string' ? value.trim() === '' ? undefined : Number(value) : value;
 const anchorId = (anchor) => anchor?.id ?? anchor?.entity;
 const selectedOnly = 'This saved camera or anchor is missing. Its settings are read-only; restore the camera mapping or clear this binding.';
+const syncOptions = (control, rows, selected) => {
+  if (!control) return;
+  const existing = new Map(), keep = new Set();
+  for (const entry of control.options) { const queue = existing.get(entry.value) || []; queue.push(entry); existing.set(entry.value, queue); }
+  rows.forEach(([value, label], index) => {
+    const entry = existing.get(value)?.shift() || control.ownerDocument.createElement('option');
+    entry.value = value; if (entry.textContent !== label) entry.textContent = label;
+    if (control.options[index] !== entry) control.insertBefore(entry, control.options[index] || null); keep.add(entry);
+  });
+  for (const entry of [...control.options]) if (!keep.has(entry)) entry.remove();
+  if (control.value !== (selected || '')) control.value = selected || '';
+};
 
 /** New choices omit hidden/config/diagnostic entities; saved choices are retained by the editor. */
-export function cameraEntities(hass = {}) {
-  return entityChoices(hass, { domains: ['camera'] }).map((entry) => [entry.value, entry.label]);
+export function cameraEntities(hass = {}, filters = {}) {
+  return entityChoices(hass, { ...filters, domains: ['camera'] }).map((entry) => [entry.value, entry.label]);
 }
 
 function validPosition(position) {
@@ -35,9 +50,15 @@ function validPosition(position) {
  * Delegation matches OverlayEditor: onChange/onClick and updatePreviews(container).
  */
 export class CameraEditor {
+  _captions(html) { return renderAdvancedCaptions(html, 'camera', (key, fallback) => localize(this.hass, key, {}, fallback)); }
+  _translateCaptions(root) { updateAdvancedCaptions(root, 'camera', (key, fallback) => localize(this.hass, key, {}, fallback)); updateEditorDetails(root, this.hass); }
+  _text(id, params) { return editorDetailText(this.hass, `camera.${id}`, params); }
+  _help(id) { return editorDetailSpan(this.hass, `camera.${id}`); }
+  _message(value) { return editorOwnedMessage(this.hass, value); }
   constructor(card, onRender = () => {}) {
     this.card = card; this.onRender = onRender; this.cameraId = null; this.anchorId = null;
     this.draft = null; this.sourceKey = null; this.dirty = false; this.message = null; this.previewing = false; this.disposed = false; this.previewHtml = new WeakMap();
+    this.areaFilter = 'all'; this.segmentEdited = false;
   }
 
   get hass() { return this.card._hass || {}; }
@@ -53,9 +74,11 @@ export class CameraEditor {
     const selected = Object.keys(this.config).map((key) => this.anchors.find((anchor) => anchorId(anchor) === key)?.entity || (key.startsWith('camera.') ? key : null)).filter(Boolean);
     // A live registry/anchor removal must not silently select a different camera under a draft.
     if (this.cameraId?.startsWith('camera.')) selected.push(this.cameraId);
-    const choices = new Map(entityChoices(this.hass, { domains: ['camera'], selected }).map((entry) => [entry.value, { value: entry.value, entity: entry.value, label: entry.label, inherited: entry.filtered }]));
+    const filters = this.areaFilter === 'unassigned' ? { areaId: null } : this.areaFilter.startsWith('area:') ? { areaId: this.areaFilter.slice(5) } : {};
+    const choices = new Map(entityChoices(this.hass, { ...filters, domains: ['camera'], selected }).map((entry) => [entry.value, { value: entry.value, entity: entry.value, label: entry.label, inherited: entry.filtered }]));
     for (const anchor of this.anchors) {
       const metadata = entityMetadata(this.hass, anchor.entity);
+      if (!choices.has(anchor.entity) && !selected.includes(anchor.entity)) continue;
       if ((!metadata.hasState || metadata.hidden || metadata.disabled || metadata.category) && !own(this.config, anchor.entity) && !own(this.config, anchorId(anchor))) continue;
       if (!choices.has(anchor.entity)) choices.set(anchor.entity, { value: anchor.entity, entity: anchor.entity, label: this._cameraLabel(anchor.entity), inherited: true });
     }
@@ -64,18 +87,23 @@ export class CameraEditor {
       const entity = anchor?.entity || (key.startsWith('camera.') ? key : null);
       if (entity) {
         if (!choices.has(entity)) choices.set(entity, { value: entity, entity, label: this._cameraLabel(entity), inherited: true });
-      } else choices.set(`saved:${key}`, { value: `saved:${key}`, entity: null, label: `Saved anchor: ${key}`, key, inherited: true });
+      } else choices.set(`saved:${key}`, { value: `saved:${key}`, entity: null, label: this._text('savedAnchor', { id: key }), key, inherited: true });
     }
     return [...choices.values()].sort((a, b) => a.label.localeCompare(b.label));
   }
   get selected() { return this.choices.find((entry) => entry.value === this.cameraId) || this.choices[0]; }
+  _areaChoices() {
+    const choices = [['all', 'All areas'], ['unassigned', 'Unassigned'], ...Object.entries(this.hass.areas || {}).map(([id, area]) => [`area:${id}`, area?.name || id])];
+    if (!choices.some(([value]) => value === this.areaFilter)) choices.push([this.areaFilter, this._text('missingFilter', { id: this.areaFilter.slice(5) })]);
+    return choices;
+  }
   get cameraAnchors() { return this.anchors.filter((entry) => entry.entity === this.selected?.entity); }
   get anchor() { return this.anchorId === null ? this.cameraAnchors[0] : this.cameraAnchors.find((entry) => anchorId(entry) === this.anchorId); }
 
   _cameraLabel(entity) { return entityMetadata(this.hass, entity).name; }
   _floorLabel(anchor) {
     const id = anchor?.position?.floorId ?? anchor?.position?.floor_id;
-    return this.card._floors?.find((floor) => floor.id === id)?.name || id || 'Floor missing';
+    return this.card._floors?.find((floor) => floor.id === id)?.name || id || this._text('floorMissing');
   }
   _key() {
     if (!this.selected) return null;
@@ -99,6 +127,7 @@ export class CameraEditor {
     this.authoredHeading = this.draft.heading === undefined && finite(this.anchor?.heading);
     if (this.authoredHeading) this.draft.heading = normalBearing(this.anchor.heading);
     this.baseValue = JSON.stringify(source.value); this.dirty = false; this.loadedCameraId = this.cameraId;
+    this.segmentEdited = false;
   }
   _ensure() {
     if (!this.draft || this.cameraId !== this.selected?.value || !this.dirty && JSON.stringify(this._source().value) !== this.baseValue) this._load();
@@ -106,6 +135,7 @@ export class CameraEditor {
   _raw() {
     const raw = { ...this.draft };
     for (const field of ['heading', 'fov', 'range', 'opacity', 'segments']) {
+      if (field === 'segments' && !this.segmentEdited && raw.segments !== undefined && typeof raw.segments !== 'number') continue;
       const value = numeric(raw[field]);
       if (value === undefined) delete raw[field]; else raw[field] = value;
     }
@@ -136,11 +166,13 @@ export class CameraEditor {
     return { settings, diagnostics, valid: diagnostics.length === 0 };
   }
   _serialized(settings) {
-    return { enabled: settings.enabled,
+    const serialized = { ...this.draft, enabled: settings.enabled,
       ...(settings.heading !== null ? { heading: settings.heading } : {}),
       ...(settings.fov !== null ? { fov: settings.fov } : {}), ...(settings.range !== null ? { range: settings.range } : {}),
       color: settings.color, opacity: settings.opacity, show_rays: settings.show_rays,
       ...(this.draft.segments !== undefined ? { segments: settings.segments } : {}), ...(this.draft.unit !== undefined ? { unit: 'm' } : {}) };
+    for (const field of ['heading', 'fov', 'range']) if (settings[field] === null) delete serialized[field];
+    return serialized;
   }
   _mapWith(value) {
     const key = this._key();
@@ -173,30 +205,34 @@ export class CameraEditor {
     const known = finite(settings.heading), radians = known ? settings.heading * Math.PI / 180 : 0;
     const sector = coverageSector({ x: 0, y: 0, floorId: 'direction-diagram' }, settings);
     const points = sector ? sector.polygon.map(([x, y]) => `${(x / settings.range * 39).toFixed(2)},${(-y / settings.range * 39).toFixed(2)}`).join(' ') : '';
-    const direction = known ? `${Number(settings.heading.toFixed(1))}° clockwise from north` : 'Heading not chosen';
-    return `<svg viewBox="-60 -60 120 120" role="img" aria-label="${esc(`Approximate direction diagram: ${direction}`)}" class="cov-compass">
+    const direction = known ? this._text('heading', { heading: Number(settings.heading.toFixed(1)) }) : this._text('noHeading');
+    return `<svg viewBox="-60 -60 120 120" role="img" aria-label="${esc(this._text('diagram', { direction }))}" class="cov-compass">
       <circle r="40" fill="none" stroke="currentColor" opacity=".25" stroke-dasharray="3 3"/>
       ${points ? `<polygon points="${points}" fill="${esc(settings.color)}" fill-opacity=".28" stroke="${esc(settings.color)}"/>` : ''}
       ${known ? `<line x1="0" y1="0" x2="${(Math.sin(radians) * 38).toFixed(2)}" y2="${(-Math.cos(radians) * 38).toFixed(2)}" stroke="currentColor" stroke-width="2"/><circle cx="${(Math.sin(radians) * 38).toFixed(2)}" cy="${(-Math.cos(radians) * 38).toFixed(2)}" r="3" fill="currentColor"/>` : ''}
       <circle r="3" fill="currentColor"/><g fill="currentColor" font-size="10" text-anchor="middle"><text y="-47">N</text><text x="51" y="3">E</text><text y="55">S</text><text x="-51" y="3">W</text></g>
-    </svg><p class="hint">${esc(direction)}${sector ? ` · ${esc(settings.fov)}° wide · ${esc(settings.range)} m` : ''}</p>`;
+    </svg><p class="hint">${esc(direction)}${sector ? esc(this._text('width', { fov: settings.fov, range: settings.range })) : ''}</p>`;
   }
   _previewHtml() {
     const { settings, diagnostics } = this._evaluation(), anchor = this.anchor, state = this.hass.states?.[this.selected?.entity];
     const unavailable = state && ['unavailable', 'unknown'].includes(state.state);
     const issues = [...diagnostics];
-    if (this.cameraAnchors.length > 1) issues.push({ message: 'This camera has multiple anchors. Settings apply only to the selected object or marker.' });
-    if (anchor && (anchor.shown === false || anchor.visible === false)) issues.push({ message: 'This camera anchor is currently hidden. Coverage appears only when its object and floor are visible.' });
-    if (unavailable) issues.push({ message: `Camera stream is ${state.state}. The shaded area is still a configured approximation, not proof of working detection.` });
-    return `${this._direction(settings)}${anchor ? `<p class="hint">Anchor: ${esc(anchor.label || anchorId(anchor))} · ${esc(this._floorLabel(anchor))}${validPosition(anchor.position) ? ` · ${esc(anchor.position.x)} m east, ${esc(anchor.position.y)} m north` : ''}</p>` : '<p class="hint">No mapped camera position is available.</p>'}
-      ${this.authoredHeading ? '<p class="hint">Direction came from this anchor’s explicit plan heading. You can change it here.</p>' : ''}
-      <div aria-live="polite">${this.message ? `<p class="cov-note" role="status">${esc(this.message)}</p>` : ''}
-      ${issues.length ? `<ul class="cov-warnings">${issues.map((issue) => `<li>${esc(issue.message)}</li>`).join('')}</ul>` : ''}</div>`;
+    if (this.cameraAnchors.length > 1) issues.push({ code: null, message: 'This camera has multiple anchors. Settings apply only to the selected object or marker.' });
+    if (anchor && (anchor.shown === false || anchor.visible === false)) issues.push({ code: null, message: 'This camera anchor is currently hidden. Coverage appears only when its object and floor are visible.' });
+    return `${this._direction(settings)}${anchor ? `<p class="hint">${esc(this._text('anchor'))} ${esc(anchor.label || anchorId(anchor))} · ${esc(this._floorLabel(anchor))}${validPosition(anchor.position) ? esc(this._text('coords', { x: anchor.position.x, y: anchor.position.y })) : ''}</p>` : `<p class="hint">${esc(this._text('noPosition'))}</p>`}
+      ${this.authoredHeading ? `<p class="hint">${esc(this._text('authoredHeading'))}</p>` : ''}
+      <div aria-live="polite">${this.message ? `<p class="cov-note" role="status">${esc(this._message(this.message))}</p>` : ''}
+      ${issues.length || unavailable ? `<ul class="cov-warnings">${issues.map((issue) => `<li>${esc(this._message(issue))}</li>`).join('')}${unavailable ? `<li>${esc(this._text('stream', { state: state.state }))}</li>` : ''}</ul>` : ''}</div>`;
   }
 
   /** Refresh only status/diagram HTML. HA updates never replace editable controls or focus. */
   updatePreviews(container) {
-    if (this.disposed || !this.draft || !container) return;
+    if (this.disposed || !container) return;
+    const captionRoot = container.matches?.('[data-cov-editor]') ? container : container.querySelector('[data-cov-editor]');
+    this._translateCaptions(captionRoot);
+    if (!this.draft) return;
+    syncOptions(container.querySelector('[data-field="cov-area-filter"]'), this._areaChoices(), this.areaFilter);
+    syncOptions(container.querySelector('[data-field="cov-camera"]'), this.choices.map((entry) => [entry.value, entry.label]), this.cameraId);
     const target = container.querySelector('[data-cov-preview]');
     const html = this._previewHtml();
     if (target && this.previewHtml.get(target) !== html) {
@@ -207,6 +243,7 @@ export class CameraEditor {
     if (!root) return;
     const readOnly = this._readOnly();
     for (const control of root.querySelectorAll('[data-cov-setting], [data-act="cov-save"]')) control.disabled = readOnly;
+    this._translateCaptions(root);
   }
   afterUpdate(container) { this.updatePreviews(container); }
 
@@ -217,7 +254,8 @@ export class CameraEditor {
     const cameras = this.choices, anchors = this.cameraAnchors, heading = numeric(raw.heading);
     const color = typeof raw.color === 'string' ? raw.color : '#03a9f4';
     const saved = own(this.config, this.sourceKey);
-    return `<section data-cov-editor data-taylors3d-ui class="cov-editor">
+    const areaChoices = this._areaChoices();
+    return this._captions(`<section data-cov-editor data-taylors3d-ui class="cov-editor">
       <style>
         .cov-editor {color:var(--primary-text-color);font-size:13px}.cov-editor h3 {font-size:15px;margin:0 0 10px}.cov-editor label {display:block;margin:12px 0}
         .cov-editor input:not([type=checkbox]),.cov-editor select {box-sizing:border-box;width:100%;min-height:44px;margin-top:5px;padding:9px;border:1px solid var(--divider-color);border-radius:8px;background:var(--card-background-color);color:var(--primary-text-color);font:inherit}
@@ -230,37 +268,44 @@ export class CameraEditor {
         .cov-editor :disabled {opacity:.55;cursor:default}.cov-editor .cov-note,.cov-editor .cov-warnings {line-height:1.5}.cov-editor .cov-warnings {padding-left:20px}
         .cov-editor input:focus-visible,.cov-editor select:focus-visible,.cov-editor button:focus-visible {outline:2px solid var(--primary-color);outline-offset:2px}
       </style>
-      <h3>Camera coverage</h3><p class="hint">Choose a real mapped camera and enter its direction, horizontal field of view and approximate range. This is a visual estimate; walls, lenses and detection settings may change what it actually sees.</p>
+      <h3>Camera coverage</h3><p class="hint">${this._help('intro')}</p>
+      <label>Filter cameras by current area<select data-field="cov-area-filter">${areaChoices.map(([value, label]) => option(value, label, this.areaFilter)).join('')}</select></label><p class="hint">${this._help('filterHelp')}</p>
       ${cameras.length ? `<label>Camera<select data-field="cov-camera">${cameras.map((entry) => option(entry.value, entry.label, selected?.value)).join('')}</select></label>
-      ${anchors.length || this.anchorId ? `<label>Camera object or marker<select data-field="cov-anchor">${this.anchorId && !this.anchor ? option(this.anchorId, `Missing anchor: ${this.anchorId}`, this.anchorId) : ''}${anchors.map((anchor) => option(anchorId(anchor), `${anchor.label || anchorId(anchor)} · ${this._floorLabel(anchor)}`, this.anchorId)).join('')}</select></label>` : '<p class="hint">Map this camera using a device position or a bound model object first.</p>'}
+      ${anchors.length || this.anchorId ? `<label>Camera object or marker<select data-field="cov-anchor">${this.anchorId && !this.anchor ? option(this.anchorId, this._text('missingAnchorLabel', { id: this.anchorId }), this.anchorId) : ''}${anchors.map((anchor) => option(anchorId(anchor), `${anchor.label || anchorId(anchor)} · ${this._floorLabel(anchor)}`, this.anchorId)).join('')}</select></label>` : `<p class="hint">${this._help('mapFirst')}</p>`}
       <div class="cov-box"><label class="check"><input type="checkbox" data-field="cov-enabled" data-cov-setting ${raw.enabled === true ? 'checked' : ''} ${readOnly ? 'disabled' : ''}> Show approximate coverage</label>
         <label>Heading, degrees clockwise from north<input type="number" inputmode="decimal" step="any" data-field="cov-heading" data-cov-setting value="${esc(raw.heading ?? '')}" placeholder="Choose a direction" ${readOnly ? 'disabled' : ''}></label>
         <label>Heading slider — move to choose<input type="range" min="0" max="359" step="1" data-field="cov-heading-slider" data-cov-setting value="${finite(heading) ? normalBearing(heading) : 0}" aria-label="Heading clockwise from north" ${readOnly ? 'disabled' : ''}></label>
-        <p class="hint">0° north · 90° east · 180° south · 270° west. A blank heading is not configured.</p>
+        <p class="hint">${this._help('compassHelp')}</p>
         <div class="cov-grid"><label>Horizontal field of view, degrees<input type="number" inputmode="decimal" min="${COVERAGE_LIMITS.minFov}" max="${COVERAGE_LIMITS.maxFov}" step="any" data-field="cov-fov" data-cov-setting value="${esc(raw.fov ?? '')}" placeholder="Camera specification" ${readOnly ? 'disabled' : ''}></label>
         <label>Approximate range, metres<input type="number" inputmode="decimal" min="${COVERAGE_LIMITS.minRange}" max="${COVERAGE_LIMITS.maxRange}" step="any" data-field="cov-range" data-cov-setting value="${esc(raw.range ?? '')}" placeholder="Enter reach" ${readOnly ? 'disabled' : ''}></label></div>
         <div class="cov-grid"><label>Coverage colour<input data-field="cov-color" data-cov-setting value="${esc(color)}" placeholder="#03a9f4" maxlength="7" ${readOnly ? 'disabled' : ''}></label>
         <label>Opacity, 0 to 1<input type="number" inputmode="decimal" min="0" max="1" step="0.01" data-field="cov-opacity" data-cov-setting value="${esc(raw.opacity ?? .14)}" ${readOnly ? 'disabled' : ''}></label></div>
         <label class="check"><input type="checkbox" data-field="cov-show-rays" data-cov-setting ${raw.show_rays !== false ? 'checked' : ''} ${readOnly ? 'disabled' : ''}> Show camera boundary rays</label>
+        <label>Coverage curve detail, 2 to 64 segments<input type="number" min="2" max="${COVERAGE_LIMITS.maxSegments}" step="1" data-field="cov-segments" data-cov-setting value="${esc(raw.segments ?? 24)}" ${readOnly ? 'disabled' : ''}></label><p class="hint">${this._help('segmentHelp')}</p>
       </div><div data-cov-preview>${this._previewHtml()}</div>
-      <p class="hint">Changes stay in this draft until Save. Selecting another camera or leaving this tab discards the draft.</p>
-      <div class="cov-actions"><button class="primary" data-act="cov-save" ${readOnly ? 'disabled' : ''}>Save</button><button data-act="cov-cancel">Cancel</button><button data-act="cov-clear" ${saved ? '' : 'disabled'}>Clear saved coverage</button></div>` : '<p class="cov-note">No cameras are available. Add a camera integration in Home Assistant, then map its position in this layout.</p>'}
-    </section>`;
+      <p class="hint">${this._help('draftHelp')}</p>
+      <div class="cov-actions"><button class="primary" data-act="cov-save" ${readOnly ? 'disabled' : ''}>Save</button><button data-act="cov-cancel">Cancel</button><button data-act="cov-clear" ${saved ? '' : 'disabled'}>Clear saved coverage</button></div>` : `<p class="cov-note">${this._help('noCameras')}</p>`}
+    </section>`);
   }
 
   onChange(field, element) {
     if (this.disposed || !field?.startsWith('cov-')) return false;
     this._ensure();
+    if (field === 'cov-area-filter') {
+      if (['all', 'unassigned'].includes(element.value) || element.value.startsWith('area:') && Object.hasOwn(this.hass.areas || {}, element.value.slice(5))) this.areaFilter = element.value;
+      this.onRender(); return true;
+    }
     if (field === 'cov-camera' || field === 'cov-anchor') {
       this._clearPreview();
       if (field === 'cov-camera') { this.cameraId = element.value; this.anchorId = null; } else this.anchorId = element.value;
       this.draft = null; this.message = null; this._load(); this.onRender(); return true;
     }
-    const fields = { 'cov-enabled': 'enabled', 'cov-heading': 'heading', 'cov-heading-slider': 'heading', 'cov-fov': 'fov', 'cov-range': 'range', 'cov-color': 'color', 'cov-opacity': 'opacity', 'cov-show-rays': 'show_rays' };
+    const fields = { 'cov-enabled': 'enabled', 'cov-heading': 'heading', 'cov-heading-slider': 'heading', 'cov-fov': 'fov', 'cov-range': 'range', 'cov-color': 'color', 'cov-opacity': 'opacity', 'cov-show-rays': 'show_rays', 'cov-segments': 'segments' };
     const name = fields[field];
     if (!name) return false;
     if (this._readOnly() || !this.selected) return true;
     this.draft[name] = element.type === 'checkbox' ? element.checked : element.value;
+    if (name === 'segments') this.segmentEdited = true;
     if (name === 'heading') this.authoredHeading = false;
     this.dirty = true; this.message = null;
     const container = element.closest('[data-cov-editor]');
@@ -303,6 +348,7 @@ export class CameraEditor {
   }
   reset() {
     this._clearPreview(); this.cameraId = null; this.anchorId = null; this.loadedCameraId = null; this.draft = null; this.message = null; this.dirty = false;
+    this.areaFilter = 'all'; this.segmentEdited = false;
   }
   dispose() { this._clearPreview(); this.disposed = true; this.draft = null; }
 }

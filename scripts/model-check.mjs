@@ -618,6 +618,14 @@ try {
   check('changing the entity rebinds the object', bd.e === other && bd.layer === other && bd.cfg && bd.cfg.entity === other, JSON.stringify(bd));
   await setEntity('light.does_not_exist');
   await sleep(300);
+  bd = await bound();
+  check('a newly typed unknown entity is rejected without changing the existing object binding',
+    bd.e === other && bd.layer === other && bd.cfg?.entity === other, JSON.stringify(bd));
+  // A missing link can still arrive from a previously saved/imported layout.
+  // Seed that supported source separately from the deliberately rejected picker input.
+  await page.evaluate(`(() => { const c = ${card}; c._edit.commit({ ...c._layout,
+    objects: { ...c._layout.objects, lamp_hall: { ...c._layout.objects?.lamp_hall, entity: 'light.does_not_exist' } } }); })()`);
+  await sleep(300);
   ri = await rowInfo();
   check('an unknown entity shows "entity not found"', !!ri && ri.badge === 'entity not found', JSON.stringify(ri));
   const hasTest = () => page.evaluate(`!!${sr}.querySelector('li.obj[data-obj=lamp_hall] button[data-act=obj-test]')`);
@@ -872,8 +880,21 @@ try {
   await sleep(200);
   await setGrp('switch.demo_typo');
   g = await grp();
+  check('a newly typed unknown group controller is rejected without replacing the saved controller',
+    !!g && g.val === 'switch.demo_facade' && g.saved === '{"entity":"switch.demo_facade"}' && (await look()).facadeLit === 0, JSON.stringify(g));
+  // Preserve the older missing-link recovery scenario using an actual saved layout.
+  await page.evaluate(`(() => { const c = ${card}; c._edit.commit({ ...c._layout,
+    groups: { ...c._layout.groups, facade: { ...c._layout.groups?.facade, entity: 'switch.demo_typo' } } }); })()`);
+  await sleep(250);
+  // The saved-layout injection above is fixture setup, rather than a native
+  // input change. Mount the actual editor after its coalesced binding update.
+  await page.evaluate(`${card}._edit.render()`);
+  g = await grp();
   check('Groups: a controller HA does not know shows "entity not found" and is ignored by the chain',
-    !!g && g.warn && g.eff === 'null' && (await look()).facadeLit === 1, JSON.stringify(g));
+    !!g && g.warn && g.val === 'switch.demo_typo' && g.saved === '{"entity":"switch.demo_typo"}'
+      && JSON.parse(g.eff).entity === null && JSON.parse(g.eff).requestedEntity === 'switch.demo_typo'
+      && JSON.parse(g.eff).missing === true && JSON.parse(g.eff).filtered === false
+      && JSON.parse(g.eff).filterReason === 'missing' && (await look()).facadeLit === 1, JSON.stringify(g));
   await setGrp('none');
   g = await grp();
   check('Groups: "none" removes the controller (nothing stored)', !!g && g.saved === 'null' && g.val === '' && !g.warn, JSON.stringify(g));

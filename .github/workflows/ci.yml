@@ -59,6 +59,42 @@ jobs:
         run: node scripts/house-check.mjs
         env:
           CHROME_PATH: /usr/bin/google-chrome
+      - name: Headless browser checks (licensed furniture, textured assets and native draft placement)
+        run: node scripts/furniture-check.mjs
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+      - name: Headless browser checks (exact missing links and current Home Assistant metadata)
+        run: node scripts/metadata-check.mjs
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+      - name: Headless browser checks (translated controls, native focus and unchanged action intent)
+        run: node scripts/localization-check.mjs
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+      - name: Headless browser checks (whole dashboard backup and deliberate new copies)
+        run: node scripts/dashboard-backup-check.mjs
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+      - name: Headless browser checks (advanced visual settings and exact imported options)
+        run: node scripts/visual-options-check.mjs
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+      - name: Headless browser checks (room shortcuts and supported inline device controls)
+        run: node scripts/room-actions-check.mjs
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+      - name: Headless browser checks (visual GPS calibration and exact source ownership)
+        run: node scripts/gps-calibration-check.mjs
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+      - name: Headless browser checks (area-filtered sources and retained native drafts)
+        run: node scripts/entity-area-filter-check.mjs
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+      - name: Headless browser checks (object controls and calibration in four languages)
+        run: node scripts/runtime-localization-check.mjs
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -69,15 +105,31 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.13"
+            ha: "2026.2.3"
+            harness: "0.13.316"
+          - python: "3.14"
+            ha: "2026.10.0b0"
+            harness: "0.13.368"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python }}
       - name: Install Home Assistant test harness
         run: |
-          pip install -r requirements-test.txt
+          pip install -r requirements-test.txt "homeassistant==${{ matrix.ha }}" "pytest-homeassistant-custom-component==${{ matrix.harness }}"
           # the frontend package matching the installed core, needed by the frontend dependency
           FRONTEND=$(python -c "import json, importlib.resources as r; print(json.load(open(r.files('homeassistant') / 'components/frontend/manifest.json'))['requirements'][0])")
           pip install "$FRONTEND"
+          pip freeze > home-assistant-test-environment.txt
       - run: python -m pytest -q
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: home-assistant-environment-python-${{ matrix.python }}
+          path: home-assistant-test-environment.txt

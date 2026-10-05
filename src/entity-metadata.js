@@ -1,6 +1,11 @@
 // Shared HA metadata; no requests, subscriptions, device actions or layout mutations.
 // HA's display registry uses hidden/display_precision; full entries use hidden_by/options.
 // Primary contracts: home-assistant/frontend src/types.ts and data/entity/entity_registry.ts.
+import { enumerateSavedHaReferences, SAVED_HA_REFERENCE_LIMITS } from './saved-ha-reference-paths.js';
+import { inspectSourceValue } from './imported-source-controls.js';
+import { localeInfo, localize } from './localization.js';
+import savedReferenceMessages from './translations/saved-ha-references.js';
+import entityChoiceCaptions from './translations/entity-choice-captions.js';
 const record = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const entry = (values, id) => Object.prototype.hasOwnProperty.call(record(values), id) ? values[id] : null;
 const list = (value) => Array.isArray(value) ? value : [];
@@ -9,6 +14,98 @@ const ids = (value) => [...new Set(list(value).filter((id) => typeof id === 'str
 const precision = (value) => Number.isInteger(value) && value >= 0 && value <= 100 ? value : null;
 const present = (value) => value !== null && value !== undefined && value !== false;
 const numericDomains = new Set(['number', 'input_number', 'counter']);
+const LEGACY_UNREADABLE = Symbol('unreadable saved reference data');
+const ownData = (value, key) => {
+  try {
+    const descriptor = value && typeof value === 'object' ? Object.getOwnPropertyDescriptor(value, key) : null;
+    return { own: !!descriptor, safe: !descriptor || Object.hasOwn(descriptor, 'value'), value: descriptor?.value };
+  } catch { return { own: true, safe: false, value: undefined }; }
+};
+const sourceRecord = (value) => {
+  try { return !!value && typeof value === 'object' && !Array.isArray(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value)); }
+  catch { return false; }
+};
+const referenceText = (hass, word, params = {}) => {
+  const key = `savedHaReferences.${word}`, language = localeInfo(hass).resolved;
+  return localize(hass, key, params, savedReferenceMessages[language]?.[key] || savedReferenceMessages.en[key]);
+};
+
+/** Current evidence for a saved entity. Registration can exist before states load;
+ * a current state-only entity does not need the registry to finish loading. */
+function savedEntityIssue(hass, id) {
+  const connection = ownData(hass, 'connection'), connected = ownData(connection.safe ? connection.value : null, 'connected');
+  const base = { name: id };
+  if (!connection.safe || !connected.safe || connected.value === false) return { ...base, code: 'reference_pending', word: 'pending' };
+  const states = ownData(hass, 'states'), entities = ownData(hass, 'entities');
+  const state = ownData(states.safe ? states.value : null, id), registered = ownData(entities.safe ? entities.value : null, id);
+  const usableState = state.safe && sourceRecord(state.value), usableRegistry = registered.safe && sourceRecord(registered.value);
+  if (!states.safe || !entities.safe || !state.safe || !registered.safe) return { ...base, code: 'reference_pending', word: 'pending' };
+  if (!usableState) {
+    if (usableRegistry) return { ...base, code: 'entity_no_state', word: 'noState' };
+    return sourceRecord(states.value) && sourceRecord(entities.value)
+      ? { ...base, code: 'missing_entity', word: 'missing' } : { ...base, code: 'reference_pending', word: 'pending' };
+  }
+  // A report never executes source accessors/serialization hooks while resolving
+  // captions. Feed the existing metadata reader only inspected exact data rows.
+  if (!inspectSourceValue(state.value).readable || usableRegistry && !inspectSourceValue(registered.value).readable)
+    return { ...base, code: 'entity_malformed', word: 'malformed' };
+  const deviceId = ownData(registered.value, 'device_id').value, devices = ownData(hass, 'devices');
+  const device = typeof deviceId === 'string' ? ownData(devices.safe ? devices.value : null, deviceId) : { safe: true };
+  if (!device.safe || device.value !== undefined && !inspectSourceValue(device.value).readable)
+    return { ...base, code: 'reference_pending', word: 'pending' };
+  const metadata = entityMetadata({ states: { [id]: state.value }, entities: usableRegistry ? { [id]: registered.value } : {},
+    devices: deviceId && device.value ? { [deviceId]: device.value } : {} }, id);
+  const named = { name: metadata.name };
+  if (metadata.disabled) return { ...named, code: 'entity_disabled', word: 'disabled' };
+  if (metadata.hidden || metadata.category) return { ...named, code: 'entity_hidden', word: 'hidden' };
+  if (state.value.attributes?.restored === true) return { ...named, code: 'entity_restored', word: 'restored' };
+  if (state.value.entity_id !== undefined && state.value.entity_id !== id || typeof state.value.state !== 'string')
+    return { ...named, code: 'entity_malformed', word: 'malformed' };
+  if (state.value.state === 'unavailable') return { ...named, code: 'entity_unavailable', word: 'unavailable' };
+  // Unknown is a legitimate scene last-activation timestamp, not a device reading.
+  if (state.value.state === 'unknown' && metadata.domain !== 'scene') return { ...named, code: 'entity_unknown', word: 'unknown' };
+  return null;
+}
+
+// Project only the legacy fields used by the existing checker. Imported raw
+// objects remain untouched; accessors/hooks and excessive trees are disclosed.
+function legacyReferenceProjection(source, name) {
+  const value = Object.create(null), diagnostics = [], ancestors = new Set(), limits = SAVED_HA_REFERENCE_LIMITS;
+  let nodes = 0, limited = false;
+  const warn = (code, segments) => {
+    if (diagnostics.length < limits.diagnostics) diagnostics.push({ code, path: segments.join('.') });
+    else limited = true;
+  };
+  const copy = (input, segments, depth) => {
+    if (++nodes > limits.nodes || depth > limits.depth) { limited = true; return LEGACY_UNREADABLE; }
+    if (input === null || input === undefined || typeof input === 'string' || typeof input === 'boolean' || typeof input === 'number' && Number.isFinite(input)) return input;
+    if (!Array.isArray(input) && !sourceRecord(input) || ancestors.has(input)) { warn('reference_unsafe', segments); return LEGACY_UNREADABLE; }
+    ancestors.add(input);
+    const out = Array.isArray(input) ? [] : Object.create(null);
+    const keys = Array.isArray(input) ? Array.from({ length: Math.min(input.length, limits.nodes) }, (_, index) => String(index)) : Reflect.ownKeys(input);
+    if (Array.isArray(input) && input.length > limits.nodes) limited = true;
+    for (const key of keys) {
+      if (nodes >= limits.nodes) { limited = true; break; }
+      if (typeof key !== 'string') { warn('reference_unsafe', segments); continue; }
+      const current = ownData(input, key), path = [...segments, key];
+      if (!current.safe) { warn('reference_accessor', path); out[key] = LEGACY_UNREADABLE; }
+      else if (current.own) out[key] = copy(current.value, path, depth + 1);
+    }
+    ancestors.delete(input); return out;
+  };
+  const fields = ['rooms', 'floors', 'pins', 'hidden', 'model', 'model_floors', 'objects', 'groups', 'mower', 'views',
+    'room_overlays', 'alert_bindings', 'camera_coverage', 'presence_bindings', 'vehicle_bindings', 'vacuum_bindings'];
+  for (const key of fields) {
+    const current = ownData(source, key);
+    if (!current.safe) { warn('reference_accessor', [name, key]); value[key] = LEGACY_UNREADABLE; }
+    else if (current.own) value[key] = copy(current.value, [name, key], 0);
+  }
+  if (limited) {
+    const row = { code: 'reference_limit', path: `${name}.saved` };
+    if (diagnostics.length >= limits.diagnostics) diagnostics[limits.diagnostics - 1] = row; else diagnostics.push(row);
+  }
+  return { value, diagnostics };
+}
 
 function effectiveDeviceArea(device, devices) {
   const seen = new Set();
@@ -98,9 +195,11 @@ export function entityChoices(hass = {}, filters = {}) {
     const metadata = entityMetadata(hass, entityId);
     const matching = matches(metadata, filters, hass);
     if (!matching && !selected.has(entityId)) continue;
-    const warning = metadata.missing ? 'Missing entity' : !metadata.hasState ? 'No current state'
-      : metadata.disabled ? 'Disabled' : metadata.hidden ? 'Hidden' : metadata.category ? metadata.category
-        : !metadata.available ? 'Unavailable' : !matching ? 'Outside current filter' : '';
+    const warningKey = metadata.missing ? 'missing' : !metadata.hasState ? 'noState'
+      : metadata.disabled ? 'disabled' : metadata.hidden ? 'hidden'
+        : metadata.category ? ['config', 'diagnostic'].includes(metadata.category) ? metadata.category : null
+          : !metadata.available ? 'unavailable' : !matching ? 'outsideFilter' : null;
+    const warning = warningKey ? choiceCaption(hass, warningKey) : metadata.category || '';
     out.push({ ...metadata, value: entityId, label: `${metadata.name}${warning ? ` (${warning})` : ''}`,
       selected: selected.has(entityId), filtered: !matching, selectable: matching });
   }
@@ -111,7 +210,12 @@ function localizeState(hass, state) {
   if (typeof hass.localize === 'function') {
     try { const value = hass.localize(`state.default.${state}`); if (text(value)) return value; } catch { /* Use English fallback. */ }
   }
-  return state === 'unknown' ? 'Unknown' : 'Unavailable';
+  return choiceCaption(hass, state === 'unknown' ? 'unknown' : 'unavailable');
+}
+
+function choiceCaption(hass, word) {
+  const key = `entityChoice.${word}`, language = localeInfo(hass).resolved;
+  return localize(hass, key, {}, entityChoiceCaptions[language]?.[key] ?? entityChoiceCaptions.en[key]);
 }
 
 const numberFormatters = new Map();
@@ -178,7 +282,8 @@ export function formatEntityValue(hass = {}, entityId, options = {}) {
  * Layout-only floors are valid; registries not supplied yet are not treated as empty/deleted.
  */
 export function registryIssues(hass = {}, layout = {}, config = {}, resolved = {}) {
-  hass = record(hass); layout = record(layout); config = record(config);
+  const rawLayout = layout, rawConfig = config, legacyLayout = legacyReferenceProjection(layout, 'layout'), legacyConfig = legacyReferenceProjection(config, 'config');
+  hass = record(hass); layout = legacyLayout.value; config = legacyConfig.value;
   resolved = record(resolved);
   const issues = [], seen = new Set();
   const floors = new Set([...Object.keys(record(hass.floors)), ...list(layout.floors).map((floor) => floor?.id).filter(Boolean)]);
@@ -198,8 +303,8 @@ export function registryIssues(hass = {}, layout = {}, config = {}, resolved = {
     }
     if (!code || seen.has(`${code}:${path}:${id}`)) return;
     seen.add(`${code}:${path}:${id}`);
-    issues.push({ code, kind, id, path, message: code === 'entity_no_state' ? `${id} has no current state.`
-      : `Saved ${kind} ${id} is missing. Relink or clear this choice; its saved layout is preserved.` });
+    issues.push({ code, kind, id, path, message: referenceText(hass, code === 'entity_no_state' ? 'legacyNoState' : 'legacyMissing',
+      { kind: referenceText(hass, kind), id }) });
   };
   const marker = (id, path) => {
     if (typeof id !== 'string') return;
@@ -221,7 +326,8 @@ export function registryIssues(hass = {}, layout = {}, config = {}, resolved = {
   for (const [id, value] of Object.entries(record(model.floor_map))) {
     if (!(id in record(model.levels)) && value !== 'always' && value !== 'hidden') check('floor', value, `layout.model.floor_map.${id}`);
   }
-  if (config.model) for (const [id, value] of Object.entries(record(config.model_floors))) {
+  if (config.model && config.model !== LEGACY_UNREADABLE && layout.model !== LEGACY_UNREADABLE
+    && model.levels !== LEGACY_UNREADABLE && model.floor_map !== LEGACY_UNREADABLE) for (const [id, value] of Object.entries(record(config.model_floors))) {
     if (!(id in record(model.levels)) && !(id in record(model.floor_map)) && value !== 'always' && value !== 'hidden') {
       check('floor', value, `config.model_floors.${id}`);
     }
@@ -234,7 +340,8 @@ export function registryIssues(hass = {}, layout = {}, config = {}, resolved = {
   check('entity', mower.overlay?.entity, 'layout.mower.overlay.entity');
   for (const [name, source] of [['layout', layout], ['config', config]]) {
     for (const [id, view] of Object.entries(record(source.views))) {
-      if (name === 'config' && Array.isArray(layout.views?.[id]?.floors)) continue;
+      if (name === 'config' && (layout.views === LEGACY_UNREADABLE || layout.views?.[id] === LEGACY_UNREADABLE
+        || layout.views?.[id]?.floors === LEGACY_UNREADABLE || Array.isArray(layout.views?.[id]?.floors))) continue;
       list(view?.floors).forEach((floor, index) => check('floor', floor, `${name}.views.${id}.floors.${index}`));
     }
   }
@@ -269,7 +376,7 @@ export function registryIssues(hass = {}, layout = {}, config = {}, resolved = {
     const code = `missing_${kind}`, key = `${code}:${path}:${id}`;
     if (seen.has(key)) return;
     seen.add(key);
-    issues.push({ code, kind, id, path, message: `Saved ${kind} ${id} is missing. Relink or clear this choice; its saved layout is preserved.` });
+    issues.push({ code, kind, id, path, message: referenceText(hass, 'legacyMissing', { kind: referenceText(hass, kind), id }) });
   };
   for (const field of ['presence_bindings', 'vehicle_bindings', 'vacuum_bindings']) {
     const source = layout[field] != null ? 'layout' : 'config';
@@ -290,5 +397,44 @@ export function registryIssues(hass = {}, layout = {}, config = {}, resolved = {
       exact('anchor', binding.position_key, `${path}.position_key`, anchorIds);
     });
   }
+  const report = enumerateSavedHaReferences({ layout: rawLayout, config: rawConfig });
+  let limited = issues.length >= SAVED_HA_REFERENCE_LIMITS.references;
+  const append = (reference, code, word, name = reference.id) => {
+    const key = `${code}:${reference.path}:${reference.id ?? ''}`;
+    if (seen.has(key)) return;
+    if (issues.length >= SAVED_HA_REFERENCE_LIMITS.references - 1) { limited = true; return; }
+    seen.add(key);
+    const kind = reference.kind || 'settings';
+    issues.push({ code, kind, ...(reference.id === undefined ? {} : { id: reference.id }), path: reference.path,
+      message: referenceText(hass, word, { kind: referenceText(hass, kind), id: reference.id || '', name }) });
+  };
+  for (const diagnostic of [...legacyLayout.diagnostics, ...legacyConfig.diagnostics, ...report.diagnostics]) {
+    // Future annotation/style fields remain opaque. They are not broken known
+    // links and must not turn this report into a request to delete unknown data.
+    if (diagnostic.code === 'reference_unknown') continue;
+    append(diagnostic, diagnostic.code, diagnostic.code === 'reference_limit' ? 'limited' : 'uninspected');
+  }
+  const matches = (kind, id) => {
+    const rows = ownData(resolved, kind === 'room' ? 'rooms' : kind === 'anchor' ? 'anchors' : 'floors');
+    if (ownData(resolved, 'ready').value === false || !rows.safe || !Array.isArray(rows.value)) return null;
+    return rows.value.filter((row) => (kind === 'room' ? ownData(ownData(row, 'room').value, 'id').value ?? ownData(row, 'id').value : ownData(row, 'id').value) === id);
+  };
+  for (const reference of report.references) {
+    if (reference.kind === 'entity') {
+      const status = savedEntityIssue(hass, reference.id);
+      if (status) append(reference, status.code, status.word, status.name);
+    } else if (['room', 'anchor', 'floor'].includes(reference.kind)) {
+      const current = matches(reference.kind, reference.id);
+      if (current === null) append(reference, 'reference_pending', 'pending');
+      else if (!current.length) append(reference, `missing_${reference.kind}`, 'missing');
+      else if (current.length > 1) append(reference, `ambiguous_${reference.kind}`, 'ambiguous');
+      else if (reference.kind === 'floor' && ownData(current[0], 'stale').value === true) append(reference, 'missing_floor', 'missing');
+    } else {
+      const registry = ownData(hass, `${reference.kind}s`);
+      if (!registry.safe || !sourceRecord(registry.value)) append(reference, 'reference_pending', 'pending');
+      else if (!ownData(registry.value, reference.id).own) append(reference, `missing_${reference.kind}`, 'missing');
+    }
+  }
+  if (limited) return [...issues.slice(0, SAVED_HA_REFERENCE_LIMITS.references - 1), { code: 'reference_limit', kind: 'settings', path: 'saved', message: referenceText(hass, 'limited') }];
   return issues;
 }

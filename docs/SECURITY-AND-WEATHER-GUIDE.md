@@ -12,6 +12,27 @@ These are optional display features. Configure them in the house's **Edit** pane
 
 A general motion sensor or a lock state cannot prove a door is open. An unclassified binary sensor needs your explicit confirmation that it is a real contact. Missing, disabled, restored, unknown or unavailable readings cannot confidently report open or closed. Opening the form only previews the evidence as text.
 
+### Plan locations and locks in the local test candidate
+
+The combined local candidate also supports security indicators without a tagged
+model part. Its complete browser and household checks are still pending.
+
+In **Edit → Security**, choose a contact or **Lock**, then choose a **Plan** target.
+Place it using an exact room, an existing marker anchor, or fixed plan coordinates
+on the selected floor. Coordinates describe the original house; visual floor
+separation is applied afterwards. A missing room, marker or floor stays missing
+until you deliberately repair the saved link.
+
+An open contact or unlocked lock gets its configured highlight. Locked/closed
+clears it by default. Locking, unlocking and jammed remain distinct uncertain
+states; unlocking cannot prove a door is physically open. Plan indicators do not
+animate a GLB door. Tapping an indicator or its mini-map symbol opens the current
+source's controls without sending a device command.
+
+Optional source-age rules use an actual reading timestamp. A sensor remaining
+closed for hours does not by itself mean the sensor stopped reporting. Only use
+an age rule when you know which timestamp your integration actually supplies.
+
 ### Animate a door
 
 The GLB must have a separate, rigid moving leaf or hinge group. A door baked into a single wall mesh cannot be animated independently.

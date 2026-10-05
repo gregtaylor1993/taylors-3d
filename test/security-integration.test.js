@@ -15,18 +15,18 @@ function fixture(settings = {}) {
   door.userData.fp = { kind: 'object', id: 'front', type: 'door' }; leaf.name = 'leaf'; leaf.position.set(1, 1, 0); root.add(door); door.add(leaf);
   const model = { id: 'test-house', root, manifest: buildManifest(threeAdapter(root)) }; root.updateMatrixWorld(true);
   card._config = { layout_key: 'house' }; card._layout = { security_bindings: [structuredClone(binding)], ...settings };
-  card._hass = { connection: {}, user: { is_admin: true }, states: { 'binary_sensor.front': state('off') }, entities: {}, devices: {}, callService: vi.fn() };
+  card._hass = { connection: { connected: true }, user: { id: 'taylor', is_admin: true, is_active: true }, states: { 'binary_sensor.front': state('off') }, entities: {}, devices: {}, callService: vi.fn() };
   card._floors = [{ id: 'ground', elevation: 0 }]; card._roomList = []; card._positions = new Map(); card._markers = [];
   card._view = { model, scene: new THREE.Scene(), dirty: false, modelClip: new THREE.Plane(new THREE.Vector3(0, -1, 0), 10),
-    sectionClip: null, modelMotionChanged: vi.fn(() => ({ changed: true, objectIds: new Set(['front']) })), floorElevation: () => 0, stop: vi.fn() };
+    sectionClip: null, modelMotionChanged: vi.fn(() => ({ changed: true, objectIds: new Set(['front']) })), floorElevation: (id) => card._floors.find((floor) => floor.id === id)?.elevation ?? 0, screenPoint: vi.fn(() => [50, 60]), stop: vi.fn() };
   card._objects = { parts: new Map(), objectAt: () => ({ obj: { id: 'front', node: door }, binding: {} }), anchors: () => [] };
   card._refreshAttached = vi.fn(); card._syncCameraCoverage = vi.fn(); card._syncMiniMap = vi.fn();
-  card._syncTracking = vi.fn(); card._popup = { close: vi.fn() }; card._devicePopup = { close: vi.fn() };
+  card._syncTracking = vi.fn(); card._popup = { close: vi.fn() }; card._devicePopup = { close: vi.fn(), update: vi.fn(), showMarker: vi.fn() };
   card._schedule = vi.fn(); cards.push(card); return { card, root, door, leaf, model };
 }
 beforeAll(async () => { await import('../src/taylors3d-card.js'); });
-afterEach(() => { for (const card of cards.splice(0)) { card._clearTrackingTimer(); card._securityLayer?.dispose(); }
-  vi.restoreAllMocks(); vi.useRealTimers(); delete window.__demoNow; });
+afterEach(() => { for (const card of cards.splice(0)) { card._clearTrackingTimer(); card._securityLayer?.dispose(); card._planSecurityLayer?.dispose(); card._miniMap?.dispose(); }
+  vi.restoreAllMocks(); vi.useRealTimers(); delete window.__demoNow; document.body.replaceChildren(); });
 
 describe('security evidence in the actual card lifecycle', () => {
   it('animates the exact leaf and refreshes existing geometry/anchors after real contact changes', () => {
@@ -89,5 +89,87 @@ describe('security evidence in the actual card lifecycle', () => {
     card.connected = false; card.disconnectedCallback(); expect(vi.getTimerCount()).toBe(0); expect(card._securityLayer.moving).toBe(false);
     vi.advanceTimersByTime(7000); card.connected = true; card._syncSecurity(true);
     expect(card._securityLayer.parts.get('front').reading.status).toBe('stale'); expect(card._securityLayer.moving).toBe(false);
+  });
+});
+
+describe('explicit plan and lock security in the existing card', () => {
+  const plan = (extra = {}) => ({ id: 'plan', entity: 'lock.entry', kind: 'lock', target: { type: 'plan', position: { x: 1, y: 2, z: .4, floorId: 'upper' } }, ...extra });
+  function prepared(settings = {}) {
+    const ctx = fixture({ security_bindings: [plan()], ...settings }); ctx.card._view.model = null;
+    ctx.card._floors = [{ id: 'ground', elevation: 0 }, { id: 'upper', elevation: 3 }];
+    ctx.card._hass.states['lock.entry'] = { state: 'unlocked', attributes: { friendly_name: 'Entry lock' }, last_updated: new Date(epoch).toISOString() };
+    return ctx;
+  }
+  it('renders an explicit plan without a house GLB and applies source-to-display separation once', () => {
+    const { card } = prepared(); card._floorPresentationReportValue = { valid: true, mode: 'horizontal', rows: [{ floor_id: 'upper', offset: [10, 2, -4] }] };
+    card._syncSecurity(); expect(card._securityPlanData.records[0]).toMatchObject({ open: null, active: true, locked: false, location: { x: 1, y: 2, z: .4, elevation: 3 } });
+    expect(card._planSecurityLayer.parts.get('plan').group.position.toArray()).toEqual([11, 5.4, -6]);
+    expect(card._securityPlanData.miniMap[0].position.x).toBe(1); expect(card._securityLayer.diagnostics.some((d) => d.code === 'missing_object')).toBe(false);
+    card._view.scene.traverse((node) => expect(node.isLight).not.toBe(true)); expect(card._hass.callService).not.toHaveBeenCalled();
+  });
+  it('reuses glyphs and materials for equal or unrelated current snapshots, including closed clear readings', () => {
+    const { card } = prepared(); card._syncSecurity(); const part = card._planSecurityLayer.parts.get('plan'), version = part.ringMaterial.version;
+    card._view.dirty = false;
+    for (let i = 0; i < 10; i++) { card._hass.states['sensor.unrelated'] = state(String(i)); card._syncSecurity(); }
+    expect(card._planSecurityLayer.parts.get('plan')).toBe(part); expect(part.ringMaterial.version).toBe(version); expect(card._view.dirty).toBe(false);
+    card._hass.states['lock.entry'].state = 'locked'; card._syncSecurity(); expect(part.group.visible).toBe(false);
+    card._view.dirty = false; card._syncSecurity(); expect(card._view.dirty).toBe(false); expect(card._hass.callService).not.toHaveBeenCalled();
+  });
+  it('uses the original single nearest timer for model, plan and tracking deadlines', () => {
+    const { card, model } = prepared({ security_bindings: [{ ...binding, motion: undefined, freshness: { timestamp_mode: 'last_updated', max_age_seconds: 4 } }, plan({ freshness: { timestamp_mode: 'last_updated', max_age_seconds: 2 } })] });
+    card._view.model = model;
+    card._trackingData.nextExpiry = epoch + 6000; card._syncSecurity(); expect(card._trackingDeadline).toBe(epoch + 2000); expect(vi.getTimerCount()).toBe(1);
+    vi.advanceTimersByTime(2000); expect(card._securityPlanData.records[0].status).toBe('stale'); expect(card._planSecurityLayer.parts.get('plan').ringMaterial.color.getHexString()).toBe('8d9199');
+    expect(card._trackingDeadline).toBe(epoch + 4000); expect(vi.getTimerCount()).toBe(1);
+    vi.advanceTimersByTime(2000); expect(card._securityLayer.parts.get('front').reading.status).toBe('stale');
+    expect(card._trackingDeadline).toBe(epoch + 6000); expect(vi.getTimerCount()).toBe(1); expect(card._hass.callService).not.toHaveBeenCalled();
+  });
+  it('composes Section and selected floors without relinking a missing exact target', () => {
+    const { card } = prepared(); card._view.sectionClip = new THREE.Plane(new THREE.Vector3(0, -1, 0), 3);
+    card._syncSecurity(); const part = card._planSecurityLayer.parts.get('plan'); expect(part.group.visible).toBe(false); expect(part.body.disabled).toBe(true);
+    expect(card._showPlanSecurityEntity('plan')).toBe(false); card._view.sectionClip.constant = 4; card._syncSecurity(); expect(part.group.visible).toBe(true);
+    card._floorOnly = 'ground'; card._floor = 'ground'; card._syncSecurity(); expect(part.group.visible).toBe(false); expect(card._securityPlanData.records[0].location.floorId).toBe('upper');
+    card._floors = [{ id: 'ground', elevation: 0 }]; card._syncSecurity(); expect(card._securityPlanData.records[0].location).toBeNull(); expect(card._planSecurityLayer.parts.size).toBe(0); expect(card._hass.callService).not.toHaveBeenCalled();
+  });
+  it('observes same-connection loss before recovery and invalidates old button/map intents', () => {
+    const { card } = prepared(); card._syncSecurity(); const button = card._planSecurityLayer.parts.get('plan').body, generation = card._securitySessionGeneration;
+    button.dispatchEvent(new Event('pointerdown')); card._hass.connection.connected = false; card.hass = card._hass;
+    card._hass.connection.connected = true; card.hass = card._hass; button.click(); expect(card._devicePopup.showMarker).not.toHaveBeenCalled();
+    expect(card._securitySessionGeneration).toBeGreaterThan(generation); expect(card._showPlanSecurityEntity('plan', { generation, entity: 'lock.entry' })).toBe(false);
+    const fresh = card._planSecurityLayer.parts.get('plan').body; fresh.dispatchEvent(new Event('pointerdown')); fresh.click();
+    expect(card._devicePopup.showMarker).toHaveBeenCalledOnce(); expect(card._hass.callService).not.toHaveBeenCalled();
+  });
+  it('opens current locked or uncertain information and closes it after the binding changes source', () => {
+    const { card } = prepared(); card._hass.states['lock.entry'].state = 'locked'; card._syncSecurity(); expect(card._showPlanSecurityEntity('plan')).toBe(true);
+    expect(card._devicePopup.showMarker).toHaveBeenCalledWith(expect.objectContaining({ entityId: 'lock.entry' }), [50, 60]);
+    card._hass.states['lock.other'] = { state: 'unlocked', attributes: {} }; card._layout.security_bindings = [plan({ entity: 'lock.other' })]; card._syncSecurity();
+    expect(card._devicePopup.close).toHaveBeenCalled(); expect(card._securityPopup).toBeNull();
+    expect(card._showPlanSecurityEntity('plan', { entity: 'lock.entry' })).toBe(false); expect(card._hass.callService).not.toHaveBeenCalled();
+  });
+  it('cannot reinterpret a held current map node after the same binding ID changes entity or source context', () => {
+    const { card } = prepared(); card._stage = document.createElement('div'); document.body.append(card._stage); card._focusPlan = vi.fn();
+    card._hass.states['lock.other'] = { state: 'unlocked', attributes: {} }; card._syncSecurity(); card._configureMiniMap();
+    const generation = card._securitySessionGeneration;
+    const update = () => card._miniMap.update({ rooms: [{ room: { id: 'upper-room', polygon: [[0, 0], [3, 0], [3, 3], [0, 3]] }, floorId: 'upper' }],
+      floors: card._floors, visibleFloors: ['upper'], trackedMarkers: card._securityPlanData.miniMap.map((marker) => ({ ...marker, id: `${marker.id}:${card._securitySessionGeneration}` })) });
+    update(); const old = card._miniMap.el.querySelector('[data-marker]'); old.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    card._layout.security_bindings = [plan({ entity: 'lock.other' })]; card._syncSecurity(); update();
+    old.dispatchEvent(new MouseEvent('click', { bubbles: true })); expect(card._devicePopup.showMarker).not.toHaveBeenCalled();
+    expect(card._securitySessionGeneration).toBeGreaterThan(generation);
+    // A genuine map focus changes the current floor/view synchronously. It is
+    // part of this accepted gesture, not a reason to reject its own popup.
+    card._focusPlan.mockImplementationOnce(() => { card._viewId = 'upper'; card._syncSecurity(); });
+    const fresh = card._miniMap.el.querySelector('[data-marker]'); fresh.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(card._devicePopup.showMarker).toHaveBeenCalledWith(expect.objectContaining({ entityId: 'lock.other' }), [50, 60]);
+    const current = card._securitySessionGeneration; card._layout.security_bindings = structuredClone(card._layout.security_bindings);
+    card._hass.states['lock.other'] = { state: 'locked', attributes: {} }; card._syncSecurity(); expect(card._securitySessionGeneration).toBe(current);
+    card._config.layout_key = 'different-house'; card._syncSecurity(); expect(card._securitySessionGeneration).toBeGreaterThan(current);
+    expect(card._hass.callService).not.toHaveBeenCalled(); card._miniMap.dispose();
+  });
+  it('disposes only the owned old scene resources and retains static readings across renderer replacement', () => {
+    const { card } = prepared(); card._syncSecurity(); const old = card._planSecurityLayer, geometry = vi.spyOn(old.ringGeometry, 'dispose');
+    card._view.scene = new THREE.Scene(); card._syncSecurity(); expect(geometry).toHaveBeenCalledOnce(); expect(old.group.parent).toBeNull();
+    expect(card._planSecurityLayer).not.toBe(old); expect(card._planSecurityLayer.parts.get('plan').record.status).toBe('unlocked');
+    card._resetSecurity(); expect(card._planSecurityLayer.parts.size).toBe(0); expect(card._securityPlanData.nextExpiry).toBeNull();
   });
 });

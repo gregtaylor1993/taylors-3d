@@ -1,4 +1,5 @@
 // Home Assistant automation requests use its authenticated event subscription, not window events.
+import { ownedRuntimeError } from './runtime-notices.js';
 export const PRESET_EVENT = 'taylors3d_select_view';
 export const PRESET_RESULT = 'taylors3d/preset/result';
 export const PRESET_SUBSCRIBE = 'taylors3d/preset/subscribe';
@@ -116,7 +117,7 @@ export class PresetEventController {
   }
 
   async _reply(hass, request, target, result) {
-    if (!hass?.callWS) throw new Error('The Home Assistant websocket is unavailable; the preset request cannot be confirmed');
+    if (!hass?.callWS) throw ownedRuntimeError('presetWebsocket');
     await hass.callWS({
       type: PRESET_RESULT,
       request_id: request.request_id,
@@ -139,7 +140,7 @@ export class PresetEventController {
     const previous = this._getCurrent();
     const resolved = resolvePreset(this._getViews(), request.preset);
     if (!resolved.view) {
-      this._report(new Error(resolved.message));
+      this._report(ownedRuntimeError(resolved.status === 'ambiguous_preset' ? 'presetAmbiguous' : 'presetMissing', { name: text(request.preset) }));
       await this._reply(hass, request, target, resolved);
       return;
     }

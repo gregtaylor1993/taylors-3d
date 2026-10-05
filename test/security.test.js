@@ -20,6 +20,62 @@ function fixture() {
 const layerFor = (f = fixture(), options) => { const layer = new SecurityLayer(options); layer.setModel(f.model); return { ...f, layer }; };
 const data = (extra = {}) => ({ hass: hass(), bindings: [binding({ motion: motion() })], now: NOW, animationNow: 0, ...extra });
 const closeVector = (actual, expected) => actual.toArray().forEach((v, i) => expect(v).toBeCloseTo(expected[i], 9));
+const lockBinding = (extra = {}) => ({ id: 'front-lock', entity: 'lock.front_door', object_id: 'front_door', kind: 'lock', ...extra });
+const lockHass = (value, attributes = {}) => ({ states: { 'lock.front_door': { state: value, attributes } }, entities: {} });
+
+describe('lock evidence is separate from an opening contact', () => {
+  it('accepts an exact lock target without inventing contact state lists or a hinge', () => {
+    expect(normaliseSecurityBinding(lockBinding())).toMatchObject({ valid: true, motion: null });
+    expect(normaliseSecurityBinding(lockBinding({ motion: motion() })).valid).toBe(false);
+    expect(normaliseSecurityBinding(lockBinding({ entity: 'binary_sensor.front_door' })).valid).toBe(false);
+  });
+  it.each([
+    ['locked', true, false], ['unlocked', false, true], ['locking', null, null], ['unlocking', null, null], ['jammed', null, null],
+  ])('reads %s honestly and never supplies a door-open angle', (state, locked, active) => {
+    expect(readSecurityContact(lockHass(state), lockBinding(), { now: NOW })).toMatchObject({ status: state, locked, active, open: null, shown: true });
+  });
+  it.each(['unknown', 'unavailable', 'open', 'off'])('does not convert %s into a locked or closed door', (state) => {
+    const reading = readSecurityContact(lockHass(state), lockBinding(), { now: NOW });
+    expect(reading).toMatchObject({ open: null, locked: null, active: null, shown: true });
+    expect(reading.status).not.toBe('locked');
+  });
+  it('uses only current lock evidence and preserves explicit heartbeat deadlines', () => {
+    const raw = lockBinding({ freshness: { timestamp_mode: 'attribute', timestamp_attr: 'observed', timestamp_format: 'milliseconds', max_age_seconds: 5 } });
+    const ha = lockHass('unlocked', { observed: NOW - 2000 });
+    expect(readSecurityContact(ha, raw, { now: NOW })).toMatchObject({ active: true, locked: false, open: null, nextExpiry: NOW + 3000 });
+    expect(readSecurityContact(ha, raw, { now: NOW + 3000 })).toMatchObject({ status: 'stale', active: null, locked: null, open: null });
+    expect(readSecurityContact(lockHass('unlocked', { restored: true }), lockBinding(), { now: NOW })).toMatchObject({ status: 'unavailable', active: null, locked: null });
+  });
+  it('allows model locks to highlight and clear without moving authored transforms', () => {
+    const { layer, leaf } = layerFor(), authored = leaf.position.clone();
+    expect(layer.setData(data({ hass: lockHass('unlocked'), bindings: [lockBinding()] }))).toBe(true);
+    const part = layer.parts.get('front-lock');
+    expect(part.lines.every((line) => line.visible)).toBe(true); expect(part.color).toBe('#ef5350');
+    expect(part.target).toBeNull(); expect(layer.moving).toBe(false); expect(leaf.position.equals(authored)).toBe(true);
+    layer.setData(data({ hass: lockHass('locking'), bindings: [lockBinding()] })); expect(part.color).toBe('#8d9199');
+    layer.setData(data({ hass: lockHass('locked'), bindings: [lockBinding()] })); expect(part.lines.every((line) => !line.visible)).toBe(true);
+    expect(layer.takeMotionChanges().movementChanged).toBe(false); layer.dispose();
+  });
+  it('ignores a valid plan target in the model adapter and still rejects duplicate IDs across targets', () => {
+    const { layer } = layerFor();
+    const plan = { ...binding(), object_id: undefined, target: { type: 'plan', position: { x: 1, y: 2, z: .12, floorId: 'ground' } } };
+    expect(normaliseSecurityBinding(plan).valid).toBe(true);
+    expect(layer.setData(data({ bindings: [plan] }))).toBe(false); expect(layer.diagnostics).toEqual([]);
+    layer.setData(data({ bindings: [binding(), plan] }));
+    expect(layer.parts.size).toBe(0); expect(layer.diagnostics.some((item) => item.code === 'duplicate_binding')).toBe(true); layer.dispose();
+  });
+  it('does not activate a substitute model binding with the same saved ID as a disabled or malformed plan binding', () => {
+    const { layer } = layerFor();
+    for (const other of [
+      { ...binding(), object_id: undefined, enabled: false, target: { type: 'plan', position: { x: 1, y: 2, z: .12, floorId: 'ground' } } },
+      { ...binding(), object_id: undefined, target: { type: 'plan', roomId: 'removed', position_key: 'other' } },
+    ]) {
+      layer.setData(data({ bindings: [binding(), other] }));
+      expect(layer.parts.size).toBe(0); expect(layer.diagnostics.some((item) => item.code === 'duplicate_binding')).toBe(true);
+    }
+    layer.dispose();
+  });
+});
 
 describe('explicit contact configuration and HA evidence', () => {
   it('does not supply open/closed states, moving parts or hinge angles by guessing', () => {

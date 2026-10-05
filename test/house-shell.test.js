@@ -62,7 +62,7 @@ describe('actual header/navigation composition and source authority', () => {
     const { card, shell, update } = setup(); const before = structuredClone(card._hass.states);
     update({ summaryRaw: { title: 'My configured title', weather_entity: 'weather.local', person_entities: ['person.one'], alarm_entity: 'alarm_control_panel.house' } });
     expect(shell.header.title.textContent).toBe('My configured title'); expect(shell.header.rows.get('weather').textContent).toContain('18 °C');
-    expect(shell.header.rows.get('people').textContent).toBe('1 of 1 selected people home'); expect(shell.header.rows.get('alarm').textContent).toBe('Disarmed');
+    expect(shell.header.rows.get('people').textContent).toBe('1 of 1 selected person home'); expect(shell.header.rows.get('alarm').textContent).toBe('Disarmed');
     expect(card._hass.states).toEqual(before); expect(card._hass.callWS).not.toHaveBeenCalled(); expect(card._hass.callService).not.toHaveBeenCalled();
   });
   it('preserves missing configured source warnings instead of inventing household readings', () => {

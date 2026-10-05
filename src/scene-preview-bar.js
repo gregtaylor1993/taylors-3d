@@ -2,11 +2,13 @@
 // owns renderer overrides; this bar never reads or writes a real scene definition.
 import { entityMetadata } from './entity-metadata.js';
 import { readScenePreviews, sceneActivationAvailability, validateScenePreview } from './scene-preview.js';
+import { localize, localeInfo } from './localization.js';
+import liveCaptions, { sceneDiagnosticKeys } from './translations/live-camera-scenes.js';
 
 const plain = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
 const signature = (value) => { try { return JSON.stringify(value); } catch { return null; } };
 const text = (node, value) => { if (node.textContent !== value) node.textContent = value; };
-const messages = (diagnostics) => [...new Set(diagnostics.map((diagnostic) => diagnostic.message))].join(' ');
+const diagnosticKey = (diagnostic) => sceneDiagnosticKeys.find((entry) => entry.code === diagnostic.code && entry.message === diagnostic.message)?.key;
 const node = (tag, content) => { const element = document.createElement(tag); if (content) element.textContent = content; return element; };
 const idValid = (value) => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 let nextBar = 0;
@@ -38,13 +40,13 @@ export class ScenePreviewBar {
     this._message = null; this._generation = 0; this._disposed = false; this._updating = false;
     this._prefix = `taylors3d-scenes-${++nextBar}`;
     this.el = node('section'); this.el.dataset.scenePreviewBar = ''; this.el.dataset.taylors3dUi = 'scene-preview-bar';
-    this.el.setAttribute('aria-label', 'Saved scene light previews'); this.el.tabIndex = -1;
+    this.el.tabIndex = -1;
     const style = node('style', CSS), heading = node('div'); heading.className = 'scene-preview-heading';
-    this.stopButton = this._button('stop', 'Stop preview'); heading.append(node('h3', 'Scenes'), this.stopButton);
-    const note = node('p', 'Preview changes the model lights. Activate runs your saved Home Assistant scene.'); note.className = 'scene-preview-note';
+    this.stopButton = this._button('stop', ''); this.heading = node('h3'); heading.append(this.heading, this.stopButton);
+    this.note = node('p'); this.note.className = 'scene-preview-note';
     this.items = node('div'); this.items.className = 'scene-preview-items';
     this.status = node('p'); this.status.dataset.scenePreviewStatus = ''; this.status.setAttribute('role', 'status'); this.status.setAttribute('aria-live', 'polite');
-    this.el.append(style, heading, note, this.items, this.status); host.append(this.el);
+    this.el.append(style, heading, this.note, this.items, this.status); host.append(this.el);
     this._handlers = new Map([
       ['pointerenter', (event) => this._over(event)], ['pointerleave', (event) => this._out(event)],
       ['pointerdown', (event) => this._press(event)], ['pointerup', (event) => this._release(event)],
@@ -62,21 +64,46 @@ export class ScenePreviewBar {
     return button;
   }
   _context() { const value = this.getContext(); return plain(value) ? value : {}; }
+  _text(key, params = {}, hass = this._context().hass) {
+    const full = key.startsWith('live.') ? key : `live.scenes.${key}`, language = localeInfo(hass).resolved;
+    return localize(hass, full, params, liveCaptions[language]?.[full] ?? liveCaptions.en[full] ?? '');
+  }
+  _diagnostic(diagnostic, hass) {
+    const key = diagnosticKey(diagnostic);
+    return key ? this._text(key, {}, hass) : diagnostic.message;
+  }
+  _messages(diagnostics, hass = this._context().hass) {
+    return [...new Set(diagnostics.map((diagnostic) => this._diagnostic(diagnostic, hass)))].join(' ');
+  }
+  _messageText(hass) {
+    if (typeof this._message === 'string') return this._message;
+    if (this._message?.key) return this._text(this._message.key, this._message.params || {}, hass);
+    if (this._message?.diagnostics) return this._messages(this._message.diagnostics, hass);
+    return '';
+  }
   _live(button) { return !this._disposed && !!this.host.isConnected && !!this.el.isConnected && this.el.contains(button); }
   _buttonFor(event) { const button = event.target?.closest?.('button[data-scene-action]'); return button && this.el.contains(button) ? button : null; }
   _state(id, context = this._context()) {
     const settings = readScenePreviews(context.settings), items = settings.items;
     const matches = items.filter((item) => plain(item) && item.id === id), binding = matches.length === 1 ? matches[0] : null;
     const reasons = settings.diagnostics.map((diagnostic) => diagnostic.message);
-    if (context.suspended) reasons.push('Scene previews are paused while this view is unavailable.');
-    if (!settings.enabled) reasons.push('Scene previews are not enabled.');
-    if (matches.length !== 1 || !idValid(id)) reasons.push('Choose one exact current saved scene preview ID.');
-    if (binding && Object.hasOwn(binding, 'label') && (typeof binding.label !== 'string' || binding.label.length > 256)) reasons.push('The saved scene label is invalid.');
-    if (binding && items.filter((item) => plain(item) && item.scene_entity === binding.scene_entity).length !== 1) reasons.push('This scene has duplicate saved preview mappings.');
+    const displayReasons = settings.diagnostics.map((diagnostic) => this._diagnostic(diagnostic, context.hass));
+    const addReason = (key) => {
+      // Raw English reasons remain semantic gesture evidence. A language change
+      // updates display text without cancelling a genuinely current held action.
+      reasons.push(liveCaptions.en[`live.scenes.${key}`]); displayReasons.push(this._text(key, {}, context.hass));
+    };
+    if (context.suspended) addReason('paused');
+    if (!settings.enabled) addReason('disabled');
+    if (matches.length !== 1 || !idValid(id)) addReason('exactId');
+    if (binding && Object.hasOwn(binding, 'label') && (typeof binding.label !== 'string' || binding.label.length > 256)) addReason('badLabel');
+    if (binding && items.filter((item) => plain(item) && item.scene_entity === binding.scene_entity).length !== 1) addReason('duplicate');
     const available = sceneActivationAvailability(context.hass, binding?.scene_entity);
     const preview = validateScenePreview(context.hass, binding);
     const activationReasons = [...reasons, ...available.diagnostics.map((diagnostic) => diagnostic.message)];
     return { binding, settings, context, activationReasons, previewReasons: [...activationReasons, ...preview.diagnostics.map((diagnostic) => diagnostic.message)],
+      activationDisplayReasons: [...displayReasons, ...available.diagnostics.map((diagnostic) => this._diagnostic(diagnostic, context.hass))],
+      previewDisplayReasons: [...displayReasons, ...available.diagnostics.map((diagnostic) => this._diagnostic(diagnostic, context.hass)), ...preview.diagnostics.map((diagnostic) => this._diagnostic(diagnostic, context.hass))],
       canActivate: activationReasons.length === 0, canPreview: activationReasons.length === 0 && preview.valid };
   }
   _stamp(state) {
@@ -93,7 +120,7 @@ export class ScenePreviewBar {
   }
   _label(binding, context) {
     return typeof binding?.label === 'string' && binding.label.trim() ? binding.label
-      : entityMetadata(context.hass, binding?.scene_entity).name || 'Invalid scene preview';
+      : entityMetadata(context.hass, binding?.scene_entity).name || this._text('invalidLabel', {}, context.hass);
   }
   _stopOwned() {
     if (this._ownedToken) this.controller?.stop(this._ownedToken);
@@ -108,6 +135,9 @@ export class ScenePreviewBar {
       if (context.suspended || !this.host.isConnected) this._stopOwned();
       else if (this._ownedToken) this.controller?.revalidate();
       context = this._context();
+      this.el.setAttribute('aria-label', this._text('aria', {}, context.hass));
+      text(this.heading, this._text('title', {}, context.hass)); text(this.note, this._text('help', {}, context.hass));
+      text(this.stopButton, this._text('stop', {}, context.hass));
       const settings = readScenePreviews(context.settings), active = this.controller?.active;
       if (this._ownedToken && active?.token !== this._ownedToken) { this._ownedToken = null; this._pinnedToken = null; }
       for (const [button, gesture] of this._pressed) if (!gesture.poisoned && (!this._live(button) || !this._same(gesture.stamp, this._state(gesture.id, context)))) gesture.poisoned = true;
@@ -120,19 +150,20 @@ export class ScenePreviewBar {
         let row = this._rows.get(key);
         if (!row) {
           const el = node('div'); el.className = 'scene-preview-row'; el.setAttribute('role', 'group');
-          const preview = this._button('preview', '', id), activate = this._button('activate', 'Activate', id), reason = node('p');
+          const preview = this._button('preview', '', id), activate = this._button('activate', '', id), reason = node('p');
           reason.className = 'scene-preview-reason'; reason.id = `${this._prefix}-reason-${++nextBar}`;
           preview.setAttribute('aria-describedby', reason.id); activate.setAttribute('aria-describedby', reason.id);
           el.append(preview, activate, reason); row = { el, preview, activate, reason }; this._rows.set(key, row);
         }
         const state = this._state(id, context), label = this._label(binding, context);
-        text(row.preview, `Preview ${label}`); row.preview.setAttribute('aria-label', `Preview ${label} in the model only`);
-        row.activate.setAttribute('aria-label', `Activate ${label} in Home Assistant`); row.el.setAttribute('aria-label', label);
+        text(row.preview, this._text('preview', { label }, context.hass)); row.preview.setAttribute('aria-label', this._text('previewAria', { label }, context.hass));
+        text(row.activate, this._text('activate', {}, context.hass));
+        row.activate.setAttribute('aria-label', this._text('activateAria', { label }, context.hass)); row.el.setAttribute('aria-label', label);
         row.preview.disabled = !state.canPreview || !!this._pending; row.activate.disabled = !state.canActivate || !!this._pending;
         row.preview.setAttribute('aria-pressed', String(active?.token === this._ownedToken && active?.itemId === id && !!this._ownedToken));
-        const explanation = !state.canActivate ? state.activationReasons[0] : !state.canPreview ? state.previewReasons[0] : '';
+        const explanation = !state.canActivate ? state.activationDisplayReasons[0] : !state.canPreview ? state.previewDisplayReasons[0] : '';
         text(row.reason, explanation || ''); row.reason.hidden = !explanation;
-        row.preview.title = [...new Set(state.previewReasons)].join(' '); row.activate.title = [...new Set(state.activationReasons)].join(' ');
+        row.preview.title = [...new Set(state.previewDisplayReasons)].join(' '); row.activate.title = [...new Set(state.activationDisplayReasons)].join(' ');
         if (this.items.children[index] !== row.el) this.items.insertBefore(row.el, this.items.children[index] || null);
       }
       for (const [key, row] of this._rows) if (!keep.has(key)) {
@@ -142,14 +173,14 @@ export class ScenePreviewBar {
       }
       this.stopButton.disabled = !this._ownedToken || active?.token !== this._ownedToken;
       const status = context.status;
-      let message = this._pending ? `Activating ${this._pending.label}…` : '';
+      let message = this._pending ? this._text('activating', { label: this._pending.label }, context.hass) : '';
       if (!message && this._ownedToken && active?.token === this._ownedToken) {
         const binding = settings.items.find((item) => item?.id === active.itemId);
-        message = `Previewing ${this._label(binding, context)} in the model only${this._pinnedToken === this._ownedToken ? '. Press Stop preview to finish.' : '.'}`;
-      } else if (!message && this._message) message = this._message;
-      else if (!message && status?.status === 'error') message = status.error || 'The scene action failed.';
-      else if (!message && status?.status === 'invalid') message = messages(status.diagnostics || []);
-      text(this.status, message || 'Choose a preview, or activate a saved scene.');
+        message = this._text(this._pinnedToken === this._ownedToken ? 'previewingPinned' : 'previewing', { label: this._label(binding, context) }, context.hass);
+      } else if (!message && this._message) message = this._messageText(context.hass);
+      else if (!message && status?.status === 'error') message = status.error || this._text('failed', {}, context.hass);
+      else if (!message && status?.status === 'invalid') message = this._messages(status.diagnostics || [], context.hass);
+      text(this.status, message || this._text('choose', {}, context.hass));
     } finally { this._updating = false; }
   }
 
@@ -160,7 +191,7 @@ export class ScenePreviewBar {
     const result = this.controller?.preview(state.binding.id);
     if (this._disposed) { if (result?.token) this.controller?.stop(result.token); return; }
     if (result?.ok) { this._ownedToken = result.token; this._pinnedToken = pinned ? result.token : null; this._hover.set(button, result.token); this._message = null; }
-    else this._message = messages(result?.diagnostics || []) || 'This visual preview is unavailable.';
+    else this._message = result?.diagnostics?.length ? { diagnostics: result.diagnostics } : { key: 'unavailable' };
     this.update();
   }
   _over(event) {
@@ -212,7 +243,8 @@ export class ScenePreviewBar {
     try {
       const result = await this.controller.activate(state.binding.id, { expectedSceneEntity: stamp.entity });
       if (!this._disposed && generation === this._generation && this._same(stamp, this._state(stamp.id)) && result?.current !== false) {
-        this._message = result?.ok ? `Activated ${this._pending.label}.` : result?.error || messages(result?.diagnostics || []) || 'The scene action could not be sent.';
+        this._message = result?.ok ? { key: 'activated', params: { label: this._pending.label } }
+          : result?.error || (result?.diagnostics?.length ? { diagnostics: result.diagnostics } : { key: 'notSent' });
       }
     } catch (error) {
       if (!this._disposed && generation === this._generation && this._same(stamp, this._state(stamp.id))) this._message = error?.message || String(error);

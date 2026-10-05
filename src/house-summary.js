@@ -6,6 +6,7 @@ import { entityMetadata, formatEntityValue } from './entity-metadata.js';
 import { readLightAppearance } from './light-state.js';
 import { readFreshness } from './tracked-source.js';
 import { readWeather } from './weather.js';
+import { localize } from './localization.js';
 
 export const HOUSE_SUMMARY_LIMITS = Object.freeze({ title: 128, people: 12, entity: 255 });
 const plain = (value) => !!value && typeof value === 'object' && !Array.isArray(value)
@@ -63,12 +64,12 @@ export function readHouseSummary(value) {
 
 function readSession(hass) {
   if (hass?.connection?.connected !== true) return { status: hass?.connection ? 'unavailable' : 'waiting',
-    reason: 'connection', label: 'Waiting for Home Assistant', diagnostics: [issue('connection', 'Current readings need an established Home Assistant connection.')] };
+    reason: 'connection', label: localize(hass, 'house.header.waiting'), diagnostics: [issue('connection', 'Current readings need an established Home Assistant connection.')] };
   const user = record(hass.user);
   if (typeof user.id !== 'string' || !user.id.trim() || Object.hasOwn(user, 'is_active') && user.is_active !== true)
-    return { status: 'unavailable', reason: 'authentication', label: 'Current Home Assistant session unavailable',
+    return { status: 'unavailable', reason: 'authentication', label: localize(hass, 'house.header.sessionUnavailable'),
       diagnostics: [issue('authentication', 'Current readings need an active authenticated Home Assistant user.')] };
-  return { status: 'ready', reason: null, label: 'Connected to Home Assistant', diagnostics: [] };
+  return { status: 'ready', reason: null, label: localize(hass, 'house.header.connected'), diagnostics: [] };
 }
 
 function currentSource(hass, entity, domain, session) {
@@ -108,13 +109,13 @@ function weatherSummary(hass, entity, configured, session) {
     temperature: null, unit: null, temperatureLabel: null, label: 'Weather not configured', evidence: null, diagnostics: [] };
   if (!configured) return empty;
   const source = currentSource(hass, entity, 'weather', session);
-  if (source.status !== 'ready') return { ...empty, ...sourceLabels(source), label: 'Weather unavailable' };
+  if (source.status !== 'ready') return { ...empty, ...sourceLabels(source), label: localize(hass, 'house.header.weatherUnavailable') };
   const reading = readWeather(hass, { enabled: true, entity, quality: 'static', effects: [] });
   if (reading.status !== 'ready') return { ...empty, ...sourceLabels(source), status: reading.status === 'invalid' ? 'invalid' : 'unavailable',
-    reason: 'condition', label: 'Weather unavailable', diagnostics: reading.diagnostics };
+    reason: 'condition', label: localize(hass, 'house.header.weatherUnavailable'), diagnostics: reading.diagnostics };
   const { temperature, temperature_unit: unit } = source.state.attributes || {};
   if (typeof temperature !== 'number' || !Number.isFinite(temperature) || !['°C', '°F'].includes(unit)) {
-    return { ...empty, ...sourceLabels(source), status: 'unavailable', reason: 'temperature', label: 'Weather unavailable',
+    return { ...empty, ...sourceLabels(source), status: 'unavailable', reason: 'temperature', label: localize(hass, 'house.header.weatherUnavailable'),
       diagnostics: [issue('temperature', 'Current weather needs a finite numeric temperature and its reported °C or °F unit.', { entity })] };
   }
   const temperatureLabel = formatEntityValue(hass, entity, { attribute: 'temperature', unit });
@@ -150,7 +151,7 @@ function alarmSummary(hass, entity, configured, session) {
     label: 'Alarm not configured', evidence: null, diagnostics: [] };
   if (!configured) return empty;
   const source = currentSource(hass, entity, 'alarm_control_panel', session);
-  if (source.status !== 'ready') return { ...empty, ...sourceLabels(source), label: 'Alarm unavailable' };
+  if (source.status !== 'ready') return { ...empty, ...sourceLabels(source), label: localize(hass, 'house.header.alarmUnavailable') };
   if (!Object.hasOwn(alarms, source.state.state)) return { ...empty, ...sourceLabels(source), status: 'unknown', reason: 'alarm_state',
     label: 'Alarm state unknown', diagnostics: [issue('alarm_state', 'The alarm does not report a recognized alarm state.', { entity })] };
   const [label, severity] = alarms[source.state.state];
@@ -175,8 +176,9 @@ function lightSummary(hass, session) {
     result.rows.push(row); result.diagnostics.push(...row.diagnostics);
   }
   result.status = session.status !== 'ready' ? 'unavailable' : result.unknown ? 'partial' : result.total ? 'ready' : 'empty';
-  result.label = session.status !== 'ready' ? 'Light status unavailable' : !result.total ? 'No lights available'
-    : `${result.on} ${result.on === 1 ? 'light' : 'lights'} on${result.unknown ? ` · ${result.unknown} unknown` : ''}`;
+  result.label = session.status !== 'ready' ? localize(hass, 'house.header.lightsUnavailable') : !result.total ? localize(hass, 'house.summary.noLights')
+    : localize(hass, 'house.summary.lightsOn', { count: result.on })
+      + (result.unknown ? ` · ${localize(hass, 'house.summary.unknown', { count: result.unknown })}` : '');
   return result;
 }
 
@@ -197,8 +199,9 @@ export function buildHouseSummary(hass = {}, raw) {
   for (const row of rows) people[row.location]++;
   if (rows.length || !people.complete) {
     people.status = !people.complete ? 'invalid' : session.status !== 'ready' ? 'unavailable' : people.unknown ? 'partial' : 'ready';
-    people.label = !people.complete ? 'People summary needs configuration' : session.status !== 'ready' ? 'People status unavailable'
-      : `${people.home} of ${people.total} selected people home${people.unknown ? ` · ${people.unknown} unknown` : ''}`;
+    people.label = !people.complete ? 'People summary needs configuration' : session.status !== 'ready' ? localize(hass, 'house.header.peopleUnavailable')
+      : localize(hass, 'house.summary.peopleHome', { count: people.total, home: people.home })
+        + (people.unknown ? ` · ${localize(hass, 'house.summary.unknown', { count: people.unknown })}` : '');
   }
   const lights = lightSummary(hass, session);
   return { title, weather, people, alarm, lights, session, valid: policy.valid,

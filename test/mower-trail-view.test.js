@@ -53,11 +53,14 @@ describe('mower trail lifecycle and idle rendering', () => {
   });
 
   it('keeps repeated real card mower-off refreshes idle', () => {
-    const refresh = customElements.get('taylors3d-card').prototype._refreshMower;
+    const prototype = customElements.get('taylors3d-card').prototype;
     const view = fixture();
     view.setMapOverlay = vi.fn();
-    const card = { _layout: { mower: {} }, _view: view, _setCameraTimer: vi.fn(), _setImageTimer: vi.fn() };
-    for (let i = 0; i < 10; i++) refresh.call(card, false);
+    const card = Object.assign(Object.create(prototype), {
+      _layout: { mower: {} }, _floors: [], _view: view,
+      _setCameraTimer: vi.fn(), _setImageTimer: vi.fn(), _refreshAttached: vi.fn(),
+    });
+    for (let i = 0; i < 10; i++) card._refreshMower(false);
     expect(view.dirty).toBe(false);
     expect(card._trail).toEqual([]);
     expect(card._mowerLive).toBeNull();

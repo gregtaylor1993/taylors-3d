@@ -2,6 +2,11 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { centroid, signedArea } from './placement.js';
+import { localeInfo, localize } from './localization.js';
+import messages from './translations/status-overlays.js';
+
+const text = (hass,key,params = {}) => localize(hass,`statusOverlays.${key}`,params,
+  (messages[localeInfo(hass).resolved] || messages.en)[`statusOverlays.${key}`] || messages.en[`statusOverlays.${key}`] || '');
 
 const finite = (v) => typeof v === 'number' && Number.isFinite(v);
 const plain = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -36,47 +41,47 @@ function outputUnit(mode, requested) {
 const fromCelsius = (c, unit) => unit === '°F' ? c * 9 / 5 + 32 : unit === 'K' ? c + 273.15 : c;
 
 // No parseFloat: values such as "20 W", an empty state and Infinity are invalid measurements.
-export function readMeasurement(states, entity, mode, { unit, period, bindingPeriod } = {}) {
+export function readMeasurement(states, entity, mode, { unit, period, bindingPeriod } = {}, hass) {
   const target = outputUnit(mode, unit);
   const base = { entity, value: null, unit: target, period: mode === 'energy' ? measurementPeriod(period) : null, diagnostics: [] };
   const invalid = (code, message) => ({ ...base, status: 'invalid', diagnostics: [issue(code, message, entity)] });
-  if (!Object.hasOwn(metricNames, mode) || !target) return invalid('unit', 'Choose a supported measurement and display unit.');
+  if (!Object.hasOwn(metricNames, mode) || !target) return invalid('unit', text(hass,'measurement.choose'));
   const state = at(states, entity);
-  if (!state) return { ...base, status: 'missing', diagnostics: [issue('missing', 'Entity is not available in Home Assistant.', entity)] };
-  if (state.state === 'unknown' || state.state === 'unavailable') return { ...base, status: 'unavailable', diagnostics: [issue('unavailable', `Reading is ${state.state}.`, entity)] };
+  if (!state) return { ...base, status: 'missing', diagnostics: [issue('missing', text(hass,'measurement.missing'), entity)] };
+  if (state.state === 'unknown' || state.state === 'unavailable') return { ...base, status: 'unavailable', diagnostics: [issue('unavailable', text(hass,'measurement.unavailable',{state:state.state}), entity)] };
   const raw = state.state;
   const value = finite(raw) ? raw : typeof raw === 'string' && raw.trim() ? Number(raw) : NaN;
-  if (!finite(value)) return invalid('value', 'Reading is not a finite number.');
+  if (!finite(value)) return invalid('value', text(hass,'measurement.finite'));
   const attributes = state.attributes || {};
   const source = attributes.unit_of_measurement;
   let converted;
   if (mode === 'temperature') {
     const sourceUnit = temperatureUnit(source);
-    if (!sourceUnit) return invalid('unit', 'Temperature sensor must report °C, °F or K.');
+    if (!sourceUnit) return invalid('unit', text(hass,'measurement.temperatureUnit'));
     const c = sourceUnit === '°F' ? (value - 32) * 5 / 9 : sourceUnit === 'K' ? value - 273.15 : value;
-    if (c < -273.15) return invalid('value', 'Temperature is below absolute zero.');
+    if (c < -273.15) return invalid('value', text(hass,'measurement.absoluteZero'));
     converted = fromCelsius(c, target);
   } else {
     const expected = mode === 'power' ? ['W', 'kW'] : ['Wh', 'kWh'];
-    if (!expected.includes(source)) return invalid('unit', `${metricNames[mode]} sensor must report ${expected.join(' or ')}.`);
+    if (!expected.includes(source)) return invalid('unit', text(hass,mode === 'power' ? 'measurement.powerUnit' : 'measurement.energyUnit'));
     converted = value * (source.startsWith('k') ? 1000 : 1) / (target.startsWith('k') ? 1000 : 1);
     if (mode === 'energy') {
       const reportedPeriod = measurementPeriod(attributes.meter_period || attributes.period);
       const declaredPeriod = measurementPeriod(bindingPeriod);
-      if (reportedPeriod && declaredPeriod && reportedPeriod !== declaredPeriod) return invalid('period', `Declared period ${declaredPeriod} does not match the sensor's ${reportedPeriod} period.`);
+      if (reportedPeriod && declaredPeriod && reportedPeriod !== declaredPeriod) return invalid('period', text(hass,'measurement.declaredPeriod',{declared:declaredPeriod,reported:reportedPeriod}));
       const actualPeriod = declaredPeriod || reportedPeriod;
-      if (!base.period) return invalid('period', 'Choose the energy period to display.');
-      if (!actualPeriod) return invalid('period', 'Confirm the period represented by this energy sensor.');
-      if (actualPeriod !== base.period) return invalid('period', `Sensor period ${actualPeriod} does not match ${base.period}.`);
+      if (!base.period) return invalid('period', text(hass,'measurement.choosePeriod'));
+      if (!actualPeriod) return invalid('period', text(hass,'measurement.confirmPeriod'));
+      if (actualPeriod !== base.period) return invalid('period', text(hass,'measurement.periodMismatch',{actual:actualPeriod,period:base.period}));
     }
   }
-  if (!finite(converted)) return invalid('value', 'Converted reading is outside the supported numeric range.');
+  if (!finite(converted)) return invalid('value', text(hass,'measurement.convertedRange'));
   return { ...base, value: converted, sourceUnit: source, status: 'ready' };
 }
 
 // A device with two power entities may expose alternative versions of one reading. Choose one,
 // or explicitly mark independent channels. Circuit totals and their parts must share a group.
-export function aggregateMeasurements(binding = {}, states = {}, registry = {}, options = {}) {
+export function aggregateMeasurements(binding = {}, states = {}, registry = {}, options = {}, hass) {
   binding = plain(binding) || Array.isArray(binding) ? binding : {};
   const mode = options.mode;
   const unit = outputUnit(mode, options.unit);
@@ -86,9 +91,9 @@ export function aggregateMeasurements(binding = {}, states = {}, registry = {}, 
   for (const raw of list) {
     const source = typeof raw === 'string' ? { entity: raw } : plain(raw) ? raw : {};
     if (source.enabled === false) continue;
-    if (typeof source.entity !== 'string' || !source.entity.trim()) { diagnostics.push(issue('binding', 'Choose a sensor entity.')); continue; }
+    if (typeof source.entity !== 'string' || !source.entity.trim()) { diagnostics.push(issue('binding', text(hass,'aggregate.sensor'))); continue; }
     const entity = source.entity.trim();
-    if (seen.has(entity)) { diagnostics.push(issue('duplicate_entity', 'Duplicate entity is counted once.', entity)); continue; }
+    if (seen.has(entity)) { diagnostics.push(issue('duplicate_entity', text(hass,'aggregate.duplicate'), entity)); continue; }
     seen.add(entity);
     const device = at(registry, entity)?.device_id;
     const group = typeof source.group === 'string' && source.group.trim() ? source.group.trim() : null;
@@ -99,7 +104,7 @@ export function aggregateMeasurements(binding = {}, states = {}, registry = {}, 
   const allowed = mode === 'temperature' ? ['mean', 'min', 'max', 'median'] : ['sum', 'mean', 'min', 'max'];
   const result = { value: null, unit, aggregation, requested, valid: 0, sources: [], diagnostics, status: 'missing', scopeConfirmed: binding.independent_meters === true || selected.every((s) => !!s.group || s.independent === true) };
   if (!Object.hasOwn(metricNames, mode) || !unit || !allowed.includes(aggregation)) {
-    diagnostics.push(issue('aggregation', 'Choose a valid aggregation and display unit.')); return { ...result, status: 'invalid' };
+    diagnostics.push(issue('aggregation', text(hass,'aggregate.choose'))); return { ...result, status: 'invalid' };
   }
   let chosen = selected;
   if (mode !== 'temperature') {
@@ -111,18 +116,18 @@ export function aggregateMeasurements(binding = {}, states = {}, registry = {}, 
       if (group.length < 2) chosen.push(...group);
       else if (totals.length === 1 && group.every((s) => s.role === 'total' || s.role === 'part')) {
         chosen.push(totals[0]);
-        diagnostics.push(issue('parts_excluded', 'Circuit total is selected; its component meters are excluded.', totals[0].entity));
+        diagnostics.push(issue('parts_excluded', text(hass,'aggregate.parts'), totals[0].entity));
       } else if (group[0].group && group.every((s) => s.role === 'part')) chosen.push(...group);
       else if (!group[0].group && binding.independent_meters === true) chosen.push(...group);
-      else diagnostics.push({ ...issue('meter_conflict', 'Choose one reading per device/circuit, or identify independent meter parts.'), choices: group.map((s) => s.entity) });
+      else diagnostics.push({ ...issue('meter_conflict', text(hass,'aggregate.conflict')), choices: group.map((s) => s.entity) });
     }
     if (diagnostics.some((d) => d.code === 'meter_conflict')) return { ...result, status: 'invalid' };
     if (aggregation === 'sum' && chosen.length > 1 && !result.scopeConfirmed) {
-      diagnostics.push({ ...issue('meter_scope', 'Confirm that these sensors measure separate loads, or assign circuit groups. Avoid choosing both a circuit total and its component meters.'), choices: chosen.map((s) => s.entity) });
+      diagnostics.push({ ...issue('meter_scope', text(hass,'aggregate.scope')), choices: chosen.map((s) => s.entity) });
       return { ...result, status: 'invalid' };
     }
   }
-  const readings = chosen.map((s) => ({ ...readMeasurement(states, s.entity, mode, { ...options, bindingPeriod: s.period || binding.period }), key: s.key, role: s.role || null }));
+  const readings = chosen.map((s) => ({ ...readMeasurement(states, s.entity, mode, { ...options, bindingPeriod: s.period || binding.period },hass), key: s.key, role: s.role || null }));
   result.sources = readings;
   result.requested = chosen.length;
   for (const r of readings) diagnostics.push(...r.diagnostics);
@@ -138,7 +143,7 @@ export function aggregateMeasurements(binding = {}, states = {}, registry = {}, 
   result.value = aggregation === 'min' ? values[0] : aggregation === 'max' ? values.at(-1)
     : aggregation === 'median' ? (values[Math.floor((values.length - 1) / 2)] + values[Math.floor(values.length / 2)]) / 2
       : aggregation === 'mean' ? sum / values.length : sum;
-  if (!finite(result.value)) { result.value = null; result.status = 'invalid'; diagnostics.push(issue('value', 'Combined reading is outside the supported numeric range.')); }
+  if (!finite(result.value)) { result.value = null; result.status = 'invalid'; diagnostics.push(issue('value', text(hass,'aggregate.range'))); }
   else result.status = good.length < readings.length || diagnostics.some((d) => d.code === 'binding') ? 'partial' : 'ready';
   return result;
 }
@@ -168,7 +173,7 @@ function resolvedRooms(rooms = [], floors = [], visibleFloors = 'all') {
   });
 }
 
-export function buildRoomOverlays({ rooms = [], floors = [], states = {}, entities = {}, visibleFloors = 'all', config = {} } = {}) {
+export function buildRoomOverlays({ rooms = [], floors = [], states = {}, entities = {}, visibleFloors = 'all', config = {}, hass } = {}) {
   config = plain(config) ? config : {};
   const mode = config.mode || 'off';
   const stats = { rooms: 0, ready: 0, partial: 0, missing: 0, unavailable: 0, invalid: 0, total: null, totalReason: null };
@@ -178,9 +183,9 @@ export function buildRoomOverlays({ rooms = [], floors = [], states = {}, entiti
   const normalized = resolvedRooms(rooms, floors, visibleFloors);
   const output = normalized.map((room) => {
     const binding = at(config.bindings, room.id) || {};
-    const metric = aggregateMeasurements(binding, states, entities, { mode, unit: config.unit, period: config.period });
-    const value = metric.value === null ? metric.status === 'missing' ? 'No reading' : metric.status === 'unavailable' ? 'Unavailable' : 'Check sensor choices' : `${fmt(metric.value)} ${metric.unit}`;
-    const suffix = metric.status === 'partial' ? ` (partial: ${metric.valid}/${metric.requested} readings)` : '';
+    const metric = aggregateMeasurements(binding, states, entities, { mode, unit: config.unit, period: config.period },hass);
+    const value = metric.value === null ? text(hass,metric.status === 'missing' ? 'overlay.missing' : metric.status === 'unavailable' ? 'overlay.unavailable' : 'overlay.choices') : `${fmt(metric.value)} ${metric.unit}`;
+    const suffix = metric.status === 'partial' ? text(hass,'overlay.partial',{valid:metric.valid,requested:metric.requested}) : '';
     stats[metric.status]++; stats.rooms++;
     return { ...room, ...metric, label: `${room.name}: ${value}${suffix}` };
   });
@@ -203,25 +208,26 @@ export function buildRoomOverlays({ rooms = [], floors = [], states = {}, entiti
       if (previous && previous !== room.id) overlap = true;
       seen.set(source.key, room.id);
     }
-    if (overlap) stats.totalReason = 'Meters overlap across rooms; no combined total is shown.';
-    else if (configured.some((r) => r.status !== 'ready' || r.aggregation !== 'sum')) stats.totalReason = 'Combined total needs complete readings and Sum aggregation in every configured room.';
-    else if (configured.length > 1 && !configured.every((r) => r.scopeConfirmed)) stats.totalReason = 'Confirm that room meters measure separate loads before showing a combined total.';
+    if (overlap) stats.totalReason = text(hass,'overlay.overlap');
+    else if (configured.some((r) => r.status !== 'ready' || r.aggregation !== 'sum')) stats.totalReason = text(hass,'overlay.complete');
+    else if (configured.length > 1 && !configured.every((r) => r.scopeConfirmed)) stats.totalReason = text(hass,'overlay.scope');
     else { const total = configured.reduce((sum, r) => sum + r.value, 0); if (finite(total)) stats.total = total; }
   }
-  const title = mode === 'energy' ? `${metricNames[mode]} (${period || 'choose period'})` : metricNames[mode] || 'Choose an overlay';
+  const metricTitle = Object.hasOwn(metricNames,mode) ? text(hass,`metric.${mode}`) : text(hass,'legend.choose');
+  const title = mode === 'energy' ? text(hass,'legend.energy',{metric:metricTitle,period:period || text(hass,'legend.choosePeriod')}) : metricTitle;
   return { rooms: output, stats, legend: { mode, title, unit, period, min, max, valid: validScale && validPalette && !!unit,
     palette, stops: validScale && validPalette ? [0, .25, .5, .75, 1].map((t) => ({ value: min + t * (max - min), color: statusColor(min + t * (max - min), min, max, palette) })) : [],
-    label: validScale && validPalette && unit ? `${title}: ${fmt(min)}–${fmt(max)} ${unit}. Grey means no valid reading; partial totals are labelled.` : 'Choose a supported unit, palette and a maximum greater than the minimum.' } };
+    label: validScale && validPalette && unit ? text(hass,'legend.label',{title,min:fmt(min),max:fmt(max),unit}) : text(hass,'legend.invalid') } };
 }
 
 const ALERT_TYPES = {
-  smoke: { icon: 'mdi:smoke-detector', trigger: ['on'], clearStates: ['off'], active: 'Smoke detected', clear: 'No smoke detected' },
-  leak: { icon: 'mdi:water-alert', trigger: ['on'], clearStates: ['off'], active: 'Leak detected', clear: 'No leak detected' },
-  unlocked: { icon: 'mdi:lock-open', trigger: ['unlocked'], clearStates: ['locked'], active: 'Door unlocked', clear: 'Door locked' },
-  custom: { icon: 'mdi:alert', trigger: [], active: 'Alert active', clear: 'Alert clear' },
+  smoke: { icon: 'mdi:smoke-detector', trigger: ['on'], clearStates: ['off'], active: 'smoke.active', clear: 'smoke.clear' },
+  leak: { icon: 'mdi:water-alert', trigger: ['on'], clearStates: ['off'], active: 'leak.active', clear: 'leak.clear' },
+  unlocked: { icon: 'mdi:lock-open', trigger: ['unlocked'], clearStates: ['locked'], active: 'unlocked.active', clear: 'unlocked.clear' },
+  custom: { icon: 'mdi:alert', trigger: [], active: 'custom.active', clear: 'custom.clear' },
 };
 
-export function alertState(binding = {}, state, { latched = false, acknowledged = false } = {}) {
+export function alertState(binding = {}, state, { latched = false, acknowledged = false } = {}, hass) {
   binding = plain(binding) ? binding : {};
   const type = at(ALERT_TYPES, binding.type || 'custom');
   const triggers = binding.trigger_states === undefined ? type?.trigger : binding.trigger_states;
@@ -230,14 +236,16 @@ export function alertState(binding = {}, state, { latched = false, acknowledged 
     && (clears === undefined || (Array.isArray(clears) && clears.length > 0 && clears.every((v) => typeof v === 'string' && v.trim())))
     && ['state', 'latched'].includes(binding.clear_rule || 'state');
   const raw = state?.state;
-  const good = typeof raw === 'string' && raw.trim() && raw !== 'unknown' && raw !== 'unavailable';
+  const restored = state?.attributes?.restored === true;
+  const good = !restored && typeof raw === 'string' && raw.trim() && raw !== 'unknown' && raw !== 'unavailable';
   const triggered = !!(valid && good && triggers.some((v) => v.trim().toLowerCase() === raw.toLowerCase()));
   const confirmed = triggered || (good && (clears === undefined || clears.some((v) => v.trim().toLowerCase() === raw.toLowerCase())));
   const keep = binding.clear_rule === 'latched' && latched && !acknowledged;
   const active = triggered || keep;
   const status = !valid ? 'invalid' : !state ? 'missing' : !good || !confirmed ? 'unavailable' : active ? 'active' : 'clear';
-  const message = status === 'invalid' ? 'Choose an alert type, trigger states and clearing rule.' : status === 'missing' ? 'Sensor missing'
-    : status === 'unavailable' ? active ? 'Alert latched; sensor unavailable' : 'Sensor unavailable' : active ? triggered ? type.active : 'Alert latched; acknowledge to clear' : type.clear;
+  const message = text(hass,`alert.${status === 'invalid' ? 'invalid' : status === 'missing' ? 'missing'
+    : status === 'unavailable' ? restored ? active ? 'latchedRestored' : 'restored'
+      : active ? 'latchedUnavailable' : 'unavailable' : active ? triggered ? type.active : 'acknowledge' : type.clear}`);
   return { status, active: valid && active, triggered, latched: valid && binding.clear_rule === 'latched' && active, message, icon: type?.icon || ALERT_TYPES.custom.icon };
 }
 
@@ -247,7 +255,51 @@ export function alertPulse(timeMs = 0, reducedMotion = false) {
   return { scale: 1 + .4 * wave, opacity: .35 + .5 * wave, animate: true };
 }
 
-export function buildAlerts({ bindings = [], states = {}, positions = {}, rooms = [], floors = [], visibleFloors = 'all', previousLatches = {}, acknowledged = [] } = {}) {
+/** Explicit opt-in locations are SOURCE plan metres, without reference guesses.
+ * Bindings without location_mode retain their original automatic precedence. */
+export function resolveAlertLocation(binding, { rooms = [], floors = [], positions = {}, visibleFloors = 'all' } = {}, hass) {
+  const mode = binding?.location_mode;
+  const fail = (code, message) => ({ location: null, shown: false, diagnostics: [issue(code, message, binding?.entity)] });
+  if (!['room', 'marker', 'coordinates'].includes(mode)) return fail('location_mode', text(hass,'location.mode'));
+  const reference = (value, keys) => {
+    const values = keys.filter((key) => Object.hasOwn(value, key)).map((key) => value[key]);
+    if (!values.length) return { value: undefined };
+    return values.every((id) => typeof id === 'string' && !!id.trim() && id === values[0]) ? { value: values[0] } : { invalid: true };
+  };
+  let x, y, z, floorId, sourceShown = true;
+  if (mode === 'room') {
+    const ref = reference(binding, ['roomId', 'room_id']);
+    const matches = Array.isArray(rooms) ? rooms.filter((entry) => (entry?.room || entry)?.id === ref.value) : [];
+    if (ref.invalid || !ref.value || matches.length !== 1) return fail('room', text(hass,'location.roomMissing'));
+    const entry = matches[0], room = entry.room || entry, polygon = room.polygon || room.outline;
+    const roomFloor = reference(room, ['floorId', 'floor_id']);
+    if (roomFloor.invalid || entry.floorId !== undefined && roomFloor.value !== undefined && entry.floorId !== roomFloor.value) return fail('floor', text(hass,'location.roomFloor'));
+    floorId = entry.floorId ?? roomFloor.value;
+    if (!Array.isArray(polygon) || polygon.length < 3 || !polygon.every(point) || !finite(signedArea(polygon)) || Math.abs(signedArea(polygon)) < 1e-9) return fail('room', text(hass,'location.room'));
+    [x, y] = centroid(polygon); z = .12; sourceShown = entry.shown !== false && room.shown !== false;
+  } else if (mode === 'marker') {
+    const ref = reference(binding, ['position_key', 'markerId']);
+    const pos = ref.value && at(positions, ref.value);
+    if (ref.invalid || !ref.value || !plain(pos)) return fail('marker', text(hass,'location.marker'));
+    const override = reference(binding, ['floorId', 'floor_id']), sourceFloor = reference(pos, ['floorId', 'floor_id']);
+    if (override.invalid || sourceFloor.invalid) return fail('floor', text(hass,'location.floorConflict'));
+    const sourceFloors = Array.isArray(floors) ? floors.filter((floor) => floor?.id === sourceFloor.value) : [];
+    if (!sourceFloor.value || sourceFloors.length !== 1 || !finite(sourceFloors[0].elevation) || sourceFloors[0].stale) return fail('floor', text(hass,'location.markerFloor'));
+    x = pos.x; y = pos.y; z = pos.z ?? .12; floorId = override.value ?? sourceFloor.value;
+    sourceShown = pos.shown !== false && pos.visible !== false;
+  } else {
+    const ref = reference(binding, ['floorId', 'floor_id']);
+    if (ref.invalid) return fail('floor', text(hass,'location.floorConflict'));
+    x = binding.x; y = binding.y; z = binding.z; floorId = ref.value;
+  }
+  if (![x, y, z].every(finite) || Math.abs(x) > 1e6 || Math.abs(y) > 1e6 || Math.abs(z) > 1000) return fail('coordinates', text(hass,'location.coordinates'));
+  const matches = Array.isArray(floors) ? floors.filter((floor) => floor?.id === floorId) : [];
+  if (typeof floorId !== 'string' || !floorId.trim() || matches.length !== 1 || !finite(matches[0].elevation) || matches[0].stale) return fail('floor', text(hass,'location.floor'));
+  const visible = visibleFloors === 'all' ? true : (Array.isArray(visibleFloors) ? visibleFloors : [visibleFloors]).includes(floorId);
+  return { location: { x, y, z, floorId, elevation: matches[0].elevation }, shown: sourceShown && visible && binding.shown !== false, diagnostics: [] };
+}
+
+export function buildAlerts({ bindings = [], states = {}, positions = {}, rooms = [], floors = [], visibleFloors = 'all', previousLatches = {}, acknowledged = [], hass } = {}) {
   rooms = Array.isArray(rooms) ? rooms.filter(Boolean) : [];
   floors = Array.isArray(floors) ? floors.filter(Boolean) : [];
   const normalizedRooms = resolvedRooms(rooms, floors, 'all');
@@ -262,7 +314,7 @@ export function buildAlerts({ bindings = [], states = {}, positions = {}, rooms 
     if (typeof id !== 'string' || !id || used.has(id)) { stats.invalid++; continue; }
     used.add(id);
     const state = at(states, binding.entity);
-    const result = alertState(binding, state, { latched: !!at(previousLatches, id), acknowledged: ack.has(id) });
+    const result = alertState(binding, state, { latched: !!at(previousLatches, id), acknowledged: ack.has(id) },hass);
     nextLatches[id] = result.latched;
     const roomId = binding.roomId || binding.room_id;
     const rawRoom = rooms.find((r) => (r.room || r).id === roomId);
@@ -272,13 +324,18 @@ export function buildAlerts({ bindings = [], states = {}, positions = {}, rooms 
     if (binding.x !== undefined || binding.y !== undefined) { x = binding.x; y = binding.y; z = binding.z ?? .12; floorId = binding.floorId || binding.floor_id || room?.floorId; }
     else if (pos) { x = pos.x; y = pos.y; z = pos.z ?? .12; floorId = binding.floorId || binding.floor_id || pos.floorId || pos.floor_id; }
     else if (room) { [x, y] = room.center; z = binding.z ?? .12; floorId = room.floorId; }
-    const location = finite(x) && finite(y) && finite(z) && typeof floorId === 'string' && (!floors.length || elevation.has(floorId))
+    let location = finite(x) && finite(y) && finite(z) && typeof floorId === 'string' && (!floors.length || elevation.has(floorId))
       ? { x, y, z, floorId, elevation: elevation.get(floorId) || 0 } : null;
-    const shown = !!location && (!visible || visible.has(floorId)) && binding.shown !== false && rawRoom?.shown !== false;
+    let shown = !!location && (!visible || visible.has(floorId)) && binding.shown !== false && rawRoom?.shown !== false;
+    let locationDiagnostics = location ? [] : [issue('location', text(hass,'location.automatic'), binding.entity)];
+    if (Object.hasOwn(binding, 'location_mode')) {
+      const explicit = resolveAlertLocation(binding, { rooms, floors, positions, visibleFloors },hass);
+      location = explicit.location; shown = explicit.shown; locationDiagnostics = explicit.diagnostics;
+    }
     const name = binding.label || state?.attributes?.friendly_name || binding.entity || id;
     alerts.push({ id, entity: binding.entity, ...result, location, shown,
       label: `${name}: ${result.message}`, color: result.active ? '#d83d46' : UNKNOWN_STATUS_COLOR,
-      diagnostics: location ? [] : [issue('location', 'Choose a valid floor and position, or a room with an outline.', binding.entity)] });
+      diagnostics: locationDiagnostics });
     stats[result.status]++; if (result.active && result.status !== 'active') stats.active++; if (!location) stats.unplaced++;
   }
   return { alerts, nextLatches, stats };

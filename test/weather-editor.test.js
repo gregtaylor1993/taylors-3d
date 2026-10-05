@@ -41,6 +41,43 @@ function setup({ layout = {}, config = {}, states = {}, entities = {}, devices =
 afterEach(() => document.body.replaceChildren());
 
 describe('visual weather configuration', () => {
+  it.each([
+    ['wrong current entity ID', { state: 'rainy', entity_id: 'sensor.explicit_wrong_domain', attributes: {} }],
+    ['non-string state', { state: 12, attributes: {} }],
+    ['array current state', ['rainy']],
+    ['array current attributes', { state: 'rainy', attributes: ['rainy'] }],
+    ['null current attributes', { state: 'rainy', attributes: null }],
+  ])('rejects a %s as a new weather source while retaining its exact saved ID as a disabled choice', (_, malformed) => {
+    const sourceId = 'weather.malformed_exact', states = { [sourceId]: malformed };
+    const fresh = setup({ states });
+    expect(fresh.editor.sourceChoices.some((entry) => entry.value === sourceId)).toBe(false);
+    // A synthetic option cannot make an invalid source eligible for a native change.
+    const forged = document.createElement('option'); forged.value = sourceId; fresh.input('entity').append(forged);
+    fresh.change('entity', sourceId);
+    expect(fresh.editor.draft.entity).toBe(''); expect(fresh.editor.dirty).toBe(false);
+    const imported = { ...saved, entity: sourceId, extra: { retained: 'raw_import' } };
+    const existing = setup({ layout: { weather: imported }, states });
+    const option = [...existing.input('entity').options].find((entry) => entry.value === sourceId);
+    expect(option).toBeDefined(); expect(option.disabled).toBe(true); expect(existing.input('entity').value).toBe(sourceId);
+    existing.change('quality', 'static'); existing.click('save');
+    expect(existing.card._layout.weather).toBe(imported); expect(existing.editor.draft.entity).toBe(sourceId);
+    for (const ctx of [fresh, existing]) { expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled(); expect(ctx.card._hass.callService).not.toHaveBeenCalled(); }
+  });
+
+  it('keeps explicit matching or absent current entity IDs, unknown/unavailable and restored weather selectable without claiming a current reading', () => {
+    const { editor, card } = setup({ states: {
+      'weather.matching': { entity_id: 'weather.matching', state: 'rainy', attributes: {} },
+      'weather.no_attributes': { state: 'rainy' },
+      'weather.unknown': weatherState('Unknown source', 'unknown'),
+      'weather.offline': weatherState('Offline source', 'unavailable'),
+      'weather.restored': weatherState('Stored source', 'rainy', { restored: true }),
+      'weather.restored_malformed': weatherState('Stored malformed flag', 'rainy', { restored: 'false' }),
+    } });
+    const choices = new Map(editor.sourceChoices.map((entry) => [entry.value, entry]));
+    for (const id of ['matching', 'no_attributes', 'unknown', 'offline', 'restored', 'restored_malformed']) expect(choices.get(`weather.${id}`)?.selectable).toBe(true);
+    expect(card.commitFeatureLayout).not.toHaveBeenCalled(); expect(card._hass.callService).not.toHaveBeenCalled();
+  });
+
   it('starts off with no guessed source and filters selectable entities while retaining offline weather', () => {
     const { input, card, host } = setup({ states: {
       'weather.hidden': weatherState('Hidden'), 'weather.diagnostic': weatherState('Diagnostic'),

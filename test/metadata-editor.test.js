@@ -59,4 +59,31 @@ describe('metadata choices in the visual editor', () => {
     expect(options.find((option) => option.value === 'light.missing').textContent).toContain('Missing entity');
     expect(edit.panel.querySelector('[data-field="obj-entity"]').value).toBe('light.missing');
   });
+  it('filters object and controller suggestions by area while retaining exact saved choices', () => {
+    const edit = fixture(), model = edit.card.modelBindings();
+    model.manifest.objects = [{ id: 'lamp', type: 'light', level: 'ground', room: 'kitchen', group: 'relay', suggest: {} }];
+    edit.card.modelBindings = () => model; edit.objExpanded.add('ground/kitchen');
+    edit.card._layout.objects = { lamp: { entity: 'light.outside' } }; edit.card._layout.groups = { relay: { entity: 'switch.missing' } };
+    edit.card._hass.states = { 'light.inside': { state: 'on', attributes: {} }, 'light.outside': { state: 'on', attributes: {} }, 'switch.inside': { state: 'on', attributes: {} } };
+    edit.card._hass.entities = { 'light.inside': { area_id: 'kitchen' }, 'switch.inside': { area_id: 'kitchen' } };
+    edit.panel.innerHTML = edit._objectsTab(); const filter = edit.panel.querySelector('[data-field="obj-picker-area"]');
+    expect(filter).not.toBeNull(); filter.value = 'area:kitchen'; edit.render = vi.fn();
+    edit._onPanelChange({ target: filter }); edit.panel.innerHTML = edit._objectsTab();
+    expect(edit.panel.querySelector('#fp-obj-light').textContent).toContain('Outside current filter');
+    expect([...edit.panel.querySelectorAll('#fp-grp-ents option')].map((option) => option.value)).toEqual(['light.inside', 'switch.inside', 'switch.missing']);
+    expect(edit.card._layout.objects.lamp.entity).toBe('light.outside'); expect(edit.card._commit).not.toHaveBeenCalled();
+  });
+  it('rejects newly typed object and controller IDs that became hidden while keeping unchanged saved links', () => {
+    const edit = fixture(), model = edit.card.modelBindings();
+    model.manifest.objects = [{ id: 'lamp', type: 'light', group: 'relay', suggest: {} }]; edit.card.modelBindings = () => model;
+    edit.card._hass.states = { 'light.hidden': { state: 'on', attributes: {} } };
+    edit.card._hass.entities = { 'light.hidden': { hidden_by: 'user' } }; edit.render = vi.fn();
+    for (const [field, id] of [['obj-entity', 'lamp'], ['grp-entity', 'relay']]) {
+      edit._onPanelChange({ target: { dataset: { field, id }, value: 'light.hidden' } });
+    }
+    expect(edit.card._commit).not.toHaveBeenCalled();
+    edit.card._layout.objects.lamp = { entity: 'light.hidden' };
+    edit._onPanelChange({ target: { dataset: { field: 'obj-entity', id: 'lamp' }, value: 'light.hidden' } });
+    expect(edit.card._commit).toHaveBeenCalledOnce();
+  });
 });

@@ -6,6 +6,66 @@ Created: 4 October 2026. Starting point: version `0.1.0`, base commit `055e30f2e
 
 **First installable release:** [v0.1.0](https://github.com/gregtaylor1993/taylors-3d/releases/tag/v0.1.0) contains verified checkpoint `93ab558`, including the chosen navigation group and later verified features through ambient idle mode. The published HACS zip's frontend matches the tested build byte for byte. Wall, furniture and separated-floor work is recorded separately below. Later historical notes describe their checkpoint dates; this release is now available.
 
+**Current work:** the combined `0.2.0` source candidate brings the recorded features and photo-inspired House layout together. Its final local checks and remaining acceptance work are recorded below. The published HACS release and local source candidate remain separate; package/publication status is recorded with this checkpoint. Earlier package and CI notes describe their own checkpoints.
+
+## Combined 0.2.0 local checkpoint
+
+Recorded: **2026-10-05**. Source code freeze: `bb702089c6324d4e99b4c7ae3ba559b555a4f7f2d7de482bd39bc9f411e6c3b2`.
+This records the exact tested version; it does not mark every feature Done.
+
+The combined version includes the desktop House menu, right-hand room/device
+controls, mobile menu, bubble bar and mini-map. Recent fixes keep a fresh control
+action separate from a cancelled earlier action, preserve missing furniture-floor
+choices, and retain coordinates when moving between overlay fields. Exact model-position
+details stay open after an edit, and pressing Tab can continue to the next position
+field. Companion sliders show the saved coordinates. The Tracking Edit button
+has a minimum width and height of 44 pixels, making it easier to tap.
+These changes help you finish a setting for the device and place you selected
+using the current Home Assistant connection. Card labels use English, German,
+French and Spanish; your room/device names and actual readings retain their own
+values.
+
+| Final local check | Recorded result |
+|---|---|
+| Complete JavaScript unit run | 5663/5663 tests in 185/185 files; terminal exit 0 |
+| Lint | Passed; terminal exit 0 |
+| Build | Passed; terminal exit 0 |
+| Source/bundle freshness and integration copy | Passed; terminal exit 0; both frontend copies match |
+| Selected native browser scripts | 11/11 on the same frozen source; source and built-card scenarios use simulated HA |
+| Tested frontend checksum (SHA-256) | `af61a40ddec2529ed9a824363bb23fc6b0edf3cbc4c618fdac7a84a7f08ef9d3` |
+| Local installation package | `taylors3d-phase19-local-candidate-r2.zip`: 20 independently checked entries; packaged frontend matches the tested build |
+
+The selected browser scripts are `visual-options-check`, `room-actions-check`,
+`security-check`, `localization-check`, `overlays-check`, `edit-check`,
+`runtime-localization-check`, `house-check`, `lighting-check`, `panels-check`
+and `furniture-check`. Their native source fingerprint is `cfbde2b8ed6109bdf36bbd1a526452b32f9466311d99009ddad92b8bca71abbe`.
+Full local logs and the verification ledger are retained separately; they are
+not presented as published links in this repository.
+
+Earlier runs remain historical: the first combined run passed 18/29 scripts;
+a later whole 29-script run passed 25 and failed 4; a later selected eight-script
+run passed 3 and failed 5. Their failures and diagnoses remain preserved.
+A subsequent selected 11-script run passed 10 and failed 1. Its remaining visual-options failure prompted further model-position and Tracking touch-target repairs; that run remains historical.
+The final eleven-script pass does not mean all 29 scripts were rerun on this version.
+
+The local ZIP is byte-checked, but has not been installed or validated in actual
+Home Assistant. This candidate's public push and release/HACS publication are
+pending; the existing published HACS release remains **v0.1.0**. Use the named
+local package when evaluating this candidate. Local package checks do not
+prove the candidate's full GitHub/Linux Home Assistant CI, release installation
+or use beside the original integration.
+
+For full dashboard backup (F04), 157 of 158 standard-library backend methods
+passed with one Windows symlink skip. The 83 real-HA cases are prepared; Windows
+`fcntl` prevented that HA harness from collecting, so it has no passing local
+HA result. Record any later Linux result separately before changing that status.
+Your actual house model, device integrations, touch use and wall-panel performance
+also remain to verify.
+
+F24 currently separates floor geometry side by side or into stacked layers in
+one house view. Independent floor panels/cameras are not implemented. Taylor's
+choice about those panels remains pending; this acceptance point stays open.
+
 The aim is a realistic, useful Home Assistant house dashboard that is comfortable to use on a wall panel. Taylor should be able to configure it visually, see what is happening at home, and reach the relevant controls by tapping a room or device.
 
 ## How we track work
@@ -33,11 +93,11 @@ For each implementation, update its status, record the changed behavior, link it
 | ID | Feature | Existing foundation | Status |
 |---|---|---|---|
 | F01 | Named camera presets and automation-triggered flights | Named saved 3D/top views and smooth camera moves | Testing |
-| F02 | Complete visual configuration | Visual card editor and in-card edit tabs; new overlay/screen controls | In progress |
+| F02 | Complete visual configuration | Combined local candidate adds imported-setting recovery, exact placement and remaining advanced controls; joint and real-HA checks remain | In progress |
 | F03 | General undo and redo | General session history and grouped gestures | Testing |
-| F04 | Full dashboard backup and restore | Layout JSON import/export; complete-dashboard archive work started | In progress |
+| F04 | Full dashboard backup and restore | Combined local Data screen connects whole-dashboard export, inspection, preparation and explicit new-dashboard creation; Linux HA/browser checks remain | In progress |
 | F05 | Temperature, power and energy views | Sensor readings, conversion, floor overlays and visual bindings | Testing |
-| F06 | Security doors/windows and animated doors | Exact contacts, owned model outlines and explicit rigid hinge editor | In progress |
+| F06 | Security doors/windows and animated doors | Combined local candidate adds exact plan locations and distinct lock states alongside model contacts/hinges; browser/household checks remain | In progress |
 | F07 | Camera coverage cones and live-feed popups | Native HA camera viewer, explicit approximate coverage and visual editor | Testing |
 | F08 | Presence: people/devices in rooms | Explicit room observations, anonymous activity and verified identity bindings | Testing |
 | F09 | Alert pulses at the affected location | Located, labelled smoke/leak/unlocked/custom alerts | Testing |
@@ -46,17 +106,17 @@ For each implementation, update its status, record the changed behavior, link it
 | F12 | Scene previews | Explicit light targets, current-light capture, editor and saved-bar controls verified; household checks remain | Testing |
 | F13 | Ambient idle rotation and night dimming | Optional delay/rotation and sun/quiet-hours picture dimming verified locally and by CI; household checks remain | Testing |
 | F14 | Camera-aware cut-away and glass/faded walls | Exact wall drafts, owned material copies and composed clipping pass full local/GitHub checks; actual-house checks remain | Testing |
-| F15 | Furniture packs and drag-and-drop placement | Validated pack storage, client, placement/editor and renderer foundations; not connected in the delivered card | In progress |
+| F15 | Furniture packs and drag-and-drop placement | Local furniture checkpoint passes complete JavaScript/browser checks and is packaged separately; complete dashboard backup and actual-house checks remain | Testing |
 | F16 | Baked shadows for wall panels | Saved shadow/lighting policy, authored texture diagnostics and external AO guide | Testing |
 | F17 | Deeper HA floors/areas/entity integration | Shared metadata, precision, filtered choices and missing-link diagnostics | In progress |
-| F18 | Room selection and room control panels | Edit-mode room/model picking | Testing |
-| F19 | Bottom bubble navigation bar | Top toolbar and view chips | Testing |
-| F20 | Rich device control popups | HA more-info and supported object popups | Testing |
-| F21 | Persistent 2D mini-map | Full-card Top view | Testing |
+| F18 | Room selection and room control panels | Room taps open responsive controls and readings; the local candidate adds explicit saved scene/script shortcuts | Testing |
+| F19 | Bottom bubble navigation bar | Saved view buttons, camera controls, map and editing with visual ordering and visibility settings | Testing |
+| F20 | Rich device control popups | Supported current light/media/climate/cover/lock/vacuum controls plus Home Assistant's All controls | Testing |
+| F21 | Persistent 2D mini-map | North-up floor map, current device/tracked symbols, camera focus and located alerts | Testing |
 | F22 | Cars appearing on the drive | Maintained vehicle occupancy/counts and fixed-expiry sighting bindings | Testing |
 | F23 | Robot vacuums moving while running | Measured/status actors with visual calibration and separate source-age forms | Testing |
-| F24 | Horizontal split floors and vertical layers | Explicit side-by-side/stacked display, canonical coordinates and visual drafts | In progress |
-| F25 | Translations, preview, screenshots and bundle checks | English service strings, mock HA, screenshots and source/bundle gates | In progress |
+| F24 | Horizontal split floors and vertical layers | Explicit side-by-side/stacked display in one house picture, canonical coordinates and visual drafts | Testing |
+| F25 | Translations, preview, screenshots and bundle checks | Common controls, feature editors, guidance and owned notices have English/German/French/Spanish keys; the final browser and CI gates remain | In progress |
 
 ## Proposed build order
 
@@ -93,6 +153,15 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 
 **Already present:** a visual Lovelace editor and the card's Rooms, Devices, Objects, Mower, Views, Model and Data tabs. Some advanced settings are still not exposed in a unified visual workflow.
 
+**Combined local candidate:** the visual card editor now exposes the starting named
+view and deliberate imported URL/floor/view override removal. Model controls keep
+exact position values and zero opacity; lighting includes realtime shadows with
+lamps off. Tracking, Cameras, Security and Overlays expose their supported advanced
+appearance, age, area-filter and exact-location choices. Existing drawn-plan floor
+measurements already live in Rooms → Advanced (no model); GLB floor geometry remains
+authored in its file. Focused tests pass separately. Joint regression and actual HA
+card-config persistence remain. See the [visual settings guide](docs/VISUAL-SETTINGS-GUIDE.md).
+
 **Complete when:** every supported setting has a labelled visual control, sensible defaults and validation. Entity pickers can be filtered by the feature and area. A user can set up rooms, models, views, bindings and new overlays without entering YAML. Existing configurations remain usable. The normal viewing interface stays simple, and editing respects HA administrator permissions.
 
 ### F03 — undo and redo
@@ -103,7 +172,7 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 
 **Complete when:** room geometry, device/furniture movement, bindings, view changes and visual settings can be undone and redone. One drag or slider gesture counts as one edit. A new edit after Undo clears the redo branch. Buttons and keyboard shortcuts work, and save failures are visible. Undo changes the dashboard's configuration; it must not reverse real device actions or live sensor updates. Define history limits and behavior after import/reload before implementation.
 
-**Current implementation:** defensive session snapshots, 100 edits / 8 MiB, grouped drags and pointer/keyboard sliders, Undo/Redo buttons and shortcuts, redo-branch clearing, and normal persistence/error state. Reload/key changes reset history; importing editable layout JSON is one edit. Replacing/deleting GLB bytes resets history because the server currently stores one model file; asset recovery belongs to F04. Furniture edits become covered when F15 exists. Live HA states/actions are excluded. Actual household editing and external Lovelace settings persistence still need verification.
+**Current implementation:** defensive session snapshots, 100 edits / 8 MiB, grouped drags and pointer/keyboard sliders, Undo/Redo buttons and shortcuts, redo-branch clearing, and normal persistence/error state. Reload/key changes reset history; importing editable layout JSON is one edit. Replacing/deleting GLB bytes resets history because the server currently stores one model file; asset recovery belongs to F04. Furniture placement and removal are covered by the local F15 candidate. Live HA states/actions are excluded. Actual household editing and external Lovelace settings persistence still need verification.
 
 ### F04 — full dashboard backup and restore
 
@@ -115,7 +184,18 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 
 **Complete when:** the agreed backup scope includes card settings, layout, views/presets, entity/area mappings, furniture and required model/assets. A restore preview shows what will change and which entities/areas/assets are missing. Restoring into a fresh setup reproduces the saved result, and the existing setup can be recovered if an import is rejected. Backup format/version and migration are documented.
 
-**Work started:** preserve the raw dashboard, exact layout IDs, original model bytes and licensed pack archives in a versioned package. Import will show a static preview and restore into an explicitly named new storage dashboard with new Taylor keys first. Home Assistant's save API has no shared transaction or revision lock; the existing dashboard will remain the recovery copy. External custom-card resources remain declared dependencies. Archive validation and actual Home Assistant/browser verification are still required; this is not delivered functionality yet.
+**Combined local candidate:** Edit → Data keeps Single-layout JSON separate from
+the whole-dashboard ZIP workflow. It reads the selected actual HA dashboard,
+preserves other cards and raw settings, and includes available original uploaded
+models and licensed pack ZIPs. Inspect is static and read-only; reviewed preparation
+copies assets into new Taylor keys; a separate deliberate action creates a new HA
+storage dashboard. External resources remain declared dependencies. There is no
+shared transaction or automatic retry, deletion or overwrite. Of 158 standard-library
+backend test methods, 157 pass and one Windows symlink case is skipped; 83 real-HA cases
+are prepared. Local HA testing stopped before collection because Windows lacks
+Unix `fcntl`; this is not a passing HA result. Client/editor checks pass separately;
+combined regression and native browser checks remain. See the
+[backup guide](docs/DASHBOARD-BACKUP-GUIDE.md).
 
 ### F05 — temperature, power and energy overlays
 
@@ -140,6 +220,14 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 **Needs:** inspect Taylor's actual GLB for independently movable door parts and hinge/pivot geometry. Those pivots have not been verified.
 
 **Phase 5 implementation:** Edit → Security drafts exact contact/object/state settings and optional rigid target/pivot/axis/angle offsets. Outlines are owned helpers; unknown/restored/stale readings stay uncertain. Source material and hierarchy remain intact; geometry, picking, occlusion, shadows and attached anchors refresh only after actual movement. No inferred hinge or device command. The dedicated browser suite passes 30 checks, and the complete local and GitHub regressions pass. Actual household checks remain. F06 stays In progress because this pass covers model contacts/hinges; separate plan security displays and lock-specific bindings are unfinished. [Security guide](docs/SECURITY-AND-WEATHER-GUIDE.md).
+
+**Combined local extension:** exact plan room/marker/coordinate locations and lock
+sources are now connected to the editor, existing 3D renderer and north-up mini-map.
+Unlocked does not mean open; locking, unlocking, jammed and unavailable remain
+distinct. Closed/locked indicators clear by default. New plan helpers have no own
+render loop, light or shadow pool. All 185 scoped security checks pass, including
+actual root/map held-source-change regressions. Serial source/bundle browser proof
+is prepared, not yet passed. This local extension is not in the HACS release.
 
 ### F07 — camera cones and live feeds
 
@@ -306,13 +394,31 @@ to the separately verified Phase 9. Actual-house checks remain. See the
 
 **Want:** choose furniture from reusable packs and drop it into rooms.
 
-**Already present:** furniture can be authored into a GLB and hidden by layer. There is no in-card furniture library.
+**Starting point:** furniture could be authored into a GLB and hidden by layer. The local checkpoint now adds an in-card furniture library.
 
 **Complete when:** local/imported licensed assets can be browsed, placed, moved, rotated, scaled and removed visually; dimensions fit the model's metre-based coordinates; placements survive reload and join undo/redo and full backups. Assets are counted against agreed tablet/performance limits.
 
 **Scope:** no signed shop, payment system or dependency on another project's commercial pack service is required. Preserve asset licences and attribution.
 
-**Foundation work:** immutable local pack storage, authenticated asset routes, a bounded library client, visual draft editor and a separate static furniture layer have been implemented in unshipped files. Integration setup and import permissions pass actual Home Assistant test-harness checks on the isolated validation branch, including restart/reload and adding the integration while HTTP is already running. The current main integration does not register those routes. Card wiring, native textured-asset decoding, drag placement, licence downloads, backups and complete regression remain before delivery.
+**Working candidate:** local licensed ZIPs can be imported and browsed, then placed,
+dragged in 3D or Top, rotated, scaled, copied, moved to an exact floor or removed.
+Save is one history step; Cancel, Undo and Redo retain the original house model.
+The separate layer follows floor separation and Section visibility. Original ZIP
+downloads retain the supplied models and licences; the included pack maker helps
+create a ZIP from an owned compatible GLB and its actual licence.
+
+Native source/bundle checks passed 107/107 after fixing shadow-root decimal input;
+the fixture decodes a real embedded texture, exercises native dragging and checks
+resource reuse and idle rendering. The final candidate has 4,114 passing JavaScript
+tests, lint and source/bundle matching. The final labels also pass 107/107 native
+checks; the complete regression includes the restored full House browser suite.
+Integration setup/import permissions
+passed the separate actual Home Assistant harness, including restart/reload and
+setup while HTTP is already running. The exact local checkpoint `5cfcea6` passes
+all 1,998 complete browser checks and is preserved as the separate 13-file
+`taylors3d-phase13-local-candidate.zip`. Its files match the pinned source. Exact
+checkpoint GitHub CI, full dashboard backup and actual house/tablet validation
+remain; layout JSON alone does not contain model/pack bytes.
 
 ### F16 — baked shadows
 
@@ -339,11 +445,36 @@ checks remain; the card does not create baked textures or rewrite a GLB.
 
 ### F17 — tight Home Assistant integration
 
+**Working metadata candidate:** Objects, Mower and Overlays have temporary
+All/Area/Unassigned filters and current Home Assistant names. Saved missing or
+filtered links remain warning choices; new links require current eligibility.
+Rooms, pins and mower locations retain exact missing floor IDs instead of
+silently moving to Ground. Every saved outline stays selectable even beside a
+model room. Views preserve missing floor choices until deliberately unchecked.
+Individual object/marker readings use Home Assistant precision; aggregate
+previews are labelled separately. Actual Objects Test rechecks current services,
+connection and entity eligibility before sending a deliberate command.
+
+The combined furniture/metadata candidate passes all 4,221 JavaScript tests in
+126 files, lint, build and bundle freshness. Its source/bundle metadata fixture
+passes 101/101 browser assertions and the furniture regression passes 107/107.
+Two test setup problems were corrected without weakening their assertions:
+the real edit-mode fixture now uses an actual card element, and the furniture
+browser helper waits for the current catalogue instead of clicking a replaced
+button. Complete browser regression, exact package checks, additional feature
+picker filters and actual household checks remain. See the
+[Home Assistant links guide](docs/HOME-ASSISTANT-LINKS-GUIDE.md).
+
 **Want:** floors, areas, devices and entity pickers follow HA's setup and respect useful registry metadata.
 
 **Delivered foundation:** one shared metadata helper resolves effective area/floor/device information, HA names, hidden/disabled/category flags, units, precision and filtered choices. Marker membership includes real state-only entities; ordinary reading changes keep marker/coverage objects and idle rendering stable. Sensor/climate readings prefer native HA formatting. Model-object/group and camera pickers use filtered names; missing selected IDs remain visible. Edit → Data reports saved references that need deliberate repair. Explicit deleted model room/floor links retain their ID; geometry is kept without inventing a new area, floor placement or height override. Exact-ID restoration recovers the link. GLB named-view geometry remains independent of HA area/floor assignments.
 
-**Still to do:** adopt these helpers in each future feature picker and test the actual household registry/integration versions. Entity renames are diagnosed as missing old IDs; there is no guess based on a similar name.
+**Combined local extension:** Data now checks scene previews, room shortcuts,
+security locations, weather and House sources against current exact IDs, including
+pending registry data and unreadable imported fields. 152 scoped checks pass.
+Scenes, Room shortcuts, Environment and House have current area filters; 253
+scoped editor checks pass. Native checks and actual household registry/integration
+versions still need testing. Entity renames are diagnosed as missing old IDs; there is no guess based on a similar name.
 
 **Complete when:** feature-specific pickers filter sensibly by domain, class, area and capabilities; display precision/units follow the available HA metadata; renamed, moved and removed entities/areas are handled visibly without corrupting the layout. Distinguish registry updates from explicitly chosen model-room bindings so a HA area change does not silently invent house geometry.
 
@@ -356,6 +487,15 @@ checks remain; the card does not create baked textures or rewrite a GLB.
 **Already present:** room outlines, model picking and edit-mode room selection. A normal-mode room control panel is new work.
 
 **Complete when:** tapping a room selects the correct room/floor and opens its panel; the panel lists that area's relevant devices, readings and available controls; room-level actions are configurable. A device tap reaches its own controls rather than also opening the room. Closing the panel restores navigation, and missing/empty rooms have an understandable result.
+
+**Combined local extension:** room panels can display explicitly saved scene and
+script shortcuts for that exact room. Opening a panel never runs them. Each press
+checks the current room, source and connection again. The visual Rooms-tab editor
+adds, names, orders and removes shortcuts with one Save, Undo/Redo and Cancel.
+**111 scoped checks** pass, including 48 editor checks. Saved obsolete or empty
+room rows can be removed deliberately, releasing the bounded list's capacity;
+Cancel and Undo preserve the previous list. Joint browser and actual
+Home Assistant checks remain. See the [room controls guide](docs/ROOM-AND-DEVICE-CONTROLS-GUIDE.md).
 
 ### F19 — bottom bubble bar
 
@@ -379,9 +519,25 @@ Navigation-only configuration changes preserve the selected viewing mode, tempor
 
 **Complete when:** popups offer controls supported by the selected entity, such as light brightness/colour, climate settings, locks/covers, camera feeds and vacuum actions. Unsupported controls are not advertised. Current state, errors and unavailable devices are visible. HA's standard more-info remains a fallback. Choose whether quick-toggle or popup is the default tap action, with a usable touch gesture for the other action.
 
+**Combined local extension:** the actual room/device popup now offers advertised
+media playback/volume, single-target thermostat temperature/mode, cover controls,
+lock/unlock and vacuum controls. Unsupported features, range thermostats and locks
+requiring a code use **All controls**. Focused checks pass **158/158**; the new joint
+native browser proof is being prepared. Controls retain unfinished typed values
+while displaying separately reported readings. Old presses and asynchronous errors
+cannot cross a source, account or connection change. This has not been published
+or tested against household devices.
+
 ### F21 — 2D mini-map
 
-**First delivery:** lightweight north-up SVG room outlines, a floor selector, live device/model-object dots and camera focus/direction. Taps focus the main camera. The visual editor saves visibility, size and top corner; close/map buttons temporarily hide/show it. Editing hides it. Live updates preserve keyboard focus. Tracking now adds distinct room-observation, vehicle and vacuum symbols with their actual source controls. Alert indicators remain further work.
+**First delivery:** lightweight north-up SVG room outlines, a floor selector, live device/model-object dots and camera focus/direction. Taps focus the main camera. The visual editor saves visibility, size and top corner; close/map buttons temporarily hide/show it. Editing hides it. Live updates preserve keyboard focus. Tracking adds distinct room-observation, vehicle and vacuum symbols with their actual source controls.
+
+**Combined local extension:** alerts now appear at their exact original plan
+positions on the current floor. A confirmed clear removes the symbol; uncertain
+readings remain labelled uncertain, and a previously latched alert keeps its
+existing acknowledgement rule. An alert tap opens current native entity details
+without acknowledging it or sending a device command. **172 scoped checks** pass,
+including 26 new alert-map checks. Native browser and wall-panel checks remain.
 
 **Want:** a small 2D overview alongside the 3D house.
 
@@ -469,6 +625,20 @@ view, record their camera linking and layout as a further implementation.
 
 **Current implementation:** new right-panel/preset/overlay browser suites and screenshots, English service translations, and `npm run check:bundle`. That command recompiles current source in memory and checks both distributed copies; CI and release packaging fail if either copy is missing or stale. Full card UI translation work remains.
 
+**Combined local translation candidate:** bundled messages cover common
+controls, card setup and advanced Security/Tracking/Cameras/shading captions in
+English, German, French and Spanish. HA locale selects the language; unsupported
+languages use English. User names, exact IDs and HA-formatted readings stay intact.
+Focused checks cover retained native fields, literal names, unavailable imported
+settings and missing-reference recovery. Caption traversal was indexed after three
+unchanged Tracking tests exposed a performance problem. Presentation-only registry
+changes now retain open controls; actual membership changes still rebuild them.
+The complete combined regression and native translated-width checks are running or
+prepared. Room shortcuts, device controls, GPS calibration, minimum-pixel mower
+controls, reference reports and runtime room/alert labels have additional translated
+messages. Some detailed explanations and other feature prose remain English. See the [translation guide](docs/TRANSLATION-GUIDE.md). No complete
+translation or actual household certification is claimed.
+
 ## Baseline work to resolve
 
 ### B01 — distant terrain camera range
@@ -516,8 +686,8 @@ Local build, lint and all 514 JavaScript tests passed before upload. The full HA
 |---|---|---|
 | First feature group | Sets the implementation order | Confirmed: bubble bar, room/device popups and 2D mini-map. |
 | Vehicle meaning | Determines generic detection versus named household car presence | Confirmed: show cars parked on the drive using detections. |
-| Full backup scope | Whole HA dashboard versus complete Taylor's 3D card/setup | Awaiting scope agreement before F04. |
-| Split-floor meaning | Side-by-side panels versus a horizontal cut through the building | Working interpretation: separate horizontal floor panels plus vertical layers. |
+| Full backup scope | Whole HA dashboard, its Taylor layouts and owned model/furniture assets | Implemented in the combined local candidate; combined browser and Linux HA verification remain. |
+| Split-floor meaning | One shared camera versus separate floor panels with independent camera controls | One shared camera with side-by-side floors and vertical layers is implemented. Taylor's choice about independent panels is pending; that acceptance point remains open. |
 | Actual GLB and model tags | Door pivots, separated walls, room outlines and floors | Not verified against Taylor's model. |
 | Wall panel/browser | Sets realistic animation, lighting and split-view limits | Not recorded yet. |
 | HA entities/integrations | Presets, Ring feeds/detections, Hue, temperature/power, presence, smoke/leaks and vacuums | Use actual available entities; do not assume model names imply data availability. |
@@ -545,6 +715,7 @@ A feature is Done only after its agreed behavior works, it persists where approp
 | 2026-10-05 | Phase 6 | Validated light appearances, deliberate RGB/Kelvin controls and current-output lighting selection implemented. All 1,904 JS and 48 HA Python tests, lint/build/bundle checks, complete local/GitHub browser regressions and HACS validation pass. All 773 GitHub browser assertions pass, including 113 lighting checks and the 31-check passive expiry-observation fixture. Exact-commit manual package matches GitHub's frontend. Actual HA/Hue/model/panel checks remain. | `a6599cb` |
 | 2026-10-05 | Phase 7 | F16 saved model-shading choices, full sun/lamp shadow suppression, actual material/UV evidence and external AO-authoring guide implemented. All 1,992 JS and 48 HA Python tests, lint/build/bundle matching, complete local/GitHub regressions (842 browser assertions each) and HACS validation pass. Exact-commit manual zip matches GitHub's artifact. Actual house/panel checks remain. | `42c826e` |
 | 2026-10-05 | Phase 8 | F12 explicit light previews, current-light capture and separate deliberate scene activation implemented. All 2,276 JS and 48 HA Python tests, lint/build/bundle matching, complete local/GitHub regressions (985 browser assertions each) and HACS validation pass. Dedicated local scenes checks pass 143 assertions. Exact-commit manual zip matches GitHub's artifact; actual household checks remain. | `eac07d6` |
+| 2026-10-05 | Combined 0.2.0 local checkpoint | 5663/5663 JS tests in 185/185 files; lint/build/bundle pass; 11/11 selected native scripts. Earlier 25/29 and 3/8 runs remain historical. Linux HA/current-candidate CI, public push/release/install, actual house/device/panel and independent-floor-panel acceptance stay separate. | Source freeze `bb702089c6324d4e99b4c7ae3ba559b555a4f7f2d7de482bd39bc9f411e6c3b2` |
 
 ### Phase 1: Taylor's Home Assistant check
 
@@ -661,7 +832,7 @@ errors or model retry. [HACS validation passes](https://github.com/gregtaylor199
 source snapshot. Its frontend matches GitHub's downloaded artifact byte for byte:
 `c6fb8eaedc6da3d8bf472db37847ac1fcce2f28dc2ab38a6645aa5a203a721ba`.
 Zip SHA256: `a4dcecb454d7d37af9fef0709e0b93fe948b195fe643e9cbc04121846b179566`.
-Phase 5's package is preserved separately. The current manual package now contains
+Phase 5's package was preserved separately. That historical manual package later contained
 the independently verified Phase 8 scene-preview additions.
 No release tag has been published; actual household validation remains.
 
@@ -695,7 +866,7 @@ no browser errors or model retry. The dedicated local scenes run passes 143
 assertions, including actual pixels, native controls and current permissions.
 [HACS validation passes](https://github.com/gregtaylor1993/taylors-3d/actions/runs/37265846996).
 
-The current manual `taylors3d.zip`, also preserved as `taylors3d-phase8.zip`,
+The historical Phase 8 manual `taylors3d.zip`, preserved as `taylors3d-phase8.zip`,
 contains that exact build. Its frontend matches GitHub's downloaded artifact:
 `c7d3d5ae05a64f0895db81e7fd0c25056a818e9d9e9c1d77cab977ff7692b922`.
 Zip SHA256: `c8c935d90f95edbf4d3c27efd47bc7d8c2d894effb26905d837c994b74801904`.

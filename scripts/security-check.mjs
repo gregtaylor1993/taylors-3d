@@ -3,11 +3,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { launch, newPage, root } from './lib/demo-browser.mjs';
+import { floorPresentationFixtureGlb } from './lib/floor-presentation-fixture.mjs';
+import { planSecurityScenario } from './lib/security-plan-browser.mjs';
 
 const checks = [], browserErrors = [];
+let currentMode = '';
 const check = (name, pass, detail) => {
   checks.push(!!pass);
-  console.log(`${pass ? 'ok  ' : 'FAIL'} ${name}${detail === undefined ? '' : ' – ' + JSON.stringify(detail)}`);
+  console.log(`${pass ? 'ok  ' : 'FAIL'} ${currentMode ? currentMode + ': ' : ''}${name}${detail === undefined ? '' : ' – ' + JSON.stringify(detail)}`);
 };
 const near = (a, b, epsilon = 1e-5) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => Math.abs(v - b[i]) <= epsilon);
 const changed = (a, b) => !near(a, b);
@@ -43,13 +46,18 @@ function fixtureGlb() {
   return Buffer.concat([head, body, padding, rest]);
 }
 
-let session;
 async function settle(page) { await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))); }
 async function control(page, selector, action) {
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {
     const element = handle.asElement(); if (!element) throw new Error('Missing Security control: ' + selector);
-    await element.evaluate((node) => node.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
+    await element.evaluate((node) => node.scrollIntoView({ block: 'center', inline: 'nearest' }));
+    await element.evaluate((node, selector) => {
+      const card = document.querySelector('taylors3d-card'), root = card.shadowRoot, rect = node.getBoundingClientRect();
+      const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2, hit = root.elementFromPoint(x, y);
+      if (!node.isConnected || node.getRootNode() !== root || root.querySelector(selector) !== node
+        || !(hit === node || node.contains(hit))) throw new Error('Native Security target is stale or covered: ' + selector);
+    }, selector);
     await action(element);
   } finally { await handle.dispose(); }
   await settle(page);
@@ -59,7 +67,10 @@ const select = (page, field, value) => control(page, `[data-field="sec-${field}"
 async function type(page, field, value) {
   await control(page, `[data-field="sec-${field}"]`, async (element) => {
     await element.focus(); await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
+    await page.keyboard.press('Backspace');
     await page.keyboard.type(value);
+    const actual = await element.evaluate((node) => node.value);
+    if (actual !== value) throw new Error(`Security input ${field}: expected ${JSON.stringify(value)}, received ${JSON.stringify(actual)}`);
   });
 }
 async function contact(page, value, extra = {}) {
@@ -103,21 +114,30 @@ async function snapshot(page) {
   });
 }
 
+async function run(mode) {
+  currentMode = mode;
+  let session;
 try {
   const transport = await launch(); session = transport;
   const context = await newPage(transport.browser, { width: 1280, height: 1000 }); session = { ...transport, ...context };
-  const { page } = session, fixture = fixtureGlb();
+  const { page } = session, fixture = fixtureGlb(), planFixture = floorPresentationFixtureGlb(), requests = [];
   let html = fs.readFileSync(path.join(root, 'demo/index.html'), 'utf8');
   html = html.replace(/<section class="theme dark">[\s\S]*?<\/section>/, '').replace('display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));', 'display: block;');
+  if (mode === 'source') html = html.replace('</head>', `<script type="importmap">${JSON.stringify({ imports: { three: '/node_modules/three/build/three.module.js', 'three/addons/': '/node_modules/three/examples/jsm/' } })}</script></head>`)
+    .replace('src="../dist/taylors3d-card.js"', 'src="../src/taylors3d-card.js"');
   await page.setRequestInterception(true);
   page.on('request', (request) => {
     const url = new URL(request.url());
+    requests.push(url.pathname);
     if (request.isNavigationRequest() && url.pathname === '/demo/index.html') request.respond({ status: 200, contentType: 'text/html', body: html });
     else if (url.pathname === '/demo/security-fixture.glb') request.respond({ status: 200, contentType: 'model/gltf-binary', body: fixture });
+    else if (url.pathname === '/demo/security-plan-fixture.glb') request.respond({ status: 200, contentType: 'model/gltf-binary', body: planFixture });
     else request.continue();
   });
   await page.goto(`${transport.base}/demo/index.html?model=/demo/security-fixture.glb&view=3d&floor=ground&height=700px`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => document.querySelector('taylors3d-card')?._view?.model?.manifest?.objects.some((obj) => obj.id === 'security_door'), { timeout: 30000 });
+  check('loads only the requested frontend entry', requests.includes(mode === 'source' ? '/src/taylors3d-card.js' : '/dist/taylors3d-card.js')
+    && !requests.includes(mode === 'source' ? '/dist/taylors3d-card.js' : '/src/taylors3d-card.js'), requests.filter((url) => url.endsWith('/taylors3d-card.js')));
   await page.evaluate(async () => {
     window.__demoMowerPaused = true;
     const c = document.querySelector('taylors3d-card');
@@ -203,7 +223,7 @@ try {
   check('320px Security form preserves all explicit controls with 44px targets and fitting tabs', !narrow.overflow && narrow.targets && narrow.hinge && narrow.tabs, narrow);
   // The panel scrolls independently: show the actual hinge fields in this proof.
   await control(page, '[data-field="sec-target"]', async () => {});
-  fs.mkdirSync(path.join(root, 'screenshots'), { recursive: true }); await page.screenshot({ path: path.join(root, 'screenshots/security-editor-narrow.png'), fullPage: true });
+  fs.mkdirSync(path.join(root, 'screenshots'), { recursive: true }); await page.screenshot({ path: path.join(root, `screenshots/security-editor-narrow${mode === 'bundle' ? '-bundle' : ''}.png`), fullPage: true });
   await click(page, '[data-act="sec-cancel"]'); await click(page, 'button.edit');
   await page.setViewport({ width: 1280, height: 1000, deviceScaleFactor: 1 }); await settle(page); await still(page);
   s = await snapshot(page);
@@ -343,7 +363,7 @@ try {
     && before.programs === s.programs && JSON.stringify(before.lights) === JSON.stringify(s.lights) && before.revision === s.revision && s.services === 0,
   { before: { stats: before.stats, memory: before.memory, programs: before.programs }, after: { stats: s.stats, memory: s.memory, programs: s.programs },
     invalidations: idleResult.requests, dirtyOrigins: idleResult.origins });
-  await page.screenshot({ path: path.join(root, 'screenshots/security-model.png') });
+  await page.screenshot({ path: path.join(root, `screenshots/security-model${mode === 'bundle' ? '-bundle' : ''}.png`) });
   await page.evaluate(() => {
     const c = document.querySelector('taylors3d-card'), v = c._view;
     const door = v.model.manifest.objects.find((object) => object.id === 'security_door').node;
@@ -352,7 +372,7 @@ try {
     door.localToWorld(eye); door.localToWorld(target);
     v.setCamera({ position: eye.toArray(), target: target.toArray() }, { instant: true });
   }); await settle(page);
-  await page.screenshot({ path: path.join(root, 'screenshots/security-hinge.png') });
+  await page.screenshot({ path: path.join(root, `screenshots/security-hinge${mode === 'bundle' ? '-bundle' : ''}.png`) });
   await page.evaluate(() => document.querySelector('taylors3d-card')._view.setCamera(window.securityFixture.overviewCamera, { instant: true })); await settle(page);
   await page.evaluate(() => {
     const c = document.querySelector('taylors3d-card'); window.securityFixture.oldLeaf = window.securityFixture.leaf;
@@ -380,7 +400,12 @@ try {
   check('card disconnect ends motion/render/expiry work and hides owned outlines', !detached.timer && !detached.raf && !detached.moving && !detached.visible, detached);
   await page.evaluate(() => document.querySelector('section.theme').append(window.securityFixture.detached)); await settle(page); await still(page);
   s = await snapshot(page); check('reconnect retains one helper set and current explicit evidence with zero device actions', s.status === 'open' && s.degrees === 90 && s.services === 0);
+  await planSecurityScenario(page, { mode, root, check, click, select, type, settle, idle });
 } catch (error) { check('security UI and explicit GLB scenario completes', false, error.stack || error.message); }
 finally { if (session) { browserErrors.push(...(session.errors || [])); await session.close(); } }
+}
+for (const mode of ['source', 'bundle']) await run(mode);
+currentMode = '';
 check('no browser errors', browserErrors.length === 0, browserErrors);
+console.log(`Security checks: ${checks.filter(Boolean).length}/${checks.length} passed.`);
 if (checks.some((pass) => !pass)) process.exitCode = 1;

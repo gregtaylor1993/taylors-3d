@@ -1,0 +1,25 @@
+// Owned inline captions only. HA entity names, media titles, modes/fan values,
+// room shortcut labels and server errors are literal user/source data.
+const rows = [
+  ['play','Play','Wiedergabe','Lire','Reproducir'], ['pause','Pause','Pause','Pause','Pausar'],
+  ['stop','Stop','Stopp','Arrêter','Detener'], ['previous','Previous track','Vorheriger Titel','Piste précédente','Pista anterior'],
+  ['next','Next track','Nächster Titel','Piste suivante','Pista siguiente'], ['mute','Mute','Stummschalten','Couper le son','Silenciar'],
+  ['unmute','Unmute','Ton einschalten','Rétablir le son','Activar sonido'], ['volume','Volume','Lautstärke','Volume','Volumen'],
+  ['temperature','Target temperature','Zieltemperatur','Température cible','Temperatura objetivo'],
+  ['hvac-mode','Climate mode','Klimamodus','Mode de climatisation','Modo de climatización'],
+  ['open','Open','Öffnen','Ouvrir','Abrir'], ['close','Close','Schließen','Fermer','Cerrar'],
+  ['position','Open position','Öffnungsposition','Position d’ouverture','Posición de apertura'],
+  ['lock','Lock','Verriegeln','Verrouiller','Bloquear'], ['unlock','Unlock','Entriegeln','Déverrouiller','Desbloquear'],
+  ['start','Start cleaning','Reinigung starten','Démarrer le nettoyage','Iniciar limpieza'],
+  ['dock','Return to dock','Zur Station zurückkehren','Retourner à la station','Volver a la base'],
+  ['fan-speed','Fan speed','Lüfterstufe','Vitesse du ventilateur','Velocidad del ventilador'],
+  ['unknown','Current value not reported','Aktueller Wert nicht gemeldet','Valeur actuelle non fournie','Valor actual no comunicado'],
+  ['current','Reported value: {value}','Gemeldeter Wert: {value}','Valeur signalée : {value}','Valor comunicado: {value}'],
+  ['choose','Choose a value','Wert wählen','Choisir une valeur','Elegir un valor'],
+  ['waiting','Waiting for a current device reading','Warten auf einen aktuellen Gerätewert','En attente d’une valeur actuelle de l’appareil','Esperando una lectura actual del dispositivo'],
+  ['roomActions','Room actions','Raumaktionen','Actions de la pièce','Acciones de la habitación'],
+  ['unavailable','This action is currently unavailable','Diese Aktion ist derzeit nicht verfügbar','Cette action est actuellement indisponible','Esta acción no está disponible actualmente'],
+  ['rejected','The action was not submitted','Die Aktion wurde nicht gesendet','L’action n’a pas été envoyée','La acción no se envió'],
+];
+export default Object.freeze(Object.fromEntries(['en','de','fr','es'].map((language,index) => [language,
+  Object.freeze(Object.fromEntries(rows.map(([key,...words]) => [`deviceControls.${key}`,words[index]])))])));

@@ -34,6 +34,9 @@ from .const import (
     STORAGE_VERSION,
 )
 from .model import ModelView
+from .furniture import async_register_furniture
+from .dashboard_backup_http import async_register_dashboard_backup
+from .dashboard_restore_http import async_register_dashboard_restore
 from .services import async_register_services
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,6 +59,10 @@ class LayoutStore:
 
     def get(self, key: str) -> dict[str, Any] | None:
         return self._layouts.get(key)
+
+    def contains(self, key: str) -> bool:
+        """Distinguish an unused key from a persisted malformed/null slot."""
+        return key in self._layouts
 
     def set(self, key: str, layout: dict[str, Any]) -> None:
         self._layouts[key] = layout
@@ -83,6 +90,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     websocket_api.async_register_command(hass, ws_get_layout)
     websocket_api.async_register_command(hass, ws_set_layout)
     hass.http.register_view(ModelView(hass))
+    await async_register_furniture(hass)
+    await async_register_dashboard_backup(hass)
+    await async_register_dashboard_restore(hass)
 
     await _async_register_card(hass)
     return True

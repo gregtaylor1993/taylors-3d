@@ -1,7 +1,10 @@
-// Future Settings fragment; not registered/imported by the card yet. Editing
-// selected header sources never changes HA readings or sends device commands.
+// Settings fragment for the actual House header. Editing selected sources
+// never changes HA readings or sends device commands.
 import { entityChoices, entityMetadata } from './entity-metadata.js';
+import { EntityAreaFilter } from './entity-area-filter.js';
 import { HOUSE_SUMMARY_LIMITS, readHouseSummary } from './house-summary.js';
+import { localeInfo, localize } from './localization.js';
+import messages from './translations/editor-environment-house.js';
 
 const prefix = 'house-summary-';
 const plain = (value) => !!value && typeof value === 'object' && [Object.prototype, null].includes(Object.getPrototypeOf(value));
@@ -10,15 +13,17 @@ const clone = (value) => value === undefined ? undefined : structuredClone(value
 const tag = (value) => Array.isArray(value) ? ['array', Array.from(value, tag)] : plain(value)
   ? ['object', Object.entries(value).map(([key, entry]) => [key, tag(entry)])] : [typeof value, typeof value === 'number' && !Number.isFinite(value) ? String(value) : value];
 const stamp = (value) => { try { return JSON.stringify(tag(value)); } catch { return 'invalid-unserializable'; } };
-const rawLabel = (value) => typeof value === 'string' ? value : (() => { try { return JSON.stringify(value) ?? 'undefined'; } catch { return 'Unreadable imported value'; } })();
+const rawLabel = (value,fallback) => typeof value === 'string' ? value : (() => { try { return JSON.stringify(value) ?? 'undefined'; } catch { return fallback; } })();
 const domains = { weather_entity: 'weather', alarm_entity: 'alarm_control_panel', person: 'person' };
 const exact = (id, domain) => typeof id === 'string' && id.length <= HOUSE_SUMMARY_LIMITS.entity && new RegExp(`^${domain}\\.[a-z0-9_]+$`).test(id);
+const readerKeys = new Map(Object.entries(messages.en).filter(([key]) => key.startsWith('environmentHouse.house.reader.')).map(([key,value]) => [value,key.slice('environmentHouse.house.'.length)]));
+const messageKeys = new Map(Object.values(messages).flatMap((catalogue) => Object.entries(catalogue).filter(([key]) => key.startsWith('environmentHouse.house.')).map(([key,value]) => [value,key.slice('environmentHouse.house.'.length)])));
 
-/** HouseSummaryEditor(card,onRender), future Edit Settings fragment.
+/** HouseSummaryEditor(card,onRender), Edit Settings fragment.
  * render/onClick(action,element)/onInput/onChange/updatePreviews/reset/cancel/
  * dispose. Parent forwards the actual native action node for gesture checking,
  * calls updatePreviews after rendering and cancel/reset on history/tab changes.
- * Optional houseSummaryEditorAvailable() explicitly gates a future Settings
+ * Optional houseSummaryEditorAvailable() explicitly gates the Settings
  * panel. Otherwise _editing:true/_edit.tab:'settings' is required; omitted
  * _editing supports standalone fragments, as the existing floor editor does.
  * Empty explicit title/weather/alarm values OMIT that property. Present malformed
@@ -26,6 +31,7 @@ const exact = (id, domain) => typeof id === 'string' && id.length <= HOUSE_SUMMA
  */
 export class HouseSummaryEditor {
   constructor(card, onRender = () => {}) {
+    this.areaFilter = new EntityAreaFilter();
     this.card = card; this.onRender = onRender; this.disposed = false; this._loaded = false;
     this.draft = null; this.dirty = false; this.stale = false; this.message = null; this.newPerson = ''; this._epoch = 0;
     this._root = null; this._intents = new WeakMap(); this._pressed = new Map();
@@ -33,6 +39,19 @@ export class HouseSummaryEditor {
       ['pointercancel', (event) => this._cancelPress(event)], ['keydown', (event) => this._key(event)],
       ['keyup', (event) => this._release(event)], ['focusout', (event) => this._cancelPress(event)]]);
   }
+  get hass() { return this.card._hass || {}; }
+  _t(key,params = {}) { const id = `environmentHouse.house.${key}`; return localize(this.hass,id,params,(messages[localeInfo(this.hass).resolved] || messages.en)[id] || messages.en[id] || ''); }
+  _caption(key,tag = 'span',params = {}) { return `<${tag} data-house-summary-text="${key}" data-house-summary-params="${esc(JSON.stringify(params))}">${esc(this._t(key,params))}</${tag}>`; }
+  _syncLabels(root) { for (const node of root.querySelectorAll('[data-house-summary-text]')) {
+    const value = this._t(node.dataset.houseSummaryText,JSON.parse(node.dataset.houseSummaryParams || '{}'));
+    if (node.textContent !== value) node.textContent = value;
+  } }
+  _diagnostic(entry) {
+    // Only explicitly known reader prose changes. A future diagnostic stays readable.
+    const message = Object.getOwnPropertyDescriptor(entry || {},'message')?.value;
+    return typeof message === 'string' ? readerKeys.has(message) ? this._t(readerKeys.get(message)) : message : '';
+  }
+  _messageText() { return messageKeys.has(this.message) ? this._t(messageKeys.get(this.message)) : this.message; }
   get effective() { return this.card._layout?.house_summary ?? this.card._config?.house_summary; }
   _panelAvailable() {
     if (typeof this.card.houseSummaryEditorAvailable === 'function') { try { return this.card.houseSummaryEditorAvailable() === true; } catch { return false; } }
@@ -77,32 +96,33 @@ export class HouseSummaryEditor {
         && (!Object.hasOwn(metadata.state?.attributes || {}, 'restored') || metadata.state.attributes.restored === false) });
   }
   _selectable(id, domain) { return this._choices(domain).some((entry) => entry.value === id && entry.selectable); }
+  _visibleChoice(id, domain, selected) { return this.areaFilter.choices(this.hass, this._choices(domain, selected)).some((entry) => entry.value === id && entry.selectable); }
   _sourceMessage(id, domain) {
-    if (!exact(id, domain)) return 'Malformed saved ID; replace or remove it explicitly.';
+    if (!exact(id, domain)) return this._t('malformedId');
     const metadata = entityMetadata(this.card._hass, id);
-    if (metadata.missing || !metadata.hasState) return 'No current entity state. The saved ID is kept.';
-    if (metadata.disabled || metadata.hidden || metadata.category) return 'Hidden, disabled or administrative entity. The saved ID is kept.';
-    if (metadata.state?.attributes?.restored !== undefined && metadata.state.attributes.restored !== false) return 'Waiting for a current reading; a stored/restored flag is present.';
-    if (!this._selectable(id, domain)) return 'Current source is malformed or outside this picker. The saved ID is kept.';
-    if (!metadata.available) return 'This entity currently reports unknown/unavailable. Configuration does not make it a current reading.';
-    return `Selected source: ${metadata.name}. This editor does not preview or change its state.`;
+    if (metadata.missing || !metadata.hasState) return this._t('missing');
+    if (metadata.disabled || metadata.hidden || metadata.category) return this._t('hidden');
+    if (metadata.state?.attributes?.restored !== undefined && metadata.state.attributes.restored !== false) return this._t('restored');
+    if (!this._selectable(id, domain)) return this._t('malformedSource');
+    if (!metadata.available) return this._t('unavailable');
+    return this._t('selected',{name:metadata.name});
   }
   _evaluation() {
-    const issues = readHouseSummary(this.draft).diagnostics.map((entry) => entry.message);
-    if (!this.canEdit) issues.push('A connected current active administrator in Settings is required.');
-    if (this.stale) issues.push('The saved settings, model, layout, alignment or session changed. Your draft is kept. Cancel before Save.');
+    const issues = readHouseSummary(this.draft).diagnostics.map((entry) => this._diagnostic(entry));
+    if (!this.canEdit) issues.push(this._t('admin'));
+    if (this.stale) issues.push(this._t('stale'));
     return [...new Set(issues)];
   }
   _token(index) { return `${this._epoch}:${index}:${stamp(this._people()[index])}`; }
   _options(domain, selected, allowNone = false) {
-    const choices = this._choices(domain, typeof selected === 'string' ? selected : undefined), missing = selected !== undefined && !choices.some((entry) => entry.value === selected);
-    return `${missing ? `<option value="" selected disabled>Saved value needs repair: ${esc(rawLabel(selected))}</option>` : ''}
-      ${allowNone ? `<option value="" ${selected === undefined ? 'selected' : ''}>Do not show this source</option>` : selected === undefined ? '<option value="" selected disabled>Choose an actual person entity</option>' : ''}
+    const choices = this.areaFilter.choices(this.hass, this._choices(domain, typeof selected === 'string' ? selected : undefined)), missing = selected !== undefined && !choices.some((entry) => entry.value === selected);
+    return `${missing ? `<option value="" selected disabled>${esc(this._t('savedRepair',{value:rawLabel(selected,this._t('unreadable'))}))}</option>` : ''}
+      ${allowNone ? `<option value="" ${selected === undefined ? 'selected' : ''}>${esc(this._t('none'))}</option>` : selected === undefined ? `<option value="" selected disabled>${esc(this._t('choosePerson'))}</option>` : ''}
       ${choices.map((entry) => `<option value="${esc(entry.value)}" ${entry.value === selected ? 'selected' : ''} ${entry.selectable ? '' : 'disabled'}>${esc(entry.label)}</option>`).join('')}`;
   }
   _fieldHtml(field, label) {
-    return `<label>${label}<select data-field="${prefix}${field}" data-house-summary-epoch="${this._epoch}" ${this._blocked() ? 'disabled' : ''}>
-      ${this._options(domains[field], this.draft?.[field], true)}</select></label><p data-house-summary-source="${field}">${Object.hasOwn(this.draft || {}, field) ? esc(this._sourceMessage(this.draft[field], domains[field])) : 'No source selected.'}</p>`;
+    return `<label>${this._caption(label)}<select data-field="${prefix}${field}" data-house-summary-epoch="${this._epoch}" ${this._blocked() ? 'disabled' : ''}>
+      ${this._options(domains[field], this.draft?.[field], true)}</select></label><p data-house-summary-source="${field}">${esc(Object.hasOwn(this.draft || {}, field) ? this._sourceMessage(this.draft[field], domains[field]) : this._t('noSource'))}</p>`;
   }
   _syncOptions(select, domain, selected, allowNone = false) {
     // Keep the native select and existing keyed options, including its focus.
@@ -121,20 +141,20 @@ export class HouseSummaryEditor {
   }
   _peopleHtml() {
     const blocked = this._blocked(), malformed = plain(this.draft) && Object.hasOwn(this.draft, 'person_entities') && !Array.isArray(this.draft.person_entities);
-    if (malformed) return '<p>Saved people list is malformed. Use Clear people deliberately, then choose actual person entities.</p>';
+    if (malformed) return this._caption('malformedPeople','p');
     const people = this._people();
-    return `${!people.length ? '<p>No people selected. This does not infer who lives here.</p>' : ''}
-      ${Array.from(people).slice(0, 64).map((id, index) => `<div data-house-summary-person="${index}"><label>Person ${index + 1}<select data-field="${prefix}person" data-house-summary-index="${index}" data-house-summary-token="${esc(this._token(index))}" ${blocked ? 'disabled' : ''}>${this._options('person', id)}</select></label>
-        <p data-house-summary-person-status="${index}">${esc(this._sourceMessage(id, 'person'))}</p><button type="button" data-act="${prefix}remove-person" data-house-summary-index="${index}" data-house-summary-token="${esc(this._token(index))}" ${blocked ? 'disabled' : ''}>Remove this person</button></div>`).join('')}
-      ${people.length > 64 ? '<p>Additional imported entries are retained. Clear people explicitly to replace this oversized list.</p>' : ''}`;
+    return `${!people.length ? this._caption('noPeople','p') : ''}
+      ${Array.from(people).slice(0, 64).map((id, index) => `<div data-house-summary-person="${index}"><label>${this._caption('person','span',{number:index+1})}<select data-field="${prefix}person" data-house-summary-index="${index}" data-house-summary-token="${esc(this._token(index))}" ${blocked ? 'disabled' : ''}>${this._options('person', id)}</select></label>
+        <p data-house-summary-person-status="${index}">${esc(this._sourceMessage(id, 'person'))}</p><button type="button" data-act="${prefix}remove-person" data-house-summary-text="removePerson" data-house-summary-index="${index}" data-house-summary-token="${esc(this._token(index))}" ${blocked ? 'disabled' : ''}>${esc(this._t('removePerson'))}</button></div>`).join('')}
+      ${people.length > 64 ? this._caption('extraPeople','p') : ''}`;
   }
   _statusHtml() {
     const issues = this._evaluation();
-    return `${this.dirty ? '<p>Unsaved header settings. Save once to apply; Cancel keeps the saved settings.</p>' : '<p>Changing these fields does not change Home Assistant readings.</p>'}
-      ${this.message ? `<p role="status">${esc(this.message)}</p>` : ''}${issues.length ? `<ul role="status">${issues.map((message) => `<li>${esc(message)}</li>`).join('')}</ul>` : ''}`;
+    return `<p>${esc(this._t(this.dirty ? 'unsaved' : 'readOnly'))}</p>
+      ${this.message ? `<p role="status">${esc(this._messageText())}</p>` : ''}${issues.length ? `<ul role="status">${issues.map((message) => `<li>${esc(message)}</li>`).join('')}</ul>` : ''}`;
   }
   _titleIssue() { return plain(this.draft) && Object.hasOwn(this.draft, 'title') && typeof this.draft.title !== 'string'
-    ? `Imported title needs explicit repair: ${rawLabel(this.draft.title)}.` : ''; }
+    ? this._t('titleRepair',{value:rawLabel(this.draft.title,this._t('unreadable'))}) : ''; }
   render() {
     if (this.disposed) return ''; this._ensure(); const blocked = this._blocked(), people = this._people();
     const title = typeof this.draft?.title === 'string' ? this.draft.title : '';
@@ -146,23 +166,26 @@ export class HouseSummaryEditor {
       [data-house-summary-editor] button{cursor:pointer;min-width:44px}[data-house-summary-editor] :disabled{opacity:.6;cursor:default}
       [data-house-summary-editor] :focus-visible{outline:3px solid var(--primary-text-color,#212121);outline-offset:2px}
       [data-house-summary-editor] .house-summary-actions{display:flex;gap:8px;flex-wrap:wrap}[data-house-summary-person]{padding:0 0 12px;border-bottom:1px solid var(--divider-color,#888)}
-      </style><h3>House summary</h3><p>Choose the real sources shown in your house header. No address, person, weather or alarm is chosen automatically.</p>
-      <label>Title<input data-field="${prefix}title" data-house-summary-epoch="${this._epoch}" maxlength="${HOUSE_SUMMARY_LIMITS.title}" value="${esc(title)}" ${blocked ? 'disabled' : ''}></label>
-      <p>Leave Title empty to use Home Assistant’s configured home name when available, or Taylor's 3D. An empty title removes this override.</p>
+      </style>${this._caption('title','h3')}${this._caption('intro','p')}
+      <label>${this._caption('name')}<input data-field="${prefix}title" data-house-summary-epoch="${this._epoch}" maxlength="${HOUSE_SUMMARY_LIMITS.title}" value="${esc(title)}" ${blocked ? 'disabled' : ''}></label>
+      ${this._caption('titleHelp','p')}
       <p data-house-summary-title-status>${esc(this._titleIssue())}</p>
-      ${this._fieldHtml('weather_entity', 'Weather source')}${this._fieldHtml('alarm_entity', 'Alarm source')}
-      <h4>Selected people</h4><p>Choose up to 12 actual person entities. Their Home/Away values do not identify which room they are in. Motion sensors do not name a person.</p>
-      ${this._peopleHtml()}<label>Add a person<select data-field="${prefix}new-person" data-house-summary-epoch="${this._epoch}" ${blocked || people.length >= 12 ? 'disabled' : ''}>${this._options('person', this.newPerson || undefined)}</select></label>
-      <div class="house-summary-actions"><button type="button" data-act="${prefix}add-person" ${blocked || this._peopleMalformed() || people.length >= 12 || !this._selectable(this.newPerson, 'person') || people.includes(this.newPerson) ? 'disabled' : ''}>Add selected person</button>
-      <button type="button" data-act="${prefix}clear-people" ${blocked ? 'disabled' : ''}>Clear people</button></div>
+      ${this.areaFilter.render(this.hass, `${prefix}area-filter`).replace('<select ', `<select data-house-summary-epoch="${this._epoch}" `)}
+      ${this._fieldHtml('weather_entity', 'weather')}${this._fieldHtml('alarm_entity', 'alarm')}
+      ${this._caption('people','h4')}${this._caption('peopleHelp','p')}
+      ${this._peopleHtml()}<label>${this._caption('addPerson')}<select data-field="${prefix}new-person" data-house-summary-epoch="${this._epoch}" ${blocked || people.length >= 12 ? 'disabled' : ''}>${this._options('person', this.newPerson || undefined)}</select></label>
+      <div class="house-summary-actions"><button type="button" data-act="${prefix}add-person" data-house-summary-text="addSelected" ${blocked || this._peopleMalformed() || people.length >= 12 || !this._visibleChoice(this.newPerson, 'person') || people.includes(this.newPerson) ? 'disabled' : ''}>${esc(this._t('addSelected'))}</button>
+      <button type="button" data-act="${prefix}clear-people" data-house-summary-text="clearPeople" ${blocked ? 'disabled' : ''}>${esc(this._t('clearPeople'))}</button></div>
       <div data-house-summary-status aria-live="polite">${this._statusHtml()}</div><div class="house-summary-actions">
-      <button type="button" data-act="${prefix}save" ${!this.dirty || this._evaluation().length ? 'disabled' : ''}>Save house summary</button><button type="button" data-act="${prefix}cancel">Cancel</button>
-      <button type="button" data-act="${prefix}repair-settings" ${!this.canEdit || this.stale ? 'disabled' : ''}>Repair settings structure</button></div></section>`;
+      <button type="button" data-act="${prefix}save" data-house-summary-text="save" ${!this.dirty || this._evaluation().length ? 'disabled' : ''}>${esc(this._t('save'))}</button><button type="button" data-act="${prefix}cancel" data-house-summary-text="cancel">${esc(this._t('cancel'))}</button>
+      <button type="button" data-act="${prefix}repair-settings" data-house-summary-text="repair" ${!this.canEdit || this.stale ? 'disabled' : ''}>${esc(this._t('repair'))}</button></div></section>`;
   }
   updatePreviews(container) {
     if (this.disposed) return; const epoch = this._epoch; this._ensure();
     const root = container?.matches?.('[data-house-summary-editor]') ? container : container?.querySelector?.('[data-house-summary-editor]'); if (!root) return;
     this._bind(root); if (epoch !== this._epoch && !this.dirty) { this.onRender(); return; }
+    this._syncLabels(root);
+    this.areaFilter.update(this.hass, root, `${prefix}area-filter`);
     const status = root.querySelector('[data-house-summary-status]'), html = this._statusHtml(); if (status.innerHTML !== html) status.innerHTML = html;
     root.querySelector('[data-house-summary-title-status]').textContent = this._titleIssue();
     const blocked = this._blocked();
@@ -176,13 +199,13 @@ export class HouseSummaryEditor {
       else if (field === 'new-person') this._syncOptions(element, 'person', this.newPerson || undefined);
     }
     for (const field of ['weather_entity', 'alarm_entity']) root.querySelector(`[data-house-summary-source="${field}"]`).textContent
-      = Object.hasOwn(this.draft || {}, field) ? this._sourceMessage(this.draft[field], domains[field]) : 'No source selected.';
+      = Object.hasOwn(this.draft || {}, field) ? this._sourceMessage(this.draft[field], domains[field]) : this._t('noSource');
     for (const element of root.querySelectorAll('[data-house-summary-person-status]')) element.textContent = this._sourceMessage(this._people()[Number(element.dataset.houseSummaryPersonStatus)], 'person');
     for (const button of root.querySelectorAll('button[data-act]')) {
       const kind = button.dataset.act.slice(prefix.length);
       button.disabled = kind === 'cancel' ? false : kind === 'repair-settings' ? !this.canEdit || this.stale : blocked
         || kind === 'save' && (!this.dirty || this._evaluation().length > 0)
-        || kind === 'add-person' && (this._peopleMalformed() || this._people().length >= 12 || !this._selectable(this.newPerson, 'person') || this._people().includes(this.newPerson));
+        || kind === 'add-person' && (this._peopleMalformed() || this._people().length >= 12 || !this._visibleChoice(this.newPerson, 'person') || this._people().includes(this.newPerson));
       if (button.dataset.houseSummaryIndex !== undefined) button.dataset.houseSummaryToken = this._token(Number(button.dataset.houseSummaryIndex));
     }
     this._revalidatePresses();
@@ -190,14 +213,18 @@ export class HouseSummaryEditor {
   onChange(field, element) {
     if (this.disposed || !field?.startsWith(prefix) || !element) return false; this._ensure(); const key = field.slice(prefix.length);
     if (this._blocked() || element.dataset.houseSummaryEpoch !== undefined && element.dataset.houseSummaryEpoch !== String(this._epoch)) return true;
+    if (key === 'area-filter') {
+      if (element.isConnected !== false && this.areaFilter.set(this.hass, element.value)) { this.newPerson = ''; this.updatePreviews(element.closest('[data-house-summary-editor]')); }
+      return true;
+    }
     if (key === 'title') { if (typeof element.value !== 'string') return true;
       if (!element.value.trim()) delete this.draft.title; else this.draft.title = element.value; }
     else if (key === 'weather_entity' || key === 'alarm_entity') {
-      if (element.value === '') delete this.draft[key]; else if (this._selectable(element.value, domains[key])) this.draft[key] = element.value; else return true;
-    } else if (key === 'new-person') { this.newPerson = this._selectable(element.value, 'person') ? element.value : ''; this.updatePreviews(element.closest('[data-house-summary-editor]')); return true; }
+      if (element.value === '') delete this.draft[key]; else if (this._visibleChoice(element.value, domains[key], this.draft[key])) this.draft[key] = element.value; else return true;
+    } else if (key === 'new-person') { this.newPerson = this._visibleChoice(element.value, 'person') ? element.value : ''; this.updatePreviews(element.closest('[data-house-summary-editor]')); return true; }
     else if (key === 'person') {
       const index = Number(element.dataset.houseSummaryIndex);
-      if (!Number.isInteger(index) || index < 0 || index >= this._people().length || element.dataset.houseSummaryToken !== this._token(index) || !this._selectable(element.value, 'person')) return true;
+      if (!Number.isInteger(index) || index < 0 || index >= this._people().length || element.dataset.houseSummaryToken !== this._token(index) || !this._visibleChoice(element.value, 'person', this._people()[index])) return true;
       this.draft.person_entities[index] = element.value;
     } else return false;
     this._mark(); this.updatePreviews(element.closest('[data-house-summary-editor]')); return true;
@@ -210,11 +237,11 @@ export class HouseSummaryEditor {
     if (kind === 'repair-settings' && this.canEdit && !this.stale) { this.draft = { ...(plain(this.draft) ? this.draft : {}) }; this._mark(); this.onRender(); return true; }
     if (this._blocked()) return true;
     if (kind === 'save') {
-      const issues = this._evaluation(); if (!this.dirty || issues.length || typeof this.card.commitFeatureLayout !== 'function') { this.message = issues[0] || 'Make a deliberate valid change before Save.'; this.onRender(); return true; }
+      const issues = this._evaluation(); if (!this.dirty || issues.length || typeof this.card.commitFeatureLayout !== 'function') { this.message = issues[0] || this._t('invalidSave'); this.onRender(); return true; }
       this.card.commitFeatureLayout({ house_summary: clone(this.draft) }, 'House summary'); this.reset(); this.onRender(); return true;
     }
     if (kind === 'add-person') {
-      if (!this._selectable(this.newPerson, 'person') || this._people().includes(this.newPerson) || this._people().length >= 12
+      if (!this._visibleChoice(this.newPerson, 'person') || this._people().includes(this.newPerson) || this._people().length >= 12
         || Object.hasOwn(this.draft, 'person_entities') && !Array.isArray(this.draft.person_entities)) return true;
       this.draft.person_entities = [...this._people(), this.newPerson]; this.newPerson = ''; this._epoch++; this._mark(); this.onRender(); return true;
     }

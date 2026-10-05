@@ -192,19 +192,30 @@ export class ScenePreviewController {
     this.onPreview = onPreview; this.onStatus = onStatus;
     this._generation = 0; this._active = null; this._pending = null; this._disposed = false;
     this._onDisconnected = () => this.stop(undefined, 'disconnected');
+    this._onPendingDisconnected = () => { if (this._pending) this._pending.stale = true; };
   }
   get active() { return this._active ? { token: this._active.token, itemId: this._active.binding.id, sceneEntity: this._active.binding.scene_entity, draft: this._active.draft } : null; }
   _context() { const value = this.getContext(); return plain(value) ? value : {}; }
-  _stamp(context) { return { key: context.contextKey, connection: context.hass?.connection, user: context.hass?.user?.id, bindings: signature(context.bindings) }; }
+  _stamp(context) { return { key: context.contextKey, connection: context.hass?.connection, user: context.hass?.user?.id,
+    auth: context.hass?.auth, callService: context.hass?.callService,
+    access: signature([context.hass?.user?.is_active, context.hass?.user?.is_admin, context.hass?.user?.permissions]),
+    bindings: signature(context.bindings) }; }
   _same(stamp, context) {
     return stamp.key === context.contextKey && stamp.connection === context.hass?.connection && stamp.user === context.hass?.user?.id
+      && stamp.auth === context.hass?.auth && stamp.callService === context.hass?.callService
+      && stamp.access === signature([context.hass?.user?.is_active, context.hass?.user?.is_admin, context.hass?.user?.permissions])
       && stamp.bindings === signature(context.bindings) && context.hass?.connection?.connected === true;
   }
   _activationCurrent(pending) {
-    if (this._disposed) return false;
+    if (this._disposed || pending.stale) return false;
     const context = this._context(), resolved = this._resolve(context, pending.id, null);
     return this._same(pending.stamp, context) && !resolved.diagnostics.length && resolved.binding?.scene_entity === pending.entity
       && sceneActivationAvailability(context.hass, pending.entity).available;
+  }
+  _removePendingListener(pending) {
+    if (!pending?.listening) return;
+    pending.stamp.connection?.removeEventListener?.('disconnected', this._onPendingDisconnected);
+    pending.listening = false;
   }
   _resolve(context, id, draft) {
     const settings = readScenePreviews(context.bindings), diagnostics = settings.diagnostics.slice();
@@ -253,6 +264,9 @@ export class ScenePreviewController {
     return true;
   }
   revalidate() {
+    // Remember a loss while the request is in flight, even without a visual
+    // preview. Recovery makes a fresh action eligible, not the old result.
+    if (this._pending && !this._activationCurrent(this._pending)) this._pending.stale = true;
     if (!this._active) return { ok: false, token: null, diagnostics: [] };
     const active = this._active, context = this._context();
     if (!this._same(active.stamp, context)) return this._invalid([issue('context', 'The preview context or connection changed.')], active.binding);
@@ -280,7 +294,8 @@ export class ScenePreviewController {
     diagnostics = resolved.diagnostics.concat(sceneActivationAvailability(context.hass, entity).diagnostics);
     if (!this._same(stamp, context) || binding?.scene_entity !== entity) diagnostics.push(issue('context', 'The scene action context changed before activation.'));
     if (diagnostics.length) return { ok: false, status: 'invalid', diagnostics };
-    const pending = { stamp, id, entity }; this._pending = pending;
+    const pending = { stamp, id, entity, stale: false, listening: true }; this._pending = pending;
+    stamp.connection?.addEventListener?.('disconnected', this._onPendingDisconnected);
     try {
       this.onStatus({ status: 'activating', itemId: id, sceneEntity: entity, diagnostics: [] });
       context = this._context(); resolved = this._resolve(context, id, null);
@@ -295,7 +310,10 @@ export class ScenePreviewController {
       const message = typeof error?.message === 'string' ? error.message : String(error), current = this._activationCurrent(pending);
       if (current) this.onStatus({ status: 'error', itemId: id, sceneEntity: entity, error: message, diagnostics: [] });
       return { ok: false, status: 'error', current, error: message, diagnostics: [] };
-    } finally { if (this._pending === pending) this._pending = null; }
+    } finally {
+      this._removePendingListener(pending);
+      if (this._pending === pending) this._pending = null;
+    }
   }
-  dispose() { this._disposed = true; this.stop(undefined, 'disposed'); }
+  dispose() { this._disposed = true; this._removePendingListener(this._pending); this.stop(undefined, 'disposed'); }
 }

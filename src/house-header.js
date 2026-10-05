@@ -1,6 +1,8 @@
 // Read-only presentation for buildHouseSummary(). This future component has no
 // Home Assistant actions, navigation, clock or default household readings.
 // Root owns visibility and scene measurements; importing it creates no DOM.
+import { localize } from './localization.js';
+
 const text = (value, fallback) => typeof value === 'string' && value.trim() ? value : fallback;
 const statuses = new Set(['ready', 'partial', 'unavailable', 'unknown', 'invalid', 'waiting', 'empty', 'not_configured']);
 const rowNames = Object.freeze({ weather: 'Weather', people: 'Selected people', alarm: 'Alarm', lights: 'Light entities' });
@@ -32,11 +34,12 @@ export class HouseHeader {
     this.update();
   }
 
-  update(summary = {}) {
+  update(summary = {}, hass) {
     if (this.disposed) return false;
     setText(this.title, text(summary?.title?.text, "Taylor's 3D"));
+    this.element.setAttribute('aria-label', localize(hass, 'house.header.aria', { name: this.title.textContent }, "Taylor's 3D house summary"));
     this.title.dataset.source = text(summary?.title?.source, 'default');
-    setText(this.meta, text(summary?.session?.label, 'Waiting for Home Assistant'));
+    setText(this.meta, text(summary?.session?.label, localize(hass, 'house.header.waiting', {}, 'Waiting for Home Assistant')));
     this.meta.dataset.status = statuses.has(summary?.session?.status) ? summary.session.status : 'waiting';
     for (const [key, node] of this.rows) {
       const row = summary?.[key], status = statuses.has(row?.status) ? row.status : 'unavailable';
@@ -44,11 +47,12 @@ export class HouseHeader {
       // source that later disappears remains visible with its actual status.
       node.hidden = key !== 'lights' && (!row || status === 'not_configured');
       node.dataset.status = status;
-      const label = text(row?.label, fallbackLabels[key]);
-      setText(node, label); node.setAttribute('aria-label', `${rowNames[key]}: ${label}`);
-      if (key === 'lights') node.title = 'Counts Home Assistant light entities, including configured groups; not a count of physical bulbs.';
-      else if (key === 'people') node.title = 'Only the explicitly selected people are counted.';
-      else node.title = text(row?.name, rowNames[key]);
+      const name = localize(hass, `house.header.${key}`, {}, rowNames[key]);
+      const label = text(row?.label, localize(hass, `house.header.${key}Unavailable`, {}, fallbackLabels[key]));
+      setText(node, label); node.setAttribute('aria-label', localize(hass, 'house.header.itemAria', { label: name, value: label }, `${name}: ${label}`));
+      if (key === 'lights') node.title = localize(hass, 'house.header.lightCountHelp', {}, 'Counts Home Assistant light entities, including configured groups; not a count of physical bulbs.');
+      else if (key === 'people') node.title = localize(hass, 'house.header.peopleCountHelp', {}, 'Only the explicitly selected people are counted.');
+      else node.title = text(row?.name, name);
     }
     return true;
   }

@@ -1,4 +1,5 @@
 import { entityMetadata } from './entity-metadata.js';
+import { localize } from './localization.js';
 
 export const ROOM_SUMMARY_LIMITS = Object.freeze({ entities: 512 });
 const INVALID = Symbol('invalid field');
@@ -73,21 +74,21 @@ function currentEntity(states, entities, devices, entityId) {
  * count as one HA light entity, not as their physical members. No clock/actions.
  */
 export function buildRoomSummary(options = {}) {
-  if (!plain(options)) return unavailable('Room summary settings need review.');
+  if (!plain(options)) return unavailable(localize(undefined, 'room.settingsInvalid'));
   const hass = field(options, 'hass');
-  if (!currentSession(hass)) return unavailable('Waiting for a current Home Assistant connection.');
+  if (!currentSession(hass)) return unavailable(localize(hass, 'room.waiting'));
   const entityIds = field(options, 'entityIds');
-  if (!Array.isArray(entityIds)) return unavailable('Room summary needs an explicit list of current room entity IDs.');
-  if (entityIds.length > ROOM_SUMMARY_LIMITS.entities) return unavailable(`Room summary supports at most ${ROOM_SUMMARY_LIMITS.entities} supplied entity IDs. Reduce this room list; no partial count is shown.`);
+  if (!Array.isArray(entityIds)) return unavailable(localize(hass, 'room.membersMissing'));
+  if (entityIds.length > ROOM_SUMMARY_LIMITS.entities) return unavailable(localize(hass, 'room.membersLimit', { max: ROOM_SUMMARY_LIMITS.entities }));
   const unique = new Set();
   for (let index = 0; index < entityIds.length; index++) {
     const id = field(entityIds, String(index));
-    if (!identifier(id)) return unavailable('Room summary contains an invalid entity ID. Review the room list; no partial count is shown.');
+    if (!identifier(id)) return unavailable(localize(hass, 'room.memberInvalid'));
     unique.add(id);
   }
   const states = field(hass, 'states'), entities = own(hass, 'entities') ? field(hass, 'entities') : {},
     devices = own(hass, 'devices') ? field(hass, 'devices') : {};
-  if (!plain(states) || !plain(entities) || !plain(devices)) return unavailable('Current Home Assistant entities could not be read.');
+  if (!plain(states) || !plain(entities) || !plain(devices)) return unavailable(localize(hass, 'room.entitiesUnreadable'));
   const out = counts();
   for (const id of unique) {
     const domain = id.split('.')[0];
@@ -105,9 +106,9 @@ export function buildRoomSummary(options = {}) {
       else if (!knownMediaStates.has(source.value)) out.media.unknown++;
     }
   }
-  let text = `${out.lights.on} light ${out.lights.on === 1 ? 'entity' : 'entities'} on · ${out.media.playing} media ${out.media.playing === 1 ? 'player' : 'players'} playing`;
-  if (out.lights.unknown) text += ` · ${out.lights.unknown} light ${out.lights.unknown === 1 ? 'reading' : 'readings'} unknown`;
-  if (out.media.unknown) text += ` · ${out.media.unknown} media ${out.media.unknown === 1 ? 'reading' : 'readings'} unknown`;
-  if (out.lights.groupsIncluded) text += ' · Includes light groups; counts entities, not physical bulbs';
+  let text = `${localize(hass, 'room.lightsOn', { count: out.lights.on })} · ${localize(hass, 'room.mediaPlaying', { count: out.media.playing })}`;
+  if (out.lights.unknown) text += ` · ${localize(hass, 'room.lightsUnknown', { count: out.lights.unknown })}`;
+  if (out.media.unknown) text += ` · ${localize(hass, 'room.mediaUnknown', { count: out.media.unknown })}`;
+  if (out.lights.groupsIncluded) text += ` · ${localize(hass, 'room.groupsIncluded')}`;
   return { available: true, text, ...out };
 }

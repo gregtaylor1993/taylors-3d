@@ -99,6 +99,77 @@ describe('security draft form and saving', () => {
   });
 });
 
+describe('explicit plan targets, locks, source age and current session', () => {
+  function planContext(options = {}) {
+    const ctx = setup({ ...options, model: null });
+    ctx.card._hass.user = { id: 'taylor', is_admin: true, is_active: true }; ctx.card._hass.connection = { connected: true };
+    ctx.card._floors = [{ id: 'ground', elevation: 0 }, { id: 'upper', elevation: 3 }];
+    ctx.card._roomList = [{ room: { id: 'bedroom', floor_id: 'upper', polygon: [[0, 0], [4, 0], [4, 3], [0, 3]], name: 'Bedroom' }, floorId: 'upper' }];
+    ctx.card.trackingAnchors = () => [{ id: 'door-marker', label: 'Door marker', position: { x: .5, y: 1, z: .4, floorId: 'ground' } }];
+    return ctx;
+  }
+  function newPlan(ctx, placement) { ctx.click('add'); ctx.change('target-type', 'plan'); ctx.change('plan-source', placement); ctx.change('entity', 'binary_sensor.front'); ctx.click('contact-preset'); }
+  it('saves an exact room plan binding without requiring a model or creating motion', () => {
+    const ctx = planContext(); newPlan(ctx, 'room'); ctx.change('plan-room', 'bedroom'); ctx.click('save');
+    expect(ctx.card._layout.security_bindings[0]).toMatchObject({ target: { type: 'plan', roomId: 'bedroom' }, entity: 'binary_sensor.front', kind: 'door' });
+    expect(ctx.card._layout.security_bindings[0]).not.toHaveProperty('object_id'); expect(ctx.card._layout.security_bindings[0]).not.toHaveProperty('motion'); ctx.noActions();
+  });
+  it('requires deliberate finite fixed metres and the exact source floor', () => {
+    const ctx = planContext(); newPlan(ctx, 'position'); expect(ctx.input('plan-x').value).toBe(''); expect(ctx.input('plan-floor').value).toBe('');
+    ctx.click('save'); expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled();
+    ctx.change('plan-x', '2.5', 'input'); ctx.change('plan-y', '-1'); ctx.change('plan-z', '.4'); ctx.change('plan-floor', 'upper'); ctx.click('save');
+    expect(ctx.card._layout.security_bindings[0].target).toEqual({ type: 'plan', position: { x: 2.5, y: -1, z: .4, floorId: 'upper' } }); ctx.noActions();
+  });
+  it('preserves a missing exact marker and imported extras until a deliberate relink', () => {
+    const raw = saved({ target: { type: 'plan', position_key: 'removed-marker', future: { keep: 1 } }, futureBinding: [3] }); delete raw.object_id;
+    const ctx = planContext({ layout: { security_bindings: [raw] } }); ctx.click('edit', 0);
+    expect(ctx.input('plan-anchor').value).toBe('removed-marker'); expect(ctx.input('label').disabled).toBe(true); ctx.click('save'); expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled();
+    ctx.click('repair'); ctx.change('plan-anchor', 'door-marker'); ctx.click('save');
+    expect(ctx.card._layout.security_bindings[0]).toEqual({ ...raw, target: { ...raw.target, position_key: 'door-marker' } }); ctx.noActions();
+  });
+  it('deliberately changes contact to lock without retaining contact lists or a hinge', () => {
+    const ctx = setup({ states: { 'lock.front': st('unlocking', 'Entrance lock', null) }, layout: { security_bindings: [saved({ motion: hinge() })] } });
+    ctx.click('edit', 0); ctx.change('kind', 'lock'); ctx.change('entity', 'lock.front');
+    expect(ctx.input('motion')).toBeNull(); expect(ctx.input('open-states')).toBeNull(); expect(ctx.host.textContent).toContain('Unlocking');
+    ctx.click('save'); const raw = ctx.card._layout.security_bindings[0]; expect(raw).toMatchObject({ kind: 'lock', entity: 'lock.front', object_id: 'front' });
+    for (const key of ['motion', 'open_states', 'closed_states']) expect(raw).not.toHaveProperty(key); expect(ctx.model.leaf.rotation.y).toBe(0); ctx.noActions();
+  });
+  it('filters current entity and inherited device areas without replacing a saved selection', () => {
+    const ctx = setup({ layout: { security_bindings: [saved()] } });
+    ctx.card._hass.areas = { entry: { name: 'Entry' }, kitchen: { name: 'Kitchen' } };
+    ctx.card._hass.entities = { 'binary_sensor.front': { device_id: 'front-device' }, 'binary_sensor.window': { area_id: 'kitchen' } };
+    ctx.card._hass.devices = { 'front-device': { area_id: 'entry' } }; ctx.click('edit', 0); ctx.change('picker-area', 'area:kitchen');
+    expect(ctx.input('entity').value).toBe('binary_sensor.front'); expect(ctx.input('entity').selectedOptions[0].disabled).toBe(true);
+    expect([...ctx.input('entity').options].filter((o) => !o.disabled).map((o) => o.value)).toContain('binary_sensor.window');
+    ctx.change('label', 'Keep source'); ctx.click('save'); expect(ctx.card._layout.security_bindings[0].entity).toBe('binary_sensor.front'); ctx.noActions();
+  });
+  it('edits actual timestamp age while preserving rule extras and rejects untouched malformed rules', () => {
+    const raw = saved({ freshness: { timestamp_mode: 'last_updated', timestamp_format: 'iso', max_age_seconds: 10, futureRule: 4 } });
+    const ctx = setup({ layout: { security_bindings: [raw] } }); ctx.click('edit', 0); ctx.change('freshness-age', '30', 'input'); ctx.click('save');
+    expect(ctx.card._layout.security_bindings[0].freshness).toEqual({ ...raw.freshness, max_age_seconds: 30 }); ctx.noActions();
+    const bad = setup({ layout: { security_bindings: [saved({ freshness: false })] } }); bad.click('edit', 0); bad.change('label', 'Only label'); bad.click('save');
+    expect(bad.card.commitFeatureLayout).not.toHaveBeenCalled(); expect(bad.editor.draft.freshness).toBe(false);
+    bad.change('freshness-mode', 'current'); bad.click('save'); expect(bad.card._layout.security_bindings[0]).not.toHaveProperty('freshness'); bad.noActions();
+  });
+  it('poisons a dirty draft through observed connection loss and recovery', () => {
+    const ctx = planContext(); newPlan(ctx, 'room'); ctx.change('plan-room', 'bedroom'); ctx.change('label', 'Held draft');
+    ctx.card._hass.connection.connected = false; ctx.editor.afterUpdate(ctx.host); ctx.card._hass.connection.connected = true; ctx.editor.afterUpdate(ctx.host);
+    ctx.editor.onClick('sec-save'); expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled(); expect(ctx.editor.draft.label).toBe('Held draft');
+    ctx.click('cancel'); newPlan(ctx, 'room'); ctx.change('plan-room', 'bedroom'); ctx.click('save'); expect(ctx.card.commitFeatureLayout).toHaveBeenCalledOnce(); ctx.noActions();
+  });
+  it('does not start Add or Save while the layout is loading or absent', () => {
+    const ctx = planContext(); ctx.card._loading = true; ctx.editor.onClick('sec-add'); expect(ctx.editor.draft).toBeNull();
+    ctx.card._loading = false; newPlan(ctx, 'room'); ctx.change('plan-room', 'bedroom'); ctx.card._layout = null; ctx.editor.onClick('sec-save'); expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled(); ctx.noActions();
+  });
+  it('rejects an old held Clear after session loss/recovery but accepts a fresh native press', () => {
+    const ctx = planContext({ layout: { security_bindings: [saved()] } }); ctx.editor.afterUpdate(ctx.host);
+    const button = ctx.host.querySelector('[data-act="sec-clear"]'); button.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    ctx.card._hass.connection.connected = false; ctx.editor.afterUpdate(ctx.host); ctx.card._hass.connection.connected = true; ctx.editor.afterUpdate(ctx.host);
+    button.click(); expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled();
+    button.dispatchEvent(new Event('pointerdown', { bubbles: true })); button.click(); expect(ctx.card._layout.security_bindings).toEqual([]); ctx.noActions();
+  });
+});
+
 describe('contact choices, missing references and deliberate repair', () => {
   it('filters hidden/disabled/diagnostic and noncontact classes while preserving missing selected IDs', () => {
     const ctx = setup({ states: { 'binary_sensor.hidden': st(), 'binary_sensor.disabled': st(), 'binary_sensor.diagnostic': st(), 'lock.front': st() },

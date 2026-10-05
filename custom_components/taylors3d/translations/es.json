@@ -1,0 +1,53 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Taylor's 3D",
+        "description": "Guarda los diseños de Taylor's 3D en Home Assistant para que todos los usuarios y dispositivos vean el mismo plano, y carga la tarjeta en todos los paneles."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Taylor's 3D ya está configurado."
+    }
+  },
+  "services": {
+    "select_view": {
+      "name": "Seleccionar vista de cámara",
+      "description": "Selecciona una vista guardada en una tarjeta abierta de Taylor's 3D. Indique el nombre del panel, el ID de la tarjeta o ambos. Los destinos no disponibles o ambiguos y las vistas desconocidas indican un error de acción.",
+      "fields": {
+        "layout_key": {
+          "name": "Clave del diseño",
+          "description": "El layout_key configurado en la tarjeta deseada."
+        },
+        "preset": {
+          "name": "Vista guardada",
+          "description": "El ID de la vista guardada o su nombre exacto y único."
+        },
+        "panel": {
+          "name": "Panel",
+          "description": "El nombre del panel guardado para este navegador en la pestaña Vistas, o automation_panel en la configuración. Indique este nombre o un ID de tarjeta."
+        },
+        "card_id": {
+          "name": "ID de tarjeta",
+          "description": "El automation_card_id configurado en la tarjeta. Indique este ID o un panel."
+        },
+        "mode": {
+          "name": "Modo de cámara",
+          "description": "Anulación opcional. En caso contrario, usa el modo guardado de la vista o el modo actual de la tarjeta."
+        },
+        "return_after": {
+          "name": "Volver después de",
+          "description": "Segundos opcionales antes de restaurar la vista y la cámara anteriores. Cero o ningún valor mantiene la vista seleccionada. Tocar la tarjeta o enviar otra solicitud coincidente cancela el retorno."
+        }
+      }
+    }
+  },
+  "selector": {
+    "camera_mode": {
+      "options": {
+        "3d": "3D",
+        "top": "Vista superior"
+      }
+    }
+  }
+}

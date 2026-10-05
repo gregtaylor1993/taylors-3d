@@ -11,13 +11,14 @@ const source = { source: 'xy', entity: 'sensor.position', x_attr: 'map.x', y_att
 const binding = { id: 'robot', entity: 'vacuum.robot', kind: 'xy', position_key: 'object:dock', position_source: source, future_binding_option: [1, 2] };
 const clone = (value) => JSON.parse(JSON.stringify(value));
 function setup(saved = []) {
-  const card = { _layout: { vacuum_bindings: clone(saved), pins: { keep: { x: 1 } } }, _config: { layout_key: 'home' },
+  const card = { isConnected: true, _editing: true, _loading: false, _layout: { vacuum_bindings: clone(saved), pins: { keep: { x: 1 } } }, _config: { layout_key: 'home' },
     _floors: [{ id: 'ground', name: 'Ground', elevation: 0 }, { id: 'upper', name: 'Upper', elevation: 3 }], _roomList: [],
-    _hass: { states: { 'vacuum.robot': state('cleaning'), 'sensor.position': state(), 'sensor.other': state() }, entities: {}, callService: vi.fn(), callWS: vi.fn() },
+    _hass: { user: { id: 'current-admin', is_admin: true, is_active: true }, connection: { connected: true }, auth: {},
+      states: { 'vacuum.robot': state('cleaning'), 'sensor.position': state(), 'sensor.other': state() }, entities: {}, callService: vi.fn(), callWS: vi.fn() },
     _view: { model: { root: { uuid: 'model-one' } } }, _modelAlign: () => card._alignment,
     _alignment: { position: [0, 0, 0], rotation: 0, scale: 1 },
     trackingAnchors: () => [{ id: 'object:dock', label: 'Dock', position: { x: 0, y: 0, z: 0, floorId: 'ground' } }],
-    _edit: { beginTrackingPlanPick: vi.fn(), refreshOverlay: vi.fn() }, _history: new EditHistory(),
+    _edit: { tab: 'tracking', beginTrackingPlanPick: vi.fn(), refreshOverlay: vi.fn() }, _history: new EditHistory(),
   };
   card._history.reset({ layout: card._layout, config: card._config });
   card.commitFeatureLayout = vi.fn((patch) => { card._layout = { ...card._layout, ...patch }; card._history.record({ layout: card._layout, config: card._config }, 'Tracking calibration'); });
@@ -34,7 +35,7 @@ function setup(saved = []) {
   };
   const change = (field, value, index) => {
     const control = [...host.querySelectorAll(`[data-field="${field}"]`)].find((node) => index === undefined || Number(node.dataset.index) === index);
-    expect(control, field).toBeTruthy(); control.value = value; control.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(control, field).toBeTruthy(); control.focus(); control.value = value; control.dispatchEvent(new Event('change', { bubbles: true }));
   };
   const reading = (raw) => { card._hass.states['sensor.position'] = state('ready', { map: { x: raw[0], y: raw[1] } }); editor.updatePreviews(host); };
   const capture = (raw, plan) => { reading(raw); click('trk-cal-capture'); const pending = editor.pendingPlanPick; expect(pending).toBeTruthy(); expect(editor.acceptPlanPoint(plan, pending.floorId, pending.token)).toBe(true); };

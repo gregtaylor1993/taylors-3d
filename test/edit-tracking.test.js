@@ -8,9 +8,10 @@ const reading = (value, name, attributes = {}) => ({ state: value, attributes: {
 function setup() {
   const room = { id: 'lounge', area_id: 'lounge', floor_id: 'ground', polygon: [[0, 0], [4, 0], [4, 3], [0, 3]], doors: [] };
   const card = {
+    isConnected: true, _loading: false,
     _config: { layout_key: 'default', group_by: 'entity' },
     _layout: { version: 1, floors: [], rooms: [room], pins: {}, hidden: [], mower: {} },
-    _hass: { states: {
+    _hass: { user: { id: 'current-admin', is_admin: true, is_active: true }, connection: { connected: true }, auth: {}, states: {
       'binary_sensor.motion': reading('on', 'Lounge activity', { device_class: 'motion' }),
       'binary_sensor.car': reading('on', 'Vehicle occupancy', { device_class: 'occupancy' }),
       'vacuum.robot': reading('cleaning', 'Robot vacuum'), 'light.lamp': reading('on', 'Lounge lamp'),

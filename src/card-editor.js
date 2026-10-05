@@ -1,5 +1,7 @@
 // Visual editor for the card options (Lovelace "Show visual editor"), built on HA's ha-form.
 // Rooms, devices, mower and model are edited on the card itself (its Edit button).
+import { ImportedSourceControls } from './imported-source-controls.js';
+import { localize, localeInfo } from './localization.js';
 
 const BUBBLE_CONTROLS = ['mode', 'reset', 'section', 'daynight', 'minimap', 'edit'];
 const DEFAULTS = {
@@ -46,6 +48,7 @@ export const SCHEMA = [
   {
     type: 'grid', name: '', schema: [
       { name: 'view', selector: { select: { mode: 'dropdown', options: [{ value: '3d', label: '3D' }, { value: 'top', label: 'Top (north up)' }] } } },
+      { name: 'view_id', selector: { text: {} } },
       { name: 'floor', selector: { floor: {} } },
       { name: 'wall_height', selector: { number: { min: 0.2, max: 3, step: 0.05, mode: 'box', unit_of_measurement: 'm' } } },
       { name: 'group_by', selector: { select: { mode: 'dropdown', options: [{ value: 'device', label: 'One marker per device' }, { value: 'entity', label: 'One marker per entity' }] } } },
@@ -74,18 +77,46 @@ export const SCHEMA = [
           { name: 'model_position_z', selector: { number: { step: 0.01, mode: 'box', unit_of_measurement: 'm' } } },
           { name: 'model_rotation', selector: { number: { min: -180, max: 180, step: 0.5, mode: 'box', unit_of_measurement: '°' } } },
           { name: 'model_scale', selector: { number: { min: 0.0001, step: 0.0001, mode: 'box' } } },
-          { name: 'model_opacity', selector: { number: { min: 0.1, max: 1, step: 0.05, mode: 'slider' } } },
+          { name: 'model_opacity', selector: { number: { min: 0, max: 1, step: 0.05, mode: 'slider' } } },
         ],
       },
     ],
   },
 ];
 
+const TITLE_KEYS = new Map([
+  ['House appearance', 'house'], ['Navigation and device controls', 'navigation'],
+  ['Automation target', 'automation'], ['Model from a URL (instead of uploading in the card)', 'model'],
+]);
+const translatedSchemas = new Map();
+const text = (node, value) => { if (node.textContent !== value) node.textContent = value; };
+
+// Reuse one schema for each bundled language. Ordinary hass reading updates
+// do not allocate new schema/select options or replace native form controls.
+function schemaFor(hass) {
+  const language = localeInfo(hass).resolved;
+  if (language === 'en') return SCHEMA;
+  if (!translatedSchemas.has(language)) {
+    const translate = (fields) => fields.map((field) => {
+      const out = { ...field };
+      if (TITLE_KEYS.has(field.title)) out.title = localize(hass, `settings.title.${TITLE_KEYS.get(field.title)}`, {}, field.title);
+      if (field.schema) out.schema = translate(field.schema);
+      if (field.selector?.select) out.selector = { ...field.selector, select: { ...field.selector.select,
+        options: field.selector.select.options.map((option) => ({ ...option,
+          label: localize(hass, `settings.option.${field.name}.${option.value}`, {}, option.label) })) } };
+      return out;
+    });
+    translatedSchemas.set(language, translate(SCHEMA));
+  }
+  return translatedSchemas.get(language);
+}
+
 const LABELS = {
   height: 'Card height',
   layout_style: 'Card layout',
   house_colour_scheme: 'House colours',
   view: 'Start view',
+  view_id: 'Starting named view (exact ID)',
   floor: 'Start floor',
   wall_height: 'Cut-away wall height',
   occlusion: 'Dim markers behind walls',
@@ -110,12 +141,13 @@ const LABELS = {
   automation_panel: 'Panel name',
   automation_card_id: 'Card name (optional)',
   model_position_x: 'Model east position',
-  model_position_y: 'Model height position',
-  model_position_z: 'Model south position',
+  model_position_y: 'Model north position',
+  model_position_z: 'Model up position',
 };
 
 const HELPERS = {
   height: 'CSS height, e.g. 520px or 60vh',
+  view_id: 'Use the exact view ID shown in Edit → Views, such as front-door or garden. Leave empty to use the start floor or the first available view. This chooses the opening view; its saved camera is edited under Views. Press Save in Home Assistant’s card editor to apply card settings.',
   layout_style: 'House adds a header and navigation, right-hand room controls on wide cards and a bottom sheet on phones. Existing cards keep their standard layout until you choose House.',
   house_colour_scheme: 'Applies to the House layout. Dark graphite uses amber lights and teal navigation. Use Settings → House in the card to choose the real weather, people and alarm sources.',
   wall_height: 'Drawn walls only; a model is cut at the top of the storey',
@@ -174,6 +206,9 @@ export function cleanConfig(config) {
 }
 
 export class Taylors3dCardEditor extends HTMLElement {
+  connectedCallback() { if (this._config) this._render(); }
+  disconnectedCallback() { this._sourceControls?.suspend(); }
+
   setConfig(config) {
     this._config = config;
     this._render();
@@ -206,25 +241,23 @@ export class Taylors3dCardEditor extends HTMLElement {
   _renderControlOrder(data) {
     const key = JSON.stringify([data.show_bubble_bar, data.bubble_bar_controls]);
     // HA refreshes hass frequently. Keep the same buttons and keyboard focus until the order changes.
-    if (key === this._controlOrderKey) return;
+    if (key === this._controlOrderKey) { this._updateControlOrderLabels(data); return; }
     this._controlOrder.hidden = !data.show_bubble_bar;
     const title = document.createElement('h3');
-    title.textContent = 'Button order';
+    this._orderTitle = title;
     title.style.cssText = 'margin: 0 0 8px; font-size: 15px; font-weight: 500;';
     const hint = document.createElement('p');
-    hint.textContent = data.bubble_bar_controls.length ? 'Use Up and Down to arrange the buttons on your bottom bar.' : 'Select buttons under Navigation and device controls to arrange them here.';
+    this._orderHint = hint;
     hint.style.cssText = 'margin: 0 0 8px; color: var(--secondary-text-color); font-size: 13px;';
     const list = document.createElement('ol');
     list.setAttribute('role', 'list');
     list.style.cssText = 'list-style: none; margin: 0; padding: 0;';
-    const labels = new Map(SCHEMA.flatMap((field) => field.schema || [field])
-      .find((field) => field.name === 'bubble_bar_controls').selector.select.options.map((option) => [option.value, option.label]));
     data.bubble_bar_controls.forEach((id, index, controls) => {
       const row = document.createElement('li');
       row.dataset.control = id;
       row.style.cssText = 'display: flex; align-items: center; gap: 8px; margin: 4px 0;';
       const label = document.createElement('span');
-      label.textContent = `${index + 1}. ${labels.get(id)}`;
+      label.textContent = `${index + 1}. ${id}`;
       label.style.cssText = 'flex: 1; min-width: 0;';
       row.append(label);
       for (const [direction, text, delta] of [['up', 'Up', -1], ['down', 'Down', 1]]) {
@@ -232,7 +265,6 @@ export class Taylors3dCardEditor extends HTMLElement {
         button.type = 'button';
         button.className = direction;
         button.textContent = text;
-        button.setAttribute('aria-label', `Move ${labels.get(id)} ${direction}`);
         button.disabled = direction === 'up' ? index === 0 : index === controls.length - 1;
         button.style.cssText = `min-width: 58px; min-height: 44px; padding: 8px; border-radius: 8px; font: inherit; color: var(--primary-text-color); background: var(--secondary-background-color, var(--card-background-color)); border: 1px solid var(--divider-color); cursor: ${button.disabled ? 'default' : 'pointer'}; opacity: ${button.disabled ? 0.4 : 1};`;
         button.addEventListener('click', () => this._moveBubbleControl(id, delta));
@@ -242,17 +274,40 @@ export class Taylors3dCardEditor extends HTMLElement {
     });
     this._controlOrder.replaceChildren(title, hint, list);
     this._controlOrderKey = key;
+    this._updateControlOrderLabels(data);
+  }
+
+  _updateControlOrderLabels(data) {
+    const t = (key, fallback, params = {}) => localize(this._hass, `settings.${key}`, params, fallback);
+    this._controlOrder.setAttribute('aria-label', t('order.aria', 'Bubble bar button order'));
+    text(this._orderTitle, t('order.title', 'Button order'));
+    text(this._orderHint, data.bubble_bar_controls.length
+      ? t('order.hint', 'Use Up and Down to arrange the buttons on your bottom bar.')
+      : t('order.empty', 'Select buttons under Navigation and device controls to arrange them here.'));
+    const options = SCHEMA.flatMap((field) => field.schema || [field])
+      .find((field) => field.name === 'bubble_bar_controls').selector.select.options;
+    for (const [index, id] of data.bubble_bar_controls.entries()) {
+      const row = this._controlOrder.querySelector(`[data-control="${id}"]`);
+      const label = t(`option.bubble_bar_controls.${id}`, options.find((option) => option.value === id)?.label || id);
+      text(row.querySelector('span'), `${index + 1}. ${label}`);
+      for (const [direction, fallback] of [['up', 'Up'], ['down', 'Down']]) {
+        const button = row.querySelector(`.${direction}`);
+        text(button, t(`order.${direction}`, fallback));
+        button.setAttribute('aria-label', t(direction === 'up' ? 'order.moveUp' : 'order.moveDown',
+          `Move {label} ${direction}`, { label }));
+      }
+    }
   }
 
   _render() {
     if (!customElements.get('ha-form')) {
-      this.textContent = 'Edit this card in YAML (the visual editor needs a newer Home Assistant).';
+      text(this, localize(this._hass, 'settings.noForm', {}, 'Edit this card in YAML (the visual editor needs a newer Home Assistant).'));
       return;
     }
     if (!this._form) {
       this._form = document.createElement('ha-form');
-      this._form.computeLabel = (s) => LABELS[s.name] || s.name;
-      this._form.computeHelper = (s) => HELPERS[s.name] || '';
+      this._form.computeLabel = (s) => localize(this._hass, `settings.label.${s.name}`, {}, LABELS[s.name] || s.name);
+      this._form.computeHelper = (s) => localize(this._hass, `settings.helper.${s.name}`, {}, HELPERS[s.name] || '');
       this._form.addEventListener('value-changed', (e) => {
         e.stopPropagation();
         this._updateConfig(e.detail.value);
@@ -262,17 +317,27 @@ export class Taylors3dCardEditor extends HTMLElement {
       this._controlOrder.setAttribute('aria-label', 'Bubble bar button order');
       this._controlOrder.style.cssText = 'margin: 20px 0 0; color: var(--primary-text-color);';
       const hint = document.createElement('p');
+      this._setupHint = hint;
       hint.style.cssText = 'margin: 16px 0 0; color: var(--secondary-text-color); font-size: 13px;';
-      hint.textContent = 'Rooms, devices, the mower and the 3D model are set up on the card itself: save, then use its Edit button.';
       this.append(this._form, this._controlOrder, hint);
+      this._sourceControls = new ImportedSourceControls(this, { getConfig: () => this._config, getHass: () => this._hass,
+        onChange: (config) => {
+          // Exact deletions must not clean or adopt unrelated imported settings.
+          this._config = config; this._render();
+          this.dispatchEvent(new CustomEvent('config-changed', { detail: { config }, bubbles: true, composed: true }));
+        } });
+      this.append(this._sourceControls.el);
     }
     this._form.hass = this._hass;
-    this._form.schema = SCHEMA;
+    this._form.schema = schemaFor(this._hass);
     const data = { ...DEFAULTS, ...cleanConfig(this._config) };
     this._form.data = { ...data, bubble_bar_controls: [...data.bubble_bar_controls],
       model_position_x: data.model_position?.[0] ?? 0, model_position_y: data.model_position?.[1] ?? 0,
       model_position_z: data.model_position?.[2] ?? 0 };
     this._renderControlOrder(data);
+    text(this._setupHint, localize(this._hass, 'settings.setup', {},
+      'Rooms, devices, the mower and the 3D model are set up on the card itself: save, then use its Edit button.'));
+    this._sourceControls.update();
   }
 }
 

@@ -30,6 +30,53 @@ describe('card editor', () => {
     expect(mod.cleanConfig({ zoom_to: 'cursor' })).toEqual({ zoom_to: 'cursor' });
   });
 
+  it('edits the initial named view through the native card form without changing its camera or other overrides', () => {
+    const el = document.createElement('taylors3d-card-editor');
+    const config = { type: 'custom:taylors3d-card', view_id: 'front-door',
+      views: { 'front-door': { label: 'Front door', camera: { position: [1, 2, 3], target: [0, 0, 0] }, extra: true } } };
+    el.setConfig(config);
+    const form = el.querySelector('ha-form');
+    const field = mod.SCHEMA.flatMap((item) => item.schema || [item]).find((item) => item.name === 'view_id');
+    expect(field?.selector).toEqual({ text: {} });
+    expect(form.data.view_id).toBe('front-door');
+    expect(form.computeHelper({ name: 'view_id' })).toContain('Edit → Views');
+    let got;
+    el.addEventListener('config-changed', (event) => { got = event.detail.config; });
+    form.dispatchEvent(new CustomEvent('value-changed', { detail: { value: { ...form.data, view_id: 'garden' } } }));
+    expect(got).toEqual({ ...config, view_id: 'garden' });
+    expect(config.view_id).toBe('front-door');
+    form.dispatchEvent(new CustomEvent('value-changed', { detail: { value: { ...form.data, view_id: '' } } }));
+    expect(got.view_id).toBeUndefined();
+    expect(got.views).toEqual(config.views);
+  });
+
+  it('allows a fully transparent URL model while preserving a large authored placement', () => {
+    const fields = mod.SCHEMA.flatMap((item) => item.schema || [item]).flatMap((item) => item.schema || [item]);
+    expect(fields.find((item) => item.name === 'model_opacity').selector.number.min).toBe(0);
+    const el = document.createElement('taylors3d-card-editor');
+    el.setConfig({ type: 'custom:taylors3d-card', model: '/local/house.glb', model_position: [120.25, 18, -75.5] });
+    const form = el.querySelector('ha-form');
+    let got;
+    el.addEventListener('config-changed', (event) => { got = event.detail.config; });
+    form.dispatchEvent(new CustomEvent('value-changed', { detail: { value: { ...form.data, model_opacity: 0 } } }));
+    expect(got.model_opacity).toBe(0);
+    expect(got.model_position).toEqual([120.25, 18, -75.5]);
+  });
+
+  it('labels URL model placement as east/north/up and saves that exact axis order', () => {
+    const el = document.createElement('taylors3d-card-editor');
+    el.setConfig({ type: 'custom:taylors3d-card', model: '/local/house.glb', model_position: [1, 2, 3] });
+    const form = el.querySelector('ha-form');
+    expect(['x', 'y', 'z'].map((axis) => form.computeLabel({ name: `model_position_${axis}` })))
+      .toEqual(['Model east position', 'Model north position', 'Model up position']);
+    let got;
+    el.addEventListener('config-changed', (event) => { got = event.detail.config; });
+    form.dispatchEvent(new CustomEvent('value-changed', { detail: { value: {
+      ...form.data, model_position_x: 10, model_position_y: 20, model_position_z: 30,
+    } } }));
+    expect(got.model_position).toEqual([10, 20, 30]);
+  });
+
   it('offers lights auto / off (auto is the default)', () => {
     const field = mod.SCHEMA.flatMap((x) => x.schema || [x]).find((x) => x.name === 'lights');
     expect(field.selector.select.options.map((o) => o.value)).toEqual(['auto', 'off']);

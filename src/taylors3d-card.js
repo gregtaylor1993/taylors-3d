@@ -23,6 +23,7 @@ import { bindObjects, effectiveGroups, nightFactor, sunVector, sunStrength, clam
 import { moonPosition } from './sky.js';
 import { ObjectPopup, objectAction, actionTarget, toggleCall } from './objects/popup.js';
 import { DevicePopup } from './device-popup.js';
+import { roomActionsFor } from './room-actions.js';
 import { MiniMap } from './minimap.js';
 import { bubbleControls, roomAtPlan, focusCamera } from './navigation.js';
 import { EditHistory } from './history.js';
@@ -33,6 +34,7 @@ import { entityMetadata } from './entity-metadata.js';
 import { buildTrackedEntities, TrackedEntitiesLayer } from './tracked-entities.js';
 import { readSunState, readHaLocation, readWeather, WeatherLayer } from './weather.js';
 import { SecurityLayer } from './security.js';
+import { buildPlanSecurity, PlanSecurityLayer } from './security-plan.js';
 import { readModelRendering } from './model-rendering.js';
 import { ScenePreviewController } from './scene-preview.js';
 import { ScenePreviewBar } from './scene-preview-bar.js';
@@ -40,14 +42,18 @@ import { AmbientIdleController } from './ambient-idle.js';
 import { wallKeepSelectors } from './wall-presentation.js';
 import { readFloorPresentation } from './floor-presentation.js';
 import { HouseShell } from './house-shell.js';
-import { HOUSE_NAVIGATION_ITEMS } from './house-navigation.js';
-import { buildHouseCategory } from './house-categories.js';
+import { FurnitureCoordinator } from './furniture-coordinator.js';
+import { FurnitureLayer } from './furniture-rendering.js';
+import { localizeHouseNavigationItems } from './house-navigation.js';
+import { localize, localeKey } from './localization.js';
+import { ownedRuntimeError, ownedRuntimeDetails, runtimeNoticeText } from './runtime-notices.js';
+import { buildHouseCategory, ownedHouseCategoryPresentation } from './house-categories.js';
 import { houseBaseHeight } from './house-card-size.js';
 import { floorPresentationContext } from './floor-presentation-context.js';
 import { displayPlanPosition, displayFloorFootprint, displayLocatedRecords, displayCameraAnchors,
   translateFloorCamera } from './floor-presentation-adapters.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 const NONE = Object.freeze({}); // stable stand-in for a missing layout.objects / groups (binding cache key)
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LONG_PRESS_MS = 500;
@@ -457,6 +463,8 @@ class Taylors3dCard extends HTMLElement {
     this._trackingTimer = null;
     this._trackingDeadline = null;
     this._trackingGeneration = 0;
+    this._securitySessionGeneration = 0;
+    this._securityPlanData = { records: [], diagnostics: [], miniMap: [], nextExpiry: null };
     this._onTrackingVisibility = () => {
       this._syncSecurity(true);
       if (document.hidden) this._clearTrackingTimer();
@@ -475,7 +483,7 @@ class Taylors3dCard extends HTMLElement {
       getViews: () => this._views,
       getCurrent: () => this._currentPresetCamera(),
       onSelect: (view, options) => this._selectPreset(view, options),
-      onError: (error) => { this._presetError = String(error?.message || error); this._showNotice(); },
+      onError: (error) => { this._presetError = error; this._showNotice(); },
     });
     this._onPanelName = (event) => {
       if (event.type === 'storage' && event.key !== null && event.key !== 'taylors3d.panel') return;
@@ -499,6 +507,7 @@ class Taylors3dCard extends HTMLElement {
 
   setConfig(config) {
     const previous = this._config;
+    if (previous) this._edit?._dashboardBackupEditor?.reset();
     if (previous) this._suspendAmbient('card settings changed');
     if (previous) this.finishWallSelectionPreparation({ reload: false });
     if (previous) this._wallLifecycleGeneration++;
@@ -533,6 +542,7 @@ class Taylors3dCard extends HTMLElement {
       if (this._devicePopup) this._devicePopup.close();
       if (this._hass) this._load();
     }
+    this._syncFurniture();
     if (this._stage) {
       this._stage.style.height = this._config.height;
       this._body.style.setProperty('--fp-height', this._config.height);
@@ -611,6 +621,8 @@ class Taylors3dCard extends HTMLElement {
       this._updateObjects();
       this._refreshAttached(); // the model (re)placed: attached markers follow their objects
       this._modelError = err;
+      const modelLabel = String(opts?.name || opts?.url || 'model');
+      this._modelErrorNotice = err === `Could not load model ${modelLabel}` ? ownedRuntimeError('modelLoad', { label: modelLabel }) : null;
       this._showNotice();
       // a new model resets the views; the first view applied frames it (see _resolveViewList)
       this._stage.classList.toggle('has-model', !!this._view.model);
@@ -737,6 +749,23 @@ class Taylors3dCard extends HTMLElement {
       this._trackingInputKey = null;
     }
     this._hass = hass;
+    this._devicePopup?.observeContexts?.(hass);
+    this._popup?.observeContexts?.(hass);
+    // Observe even same-object disconnect/role loss before a later recovered
+    // setter can make an old native backup gesture appear current again.
+    this._edit?._dashboardBackupEditor?.onStates();
+    // A disconnected session or unavailable alert source can recover before
+    // the scheduled update. Observe the loss now so an old input/Save cannot revive.
+    if (this._edit?._modelPositionScope) this._edit._modelPositionAllowed();
+    if (this._edit?._mowerImageScope) this._edit._mowerImageAllowed();
+    this._edit?._trackingEditor?.observe?.();
+    this._edit?._roomActionsEditor?.observe?.();
+    this._edit?._overlayEditor?._pollIntents();
+    this._observeSecuritySession();
+    this._observeAlertMapContext();
+    this._edit?._securityEditor?.observe();
+    this._syncSecurity();
+    this._syncFurniture();
     if (this._houseLayoutEnabled()) {
       if (!this._houseSessionActive()) this._devicePopup?.close({ restoreFocus: false });
       this._devicePopup?.update(hass);
@@ -794,10 +823,15 @@ class Taylors3dCard extends HTMLElement {
     this._houseObserved = new Set();
     this._syncHouseShell();
     this._schedule();
+    this._syncFurniture();
     this._syncAmbient();
   }
 
   disconnectedCallback() {
+    this._edit?._dashboardBackupEditor?.setActive(false);
+    this._edit?._furnitureDrag?.cancel();
+    this._furnitureCoordinator?.clearPreview();
+    this._syncFurniture();
     this._houseShell?.setData({ enabled: false });
     this._houseObserved?.clear();
     this._suspendAmbient('disconnected');
@@ -823,6 +857,8 @@ class Taylors3dCard extends HTMLElement {
     this._clearTrackingTimer();
     this._trackingLayer?.setVisible(false);
     this._securityLayer?.setVisible(false);
+    this._planSecurityLayer?.setVisible(false);
+    this._edit?._securityEditor?.observe();
     this._refreshSecurityMotion();
     this._presetEvents.disconnect();
     if (this._view) this._view.stop();
@@ -845,6 +881,7 @@ class Taylors3dCard extends HTMLElement {
     this._resetSecurity();
     const store = this._store;
     this._loading = true;
+    this._syncFurniture();
     this._syncWeatherVisibility();
     try {
       const layout = await store.load(this._hass);
@@ -854,6 +891,7 @@ class Taylors3dCard extends HTMLElement {
     } finally {
       if (store === this._store) {
         this._loading = false;
+        this._syncFurniture();
         this._layoutLoaded();
       }
     }
@@ -861,6 +899,11 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _render() {
+    this._edit?._dashboardBackupEditor?.dispose();
+    this._edit?._furnitureDrag?.cancel();
+    this._furnitureCoordinator?.clearPreview();
+    this._furnitureLayer?.dispose();
+    this._furnitureLayer = null;
     this._suspendAmbient('renderer replaced');
     this.finishWallSelectionPreparation({ reload: false });
     this._wallRestoreMergePending = false; // The replacement View loads the configured merge mode.
@@ -873,6 +916,10 @@ class Taylors3dCard extends HTMLElement {
     this._securityLayer = null;
     this._securityInputKey = null;
     this._securityModel = null;
+    this._planSecurityLayer?.dispose();
+    this._planSecurityLayer = null;
+    this._securityPlanScene = null;
+    this._securityPlanData = { records: [], diagnostics: [], miniMap: [], nextExpiry: null };
     this._weatherObserver?.disconnect();
     this._weatherObserver = null;
     this._weatherLayer?.dispose();
@@ -955,7 +1002,7 @@ class Taylors3dCard extends HTMLElement {
     this._view.onFrame = (now) => this._animateFeatures(now);
     this._view.onCameraInteraction = this._onAmbientCameraInteraction;
     this._objects = new ObjectLayer(this._view);
-    this._view.onObjectsInvalidate = () => this._updateObjects(); // view, section or placement changed
+    this._view.onObjectsInvalidate = () => { this._updateObjects(); this._syncFurniture(); }; // view, section or placement changed
     this._popup = new ObjectPopup(this._stage, {
       onAction: (domain, service, data) => this._hass && this._hass.callService(domain, service, data),
       project: (w) => this._view.projectWorld(w),
@@ -968,6 +1015,8 @@ class Taylors3dCard extends HTMLElement {
     });
     this._devicePopup = new DevicePopup(this._stage, {
       onAction: (domain, service, data) => this._hass.callService(domain, service, data),
+      getRoomActions: (room) => this._roomShortcutData(room?.id),
+      onRoomAction: (roomId, actionId) => this._runRoomShortcut(roomId, actionId),
       onMoreInfo: (entityId) => this._moreInfo(entityId),
       placement: this._houseLayoutEnabled() ? 'right' : this._config.control_panel,
       onVisibilityChange: (open, placement) => {
@@ -1003,6 +1052,9 @@ class Taylors3dCard extends HTMLElement {
       if (!this._editing && this._view._tween) this._view.stopCameraMotion();
       if (this._editing && e.target === canvas) this._edit.canvasDownCapture(e);
     }, true);
+    this._stage.addEventListener('pointerup', (event) => this._edit?._furnitureDrag?.up(event), true);
+    this._stage.addEventListener('pointercancel', (event) => this._edit?._furnitureDrag?.up(event, true), true);
+    this._stage.addEventListener('click', (event) => this._edit?._furnitureDrag?.consumeClick(event), true);
     this._body.addEventListener('pointerdown', (event) => this._scenePreviewInteraction(event), true);
     this._body.addEventListener('keydown', (event) => this._scenePreviewInteraction(event), true);
     canvas.addEventListener('pointerdown', (e) => this._editing && this._edit.canvasDown(e));
@@ -1048,6 +1100,9 @@ class Taylors3dCard extends HTMLElement {
     this._suspendAmbient('layout edit');
     if (!this._history.current && this._layout) this.resetHistory();
     this._layout = layout;
+    // Observe every saved source change before the coalesced redraw. A held
+    // security label must not regain its old authority after replace/recover.
+    this._syncSecurity();
     this.finishWallSelectionPreparation(); // Reload around the newly saved exact wall paths.
     if (!this._historyReplaying) this._recordHistory('Layout edit');
     const seq = (this._saveSeq = (this._saveSeq || 0) + 1);
@@ -1059,12 +1114,101 @@ class Taylors3dCard extends HTMLElement {
   }
 
   resetHistory() {
+    this._edit?._dashboardBackupEditor?.reset();
     this._markerRenderKey = null;
     this._history.reset(this._layout && this._config ? { layout: this._layout, config: this._config } : null);
     this._edit?.updateHistoryState?.();
   }
 
   commitFeatureLayout(patch) { this._commit({ ...this._layout, ...patch }); }
+
+  furnitureEditorAvailable() {
+    const user = this._hass?.user;
+    return this.isConnected === true && this._hass?.connection?.connected === true
+      && typeof user?.id === 'string' && !!user.id.trim() && user.is_admin === true
+      && (!Object.hasOwn(user, 'is_active') || user.is_active === true)
+      && this._editing === true && this._edit?.tab === 'furniture' && !!this._layout && !this._loading;
+  }
+
+  furnitureImportAvailable() {
+    const editor = this._edit?._furnitureEditor;
+    return this.furnitureEditorAvailable() && !!editor && !editor.dirty && !editor.stale;
+  }
+
+  _ensureFurnitureCoordinator() {
+    if (!this._furnitureCoordinator) this._furnitureCoordinator = new FurnitureCoordinator(this, {
+      onChange: () => { if (this._furnitureCoordinator) { this._syncFurniture(); this._schedule(); } },
+    });
+    return this._furnitureCoordinator;
+  }
+
+  get furnitureLibrary() { return this._ensureFurnitureCoordinator(); }
+  furnitureCatalogue() { return this._ensureFurnitureCoordinator().catalogueSnapshot(); }
+  furnitureRefresh() { return this._ensureFurnitureCoordinator().refresh(); }
+  async furnitureExportPack(packId) {
+    const coordinator = this._ensureFurnitureCoordinator(), generation = coordinator.generation;
+    if (!this.furnitureEditorAvailable()) return false;
+    const result = await coordinator.client.archive(packId);
+    coordinator.sync();
+    if (!result.ok || generation !== coordinator.generation || !this.furnitureEditorAvailable()) return false;
+    const url = URL.createObjectURL(new Blob([result.bytes], { type: 'application/zip' }));
+    const anchor = document.createElement('a'); anchor.href = url; anchor.download = `taylors3d-furniture-${packId}.zip`;
+    anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 250);
+    return true;
+  }
+  furniturePreviewDraft(raw) {
+    const coordinator = this._ensureFurnitureCoordinator();
+    this._furniturePreviewSource = raw === null ? null : this._furnitureSourceContext();
+    const accepted = coordinator.previewDraft(raw);
+    if (raw !== null && !accepted) { this._furniturePreviewSource = null; throw new Error('The current furniture draft cannot be previewed.'); }
+    this._syncFurniture();
+    return accepted;
+  }
+  furnitureRenderingReport() { return this._furnitureLayer?.report() ?? { valid: true, ready: true, pending: 0, rows: [], diagnostics: [] }; }
+
+  _furnitureSourceContext() {
+    let key;
+    try { key = JSON.stringify([this._config?.model || this._layout?.model, this._modelAlign(),
+      (this._floors || []).map((floor) => [floor.id, floor.elevation, floor.stale, this._view?.floorElevation?.(floor.id)])]); }
+    catch { return null; }
+    return { view: this._view, root: this._view?.model?.root, layout: this._layout, key };
+  }
+
+  _syncFurniture() {
+    if (this._syncingFurniture) return;
+    // An ordinary card with no furniture never fetches or allocates a layer.
+    if (!this._furnitureCoordinator && this._layout?.furniture === undefined && this._edit?.tab !== 'furniture') return;
+    this._syncingFurniture = true;
+    try {
+      const coordinator = this._ensureFurnitureCoordinator(); coordinator.sync();
+      const view = this._view, catalogue = coordinator.catalogueSnapshot();
+      if (coordinator.preview !== null) {
+        const captured = this._furniturePreviewSource, current = this._furnitureSourceContext();
+        if (!captured || !current || !['view', 'root', 'layout', 'key'].every((field) => captured[field] === current[field])) {
+          this._furniturePreviewSource = null; coordinator.clearPreview();
+        }
+      }
+      const raw = coordinator.preview ?? this._layout?.furniture;
+      // Saved references need one lazy read in each current session. Errors wait
+      // for the deliberate Refresh button; ordinary HA state updates never retry.
+      if (catalogue.status === 'unavailable' && Array.isArray(this._layout?.furniture?.instances)
+        && this._layout.furniture.instances.length && coordinator.sync()
+        && this._furnitureAttemptGeneration !== coordinator.generation) {
+        this._furnitureAttemptGeneration = coordinator.generation;
+        coordinator.refresh();
+      }
+      if (view && !this._furnitureLayer && raw !== undefined) this._furnitureLayer = new FurnitureLayer(view, {
+        library: coordinator.client, onInvalidate: () => {
+          if (this._view === view) { view.dirty = true; this._schedule(); }
+        },
+      });
+      const floors = (this._floors || []).map((floor) => ({ ...floor, elevation: view?.floorElevation?.(floor.id) ?? floor.elevation }));
+      this._furnitureLayer?.setData({ raw, floors, catalogue: catalogue.catalogue,
+        enabled: this.isConnected === true && !this._loading && !!this._layout && catalogue.status === 'ready',
+        contextKey: coordinator.generation });
+      this._edit?._furnitureDrag?.update();
+    } finally { this._syncingFurniture = false; }
+  }
 
   _wallSourceKey() {
     return JSON.stringify([this._config?.layout_key, this._config?.model || this._layout?.model?.version || null,
@@ -1113,11 +1257,11 @@ class Taylors3dCard extends HTMLElement {
       || this._hass?.user?.is_admin !== true || !this._wallSessionActive() || !this._layout || !this._view?.model
       || this._loading || this._mode !== '3d' || editor?.dirty || this._edit?._modelRenderingEditor?.dirty
       || this._edit?._floorPresentationEditor?.dirty || editor?.pendingSurfacePick) {
-      throw new Error('Open Edit → Model as an administrator in 3D, then cancel unfinished changes before preparing exact wall meshes.');
+      throw ownedRuntimeError('wallSession');
     }
     const current = this._view.wallPresentationCandidates?.();
     if (current?.prepared) return { prepared: true, report: current };
-    if (this._wallPreparation) throw new Error('Wall meshes are already being prepared. Wait for the model to finish loading.');
+    if (this._wallPreparation) throw ownedRuntimeError('wallPending');
     this._suspendAmbient('wall selection preparation');
     this._stopScenePreview('wall selection preparation');
     this._view.stopCameraMotion();
@@ -1133,10 +1277,10 @@ class Taylors3dCard extends HTMLElement {
       if (this._wallPreparation !== preparation || !this._wallPreparationCurrent(preparation)
         || !this.isConnected || !this._editing || this._edit?.tab !== 'model'
         || this._hass?.user?.is_admin !== true || this._hass?.connection?.connected !== true) {
-        throw new Error('The model or editing session changed during preparation. Try again with the current model.');
+        throw ownedRuntimeError('wallChanged');
       }
       const report = this._view.wallPresentationCandidates?.();
-      if (error || !report?.prepared) throw new Error(error || 'The model could not provide separate original wall meshes.');
+      if (error || !report?.prepared) throw error ? this._modelErrorNotice || new Error(error) : ownedRuntimeError('wallUnavailable');
       this._restoreWallSelectionCamera(preparation);
       return { prepared: true, report };
     } catch (error) {
@@ -1158,7 +1302,9 @@ class Taylors3dCard extends HTMLElement {
       mode: this._mode, interaction: this._wallInteractionSerial };
     this._loadModel().then(() => this._restoreWallSelectionCamera(restoration)).catch((error) => {
       if (!this._wallPreparationFrameCurrent(restoration) || !this._wallSessionActive()) return;
-      this._modelError = String(error?.message || error); this._showNotice();
+      this._modelError = String(error?.message || error);
+      this._modelErrorNotice = ownedRuntimeDetails(error) ? error : null;
+      this._showNotice();
     });
     return true;
   }
@@ -1328,6 +1474,7 @@ class Taylors3dCard extends HTMLElement {
 
   _syncWeatherVisibility() {
     this._syncWallPresentation();
+    this._syncSecurity();
     if (!this.isConnected || document.hidden || this._weatherInView === false || this._loading) this._stopScenePreview('view unavailable');
     this._scenePreviewBar?.update();
     this._weatherLayer?.setVisible(!!(this.isConnected && !document.hidden && this._weatherInView !== false
@@ -1370,6 +1517,97 @@ class Taylors3dCard extends HTMLElement {
 
   securityBindings() { return this._layout?.security_bindings ?? this._config?.security_bindings ?? []; }
 
+  _securitySessionActive() {
+    const user = this._hass?.user;
+    return this.isConnected === true && this._hass?.connection?.connected === true
+      && typeof user?.id === 'string' && !!user.id.trim()
+      && (!Object.hasOwn(user, 'is_active') || user.is_active === true);
+  }
+
+  securityEditorAvailable() {
+    return this._securitySessionActive() && this._hass.user.is_admin === true && !this._loading
+      && !!this._layout && this._editing === true && this._edit?.tab === 'security';
+  }
+
+  _observeSecuritySession() {
+    const scope = [this._hass?.connection, this._hass?.auth, this._hass?.user?.id, this._hass?.user?.is_admin,
+      this._hass?.user?.is_active, this._hass?.connection?.connected, this.isConnected,
+      // Map nodes need a new identity when the deliberately chosen source/target
+      // or its layout/model/view context changes. A held old node must not open
+      // a replacement source under the same binding ID. Current readings alone
+      // keep the identity and keyboard focus stable.
+      JSON.stringify(this.securityBindings()), this._config?.layout_key, this._view?.model?.root?.uuid,
+      this._editing, this._mode, this._viewId, this._floorOnly, this._floorPresentationRevision, this._loading];
+    if (!this._securitySessionScope || scope.some((value, index) => value !== this._securitySessionScope[index])) {
+      this._securitySessionScope = scope; this._securitySessionGeneration++;
+      this._securityInputKey = null;
+      if (this._securityPopup) this._devicePopup?.close({ restoreFocus: false });
+      this._securityPopup = null;
+    }
+  }
+
+  _securityContextKey() {
+    return JSON.stringify([this._securitySessionGeneration, this._config?.layout_key, this._view?.model?.root?.uuid,
+      this._view?.mode || this._mode, this._floor, this._floorOnly, this._viewState?.id, this._editing,
+      this._floorPresentationRevision, this._loading]);
+  }
+
+  securityPlanPositions() {
+    const positions = new Map();
+    for (const anchor of this.trackingAnchors()) positions.set(anchor.id, positions.has(anchor.id) ? null : anchor.position);
+    return positions;
+  }
+
+  _syncPlanSecurity(bindings, now, planes) {
+    if (Array.isArray(bindings) && !bindings.some((binding) => binding?.target !== undefined)) {
+      this._securityPlanData = { records: [], diagnostics: [], miniMap: [], nextExpiry: null };
+      this._planSecurityLayer?.setData({ records: [], selectable: false, contextKey: this._securityContextKey() });
+      if (this._securityPopup) this._devicePopup?.close({ restoreFocus: false }); this._securityPopup = null;
+      return;
+    }
+    const view = this._view, visibleRooms = new Set(this._navigationRooms().map((entry) => entry.room.id));
+    const rooms = (this._roomList || []).map((entry) => ({ ...entry, shown: visibleRooms.has(entry.room.id) }));
+    const floors = (this._floors || []).map((floor) => ({ ...floor, elevation: view.floorElevation?.(floor.id) ?? floor.elevation }));
+    this._securityPlanData = buildPlanSecurity({ hass: this._hass, bindings, rooms, floors, positions: this.securityPlanPositions(),
+      visibleFloors: this._navigationFloors(), now });
+    if (this._securityPlanScene !== view.scene) {
+      this._planSecurityLayer?.dispose(); this._planSecurityLayer = null; this._securityPlanScene = view.scene;
+    }
+    if (!this._planSecurityLayer && this._securityPlanData.records.length && view.scene?.isObject3D) this._planSecurityLayer = new PlanSecurityLayer(view.scene, {
+      onInvalidate: () => { if (this._view === view) view.dirty = true; },
+      onSelect: (id) => this._showPlanSecurityEntity(id), returnFocus: () => this._stage?.focus(),
+    });
+    const visible = !!(this._securitySessionActive() && !document.hidden && this._weatherInView !== false && !this._loading && !this._editing);
+    this._planSecurityLayer?.setVisible(visible);
+    this._planSecurityLayer?.setData({ records: displayLocatedRecords(this._securityPlanData.records, this._floorPresentationReportValue, this._floors || []),
+      selectable: visible, contextKey: this._securityContextKey() });
+    this._planSecurityLayer?.setClippingPlanes(planes);
+    if (this._securityPopup && !this._currentPlanSecurityRecord(this._securityPopup.id, this._securityPopup)) {
+      this._devicePopup?.close({ restoreFocus: false }); this._securityPopup = null;
+    }
+  }
+
+  _currentPlanSecurityRecord(id, expected = {}) {
+    const record = this._securityPlanData.records.find((record) => record.id === id);
+    if (!this._securitySessionActive() || this._editing || this._loading || document.hidden || !record?.shown || !record.location
+      || !this._planSecurityLayer?.group.visible || !this._planSecurityLayer.parts.has(id) || expected.entity && expected.entity !== record.entity
+      || expected.generation !== undefined && expected.generation !== this._securitySessionGeneration) return null;
+    const point = this._planSecurityLayer.parts.get(id).group.position;
+    if ([this._view.modelClip, this._view.sectionClip].some((plane) => plane?.isPlane && plane.distanceToPoint(point) < 0)) return null;
+    const metadata = entityMetadata(this._hass, record.entity);
+    return metadata.hasState && !metadata.hidden && !metadata.disabled && !metadata.category ? record : null;
+  }
+
+  _showPlanSecurityEntity(id, expected) {
+    this._syncSecurity(); const record = this._currentPlanSecurityRecord(id, expected);
+    if (!record || !this._devicePopup) return false;
+    this._popup?.close(); this._devicePopup.update(this._hass);
+    this._securityPopup = { id, entity: record.entity, generation: this._securitySessionGeneration };
+    this._devicePopup.showMarker({ id: `security:${id}`, entityId: record.entity, name: record.name, entities: [{ eid: record.entity }] },
+      this._view.screenPoint(record.location.x, record.location.y, record.location.z, record.location.floorId));
+    return true;
+  }
+
   securityMotionWriters() {
     return new Set([...(this._objects?.parts?.values() || [])].filter((part) => typeof part.type?.place === 'function')
       .map((part) => part.obj?.node).filter((node) => node?.isObject3D));
@@ -1379,6 +1617,9 @@ class Taylors3dCard extends HTMLElement {
     this._securityLayer?.setModel(null);
     this._refreshSecurityMotion();
     this._securityModel = null; this._securityInputKey = null;
+    this._planSecurityLayer?.setData({ records: [], selectable: false, contextKey: this._securityContextKey() });
+    this._securityPlanData = { records: [], diagnostics: [], miniMap: [], nextExpiry: null };
+    if (this._securityPopup) this._devicePopup?.close({ restoreFocus: false }); this._securityPopup = null;
   }
 
   _refreshSecurityMotion() {
@@ -1398,11 +1639,17 @@ class Taylors3dCard extends HTMLElement {
 
   _syncSecurity(force = false) {
     const view = this._view;
-    if (!view || !this._layout || !this._hass || !this._config) return false;
+    this._observeSecuritySession();
+    if (!view || !this._layout || !this._hass || !this._config || !this._securitySessionActive()) {
+      this._securityLayer?.setData({ bindings: [] }); this._securityLayer?.setVisible(false);
+      this._planSecurityLayer?.setVisible(false); this._planSecurityLayer?.setData({ records: [], selectable: false, contextKey: this._securityContextKey() });
+      this._securityPlanData = { records: [], diagnostics: [], miniMap: [], nextExpiry: null };
+      this._refreshSecurityMotion(); return false;
+    }
     if (!this._securityLayer) this._securityLayer = new SecurityLayer({ onInvalidate: () => { if (this._view === view) view.dirty = true; } });
     const layer = this._securityLayer;
     view.securityLayer = layer; // The view releases helpers and restores poses before authored model resources.
-    layer.setVisible(!!(this.isConnected && !document.hidden && !this._loading && !this._editing));
+    layer.setVisible(!!(!document.hidden && this._weatherInView !== false && !this._loading && !this._editing));
     const writers = this.securityMotionWriters(), writerKey = [...writers].map((node) => node.uuid).sort().join('|');
     if (writerKey !== this._securityWriterKey || this._securityModel !== view.model) {
       this._securityWriterKey = writerKey; this._securityWriters = writers;
@@ -1428,6 +1675,7 @@ class Taylors3dCard extends HTMLElement {
       this._securityInputKey = key;
       layer.setData({ hass: this._hass, bindings, shownObjectIds, now, animationNow: performance.now(), reducedMotion: !!this._reducedMotion?.matches });
     }
+    this._syncPlanSecurity(bindings, now, planes);
     const changed = this._refreshSecurityMotion();
     this._setTrackingTimer(this._trackingData.nextExpiry);
     return changed;
@@ -1450,7 +1698,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _setTrackingTimer(deadline) {
-    const deadlines = [deadline, this._securityLayer?.nextExpiry].filter(Number.isFinite);
+    const deadlines = [deadline, this._securityLayer?.nextExpiry, this._securityPlanData?.nextExpiry].filter(Number.isFinite);
     deadline = deadlines.length ? Math.min(...deadlines) : null;
     if (!this.isConnected || document.hidden || !Number.isFinite(deadline) || deadline <= this._now()) {
       if (this._trackingTimer !== null) this._clearTrackingTimer();
@@ -1550,11 +1798,11 @@ class Taylors3dCard extends HTMLElement {
 
   setPanelName(value) {
     const name = String(value || '').trim();
-    if (name.length > 128) throw new Error('Panel name must be at most 128 characters');
+    if (name.length > 128) throw ownedRuntimeError('panelLength');
     try {
       if (name) localStorage.setItem('taylors3d.panel', name);
       else localStorage.removeItem('taylors3d.panel');
-    } catch { throw new Error('This browser cannot save its panel name'); }
+    } catch { throw ownedRuntimeError('panelStorage'); }
     this._panelName = name;
     this._presetError = null;
     this._showNotice();
@@ -1571,17 +1819,27 @@ class Taylors3dCard extends HTMLElement {
 
   _showNotice() {
     if (!this._notice) return;
-    this._notice.textContent = [this._modelError, this._presetError].filter(Boolean).join(' · ');
-    this._notice.hidden = !this._notice.textContent;
+    const caption = [this._modelErrorNotice || this._modelError, this._presetError].filter(Boolean)
+      .map((notice) => runtimeNoticeText(this._hass, notice)).join(' · ');
+    if (this._notice.textContent !== caption) this._notice.textContent = caption;
+    this._notice.hidden = !caption;
   }
 
   _syncStatus() {
     if (!this._statusOverlays || !this._hass || !this._layout || !this._roomList) return;
+    this._observeAlertMapContext();
     const layout = this._layout;
     const config = layout.room_overlays ?? this._config.room_overlays ?? NONE;
     const bindings = layout.alert_bindings ?? this._config.alert_bindings ?? null;
+    // HA normally replaces states, but also observe current alert readings when
+    // a retained object changes. This never changes a focused marker's identity.
+    const readings = JSON.stringify((Array.isArray(bindings) ? bindings : []).map((binding) => {
+      const state = this._hass.states?.[binding?.entity];
+      return [binding?.entity, state?.state, state?.attributes?.restored, state?.attributes?.friendly_name];
+    }));
     const refs = [config, bindings, this._hass.states, this._hass.entities, this._roomList, this._floors,
-      this._positions, this._viewState, this._floorOnly, this._section, this._editing, layout.model, this._floorPresentationRevision];
+      this._positions, this._viewState, this._floorOnly, this._section, this._editing, layout.model, this._floorPresentationRevision,
+      this._alertMapGeneration, this._alertMapLocationKey, readings, localeKey(this._hass)];
     if (this._statusRefs && refs.every((value, i) => value === this._statusRefs[i])) return;
     this._statusRefs = refs;
     const floors = this._floors.map((floor) => ({ ...floor, elevation: this._view.floorElevation(floor.id) }));
@@ -1603,10 +1861,18 @@ class Taylors3dCard extends HTMLElement {
       if (entity && floorId) positions.set(entity, { x: anchor.world.x, y: -anchor.world.z,
         z: anchor.world.y - this._view.floorElevation(floorId), floorId });
     }
+    // Explicit alert markers use the same exact SOURCE IDs as the editor.
+    // Never choose a survivor when two current anchors claim the same ID.
+    const anchorIds = new Set();
+    for (const anchor of this.trackingAnchors()) {
+      if (typeof anchor?.id !== 'string' || !anchor.id.trim()) continue;
+      positions.set(anchor.id, anchorIds.has(anchor.id) ? null : { ...anchor.position, shown: anchor.shown !== false && anchor.position?.shown !== false });
+      anchorIds.add(anchor.id);
+    }
     this._roomOverlayData = buildRoomOverlays({ rooms, floors, states: this._hass.states,
-      entities: this._hass.entities, visibleFloors, config });
+      entities: this._hass.entities, visibleFloors, config, hass: this._hass });
     this._alertData = buildAlerts({ rooms, floors, states: this._hass.states, positions, visibleFloors, bindings,
-      previousLatches: this._alertLatches || {}, acknowledged: this._acknowledgedAlerts || [] });
+      previousLatches: this._alertLatches || {}, acknowledged: this._acknowledgedAlerts || [], hass: this._hass });
     this._acknowledgedAlerts = null;
     this._alertLatches = this._alertData.nextLatches;
     const overlayRooms = this._floorPresentationReportValue?.valid && this._floorPresentationReportValue.mode !== 'assembled'
@@ -1630,6 +1896,75 @@ class Taylors3dCard extends HTMLElement {
     }
   }
 
+  _observeAlertMapContext() {
+    const bindings = this._layout?.alert_bindings ?? this._config?.alert_bindings ?? [];
+    const sources = (Array.isArray(bindings) ? bindings : []).map((binding) => {
+      const metadata = entityMetadata(this._hass, binding?.entity);
+      return [binding?.entity, metadata.hasState, metadata.hidden, metadata.disabled, metadata.category];
+    });
+    const markerKeys = new Set((Array.isArray(bindings) ? bindings : []).filter((binding) => binding?.location_mode === 'marker')
+      .flatMap((binding) => [binding.position_key, binding.markerId]).filter((id) => typeof id === 'string' && id));
+    const anchors = markerKeys.size ? this.trackingAnchors().filter((anchor) => markerKeys.has(anchor?.id)) : [];
+    this._alertMapLocationKey = JSON.stringify(anchors.map((anchor) => [anchor.id, anchor.position, anchor.shown]));
+    const anchorEligibility = anchors.map((anchor) => {
+      const point = anchor.position;
+      return [anchor.id, point?.floorId, point?.floor_id, anchor.shown, point?.shown, point?.visible,
+        !!point && [point.x, point.y, point.z ?? .12].every(Number.isFinite)
+          && Math.abs(point.x) <= 1e6 && Math.abs(point.y) <= 1e6 && Math.abs(point.z ?? .12) <= 1000];
+    });
+    const scope = [this._hass?.connection, this._hass?.auth, this._hass?.user?.id, this._hass?.user?.is_admin,
+      this._hass?.user?.is_active, this._hass?.connection?.connected, this.isConnected,
+      JSON.stringify(this._hass?.user?.permissions), JSON.stringify(bindings), JSON.stringify(sources), JSON.stringify(anchorEligibility),
+      JSON.stringify((this._floors || []).map((floor) => [floor?.id, floor?.elevation, floor?.stale, floor?.shown])),
+      JSON.stringify((this._roomList || []).map((entry) => {
+        const room = entry?.room || entry;
+        return [room?.id, entry?.floorId, room?.floor_id, room?.floorId, room?.polygon || room?.outline,
+          entry?.shown, room?.shown, room?.hidden];
+      })), this._config?.layout_key, this._view?.model?.root?.uuid, this._editing, this._mode, this._viewId,
+      this._floorOnly, this._section, this._floorPresentationRevision, this._loading, document.hidden, this._weatherInView];
+    if (!this._alertMapScope || scope.some((value, index) => value !== this._alertMapScope[index])) {
+      // Observe losses before the scheduled map update; recovery must not revive
+      // an old held pointer/keyboard intent under a reused binding ID.
+      this._alertMapScope = scope;
+      this._alertMapGeneration = (this._alertMapGeneration || 0) + 1;
+      this._statusRefs = null;
+    }
+  }
+
+  _alertMapMarkers() {
+    if (!this._securitySessionActive() || this._editing || this._loading || document.hidden || this._weatherInView === false) return [];
+    const bindings = this._layout?.alert_bindings ?? this._config?.alert_bindings ?? [], counts = new Map();
+    for (const binding of Array.isArray(bindings) ? bindings : []) {
+      const id = typeof binding?.id === 'string' && binding.id ? binding.id : binding?.entity;
+      if (typeof id === 'string') counts.set(id, (counts.get(id) || 0) + 1);
+    }
+    return (this._alertData?.alerts || []).filter((record) => {
+      const point = record.location, floors = (this._floors || []).filter((floor) => floor?.id === point?.floorId);
+      return counts.get(record.id) === 1 && record.shown === true && point && (record.active || record.status !== 'clear')
+        && typeof record.entity === 'string' && /^[a-z][a-z0-9_]*\.[a-z0-9_]+$/.test(record.entity) && floors.length === 1
+        && !floors[0].stale && floors[0].shown !== false && Number.isFinite(floors[0].elevation)
+        && [point.x, point.y, point.z].every(Number.isFinite)
+        && Math.abs(point.x) <= 1e6 && Math.abs(point.y) <= 1e6 && Math.abs(point.z) <= 1000;
+    }).map((record) => {
+      const metadata = entityMetadata(this._hass, record.entity);
+      return { ...record, id: `alert:${record.id}:${this._alertMapGeneration}`,
+        bindingId: record.id, generation: this._alertMapGeneration, location: { ...record.location },
+        selectable: metadata.hasState && !metadata.hidden && !metadata.disabled && !metadata.category };
+    });
+  }
+
+  _showMapAlert(id, expected = {}) {
+    // Re-read the current source and deliberate binding before opening native
+    // details. An alert click never focuses, acknowledges or changes a device.
+    this._syncStatus();
+    const record = this._alertMapMarkers().find((candidate) => candidate.id === id);
+    if (!record?.selectable || this._miniMap?.el.hidden !== false || this._miniMap.scene?.floorId !== record.location.floorId
+      || expected.entityId !== record.entity || expected.bindingId !== record.bindingId
+      || expected.generation !== record.generation || expected.floorId !== record.location.floorId) return false;
+    this._moreInfo(record.entity);
+    return true;
+  }
+
   _recordHistory(label) {
     this._history.record({ layout: this._layout, config: this._config }, label);
     this._edit?.updateHistoryState?.();
@@ -1642,6 +1977,10 @@ class Taylors3dCard extends HTMLElement {
 
   _restoreHistory(snapshot) {
     if (!snapshot) return;
+    this._edit?._dashboardBackupEditor?.reset();
+    this._edit?._furnitureDrag?.cancel();
+    this._edit?._furnitureEditor?.reset();
+    this._furnitureCoordinator?.clearPreview();
     this._suspendAmbient('history changed');
     this.finishWallSelectionPreparation({ reload: false });
     this._stopScenePreview('history changed');
@@ -1701,7 +2040,7 @@ class Taylors3dCard extends HTMLElement {
       this._devicePopup.setPlacement(placement);
     this._houseShell.setData({ enabled, scheme: this._config.house_colour_scheme || 'ha',
       summaryRaw: this._layout?.house_summary ?? this._config.house_summary, selected: this._houseSelection || 'house', editing: !!this._editing,
-      navItems: HOUSE_NAVIGATION_ITEMS.map((item) => item.id === 'settings'
+      navItems: localizeHouseNavigationItems(this._hass).map((item) => item.id === 'settings'
         ? { ...item, disabled: this._hass?.user?.is_admin !== true || !this._layout || !!this._loading } : item),
     });
     if (!this._ro || !this._houseObserved) return;
@@ -1723,9 +2062,12 @@ class Taylors3dCard extends HTMLElement {
       const category = buildHouseCategory({ hass: this._hass, layout: this._layout, id: action.id });
       if (!category) return;
       this._stopScenePreview('house category opened'); this._popup.close(); this._devicePopup.update(this._hass);
-      this._devicePopup.showCategory({ ...category,
-        resolve: (hass) => buildHouseCategory({ hass, layout: this._layout, id: category.id })
-          || { entityIds: [], emptyText: 'Connect to Home Assistant to read this category.' },
+      this._devicePopup.showCategory({ ...category, ...ownedHouseCategoryPresentation(category),
+        resolve: (hass) => {
+          const current = buildHouseCategory({ hass, layout: this._layout, id: category.id });
+          return current ? { ...current, ...ownedHouseCategoryPresentation(current) }
+            : { entityIds: [], emptyText: 'Connect to Home Assistant to read this category.', emptyTextKey: 'house.categories.connect' };
+        },
       });
       this._houseSelection = category.id;
     } else return;
@@ -1797,16 +2139,20 @@ class Taylors3dCard extends HTMLElement {
       viewRefreshed = true;
     }
     const sig = registrySignature(h);
+    // The first five signature fields own membership/placement. Language,
+    // number formatting and translation metadata only change current captions.
+    const membershipChanged = !b.sig || sig.slice(0, 5).some((value, index) => value !== b.sig[index]);
+    const presentationChanged = !!b.sig && sig.slice(5).some((value, index) => value !== b.sig[index + 5]);
     const m = l.mower || null;
     const mowerKey = m ? `${m.entity}|${m.floor_id}` : '';
-    if (this._syncBindings() || markers || !b.sig || sig.some((x, i) => x !== b.sig[i]) || l.pins !== b.pins || l.hidden !== b.hidden || mowerKey !== b.mowerKey) {
-      b.sig = sig;
+    if (this._syncBindings() || markers || membershipChanged || l.pins !== b.pins || l.hidden !== b.hidden || mowerKey !== b.mowerKey) {
       b.pins = l.pins;
       b.hidden = l.hidden;
       b.mowerKey = mowerKey;
       this._buildMarkers();
       markers = true;
-    }
+    } else if (presentationChanged) this._refreshMarkerNames();
+    b.sig = sig;
     if (l.model !== b.model) {
       b.model = l.model;
       this._loadModel();
@@ -1816,7 +2162,7 @@ class Taylors3dCard extends HTMLElement {
       this._mowerFn = m && m.entity ? mowerTransform(m) : null;
       mower = true;
     }
-    if (h.states !== b.states || markers || mower) {
+    if (h.states !== b.states || markers || mower || presentationChanged) {
       b.states = h.states;
       this._refreshStates();
       this._refreshMower(mower);
@@ -1828,28 +2174,36 @@ class Taylors3dCard extends HTMLElement {
     this._syncStatus();
     this._syncAmbient();
     this._syncWallPresentation();
+    this._syncFurniture();
     if ((markers || viewRefreshed) && this._editing) this._edit.afterUpdate();
     else if (this._editing) this._edit.onStates();
   }
 
   _mowerFloor() {
     const m = this._layout.mower;
-    return m && this._floors.some((f) => f.id === m.floor_id) ? m.floor_id : this._floors[0].id;
+    return m?.floor_id || this._floors[0]?.id || null;
   }
 
   // Live mower: move its marker, extend the trail, refresh the map overlay.
   _refreshMower(configChanged) {
     const cfg = this._layout.mower;
-    if (!cfg || !cfg.entity) {
+    const floorId = this._mowerFloor();
+    if (!cfg || !cfg.entity || !this._floors.some((floor) => floor.id === floorId)) {
       this._trail = [];
       this._mowerLive = null;
+      this._mowerHeadFrom = null;
+      this._objects?.setMowerPose(null);
+      if (this._mowerMarkerId && this._positions?.has(this._mowerMarkerId)) {
+        this._positions.delete(this._mowerMarkerId);
+        this._buildMarkers();
+      }
+      this._refreshAttached();
       this._view.setTrail(null);
       this._view.setMapOverlay(null);
       this._setCameraTimer(0);
       this._setImageTimer(0);
       return;
     }
-    const floorId = this._mowerFloor();
     let reading = null, p;
     if (cfg.source === 'image') p = this._imageMowerPos(cfg);
     else {
@@ -2005,7 +2359,7 @@ class Taylors3dCard extends HTMLElement {
     const cfg = this._layout.mower;
     const o = cfg && cfg.overlay;
     const st = o && o.entity && this._hass.states[o.entity];
-    if (!st) {
+    if (!st || !this._floors.some((floor) => floor.id === this._mowerFloor())) {
       this._view.setMapOverlay(null);
       this._setCameraTimer(0);
       return;
@@ -2098,7 +2452,7 @@ class Taylors3dCard extends HTMLElement {
     this._pushStructure();
     if (!this._floorOnly) this._applyViewVisibility();
     this._empty.hidden = this._roomList.length > 0 || !!this._editing;
-    this._empty.textContent = 'No rooms drawn yet. Open edit mode to draw rooms for your areas.';
+    this._empty.textContent = localize(this._hass, 'plan.empty');
     this._syncToolbar();
     // frame once per load / model; later rebuilds (edits, registry changes) keep the user's camera
     if (fresh) {
@@ -2480,15 +2834,19 @@ class Taylors3dCard extends HTMLElement {
     const model = this._objects && this._objects.model;
     const objs = model ? model.manifest.objects : [];
     const l = this._layout || {}, lo = l.objects || NONE, groups = l.groups || NONE, states = this._hass.states;
-    const exists = objs.map((o) => {
-      const e = lo[o.id] && lo[o.id].entity !== undefined ? lo[o.id].entity : (o.suggest || {}).entity;
-      return e && states[e] ? 1 : 0;
-    }).join('') + '|' + Object.values(groups).map((g) => (g && g.entity && states[g.entity] ? 1 : 0)).join('');
+    const eligibility = (entity) => {
+      const metadata = entityMetadata(this._hass, entity);
+      return [entity || null, metadata.hasState, metadata.hidden, metadata.disabled, metadata.category];
+    };
+    const exists = JSON.stringify([
+      objs.map((o) => eligibility(lo[o.id] && lo[o.id].entity !== undefined ? lo[o.id].entity : (o.suggest || {}).entity)),
+      Object.values(groups).map((g) => eligibility(g?.entity)),
+    ]);
     const key = [model, lo, groups, exists];
     if (this._bindKey && key.every((x, i) => x === this._bindKey[i])) return false;
     this._bindKey = key;
-    this._bindings = bindObjects(objs, lo, states);
-    this._groups = effectiveGroups(groups, states); // controllers HA doesn't know are ignored
+    this._bindings = bindObjects(objs, lo, states, this._hass);
+    this._groups = effectiveGroups(groups, states, this._hass);
     this._objects.setBindings(this._bindings, this._groups);
     const bound = new Set();
     for (const b of this._bindings.values()) if (b.entity && !b.hidden) bound.add(b.entity);
@@ -2890,6 +3248,7 @@ class Taylors3dCard extends HTMLElement {
 
   // Tap = moved < 5 px; hold 500 ms (not moved) = hold action. Orbit still starts from the canvas.
   _objectDown(e, canvas) {
+    if (this._editing && this._edit?.tab === 'furniture') return;
     if (this._ambientWakeEvents.has(e)) return;
     if (this._editing && this._edit?._wallSurfacePick?.()) return;
     if (this._gesture) { this._endGesture(); return; } // a second finger: pinch / orbit, no tap
@@ -2951,10 +3310,18 @@ class Taylors3dCard extends HTMLElement {
     const o = this._objects && this._objects.objectAt(id);
     if (!o || !this._hass) return false;
     const target = actionTarget(o.obj, o.binding, this._groups || {}, this._hass.states);
-    const st = target && this._hass.states[target];
-    if (!st || st.state === 'unavailable' || st.state === 'unknown') return false;
-    this._hass.callService(...toggleCall(target));
+    const call = this._objectToggleCall(target);
+    if (!call) return false;
+    this._hass.callService(...call);
     return true;
+  }
+
+  _objectToggleCall(target) {
+    if (!target || !this.isConnected || this._loading || this._hass?.connection?.connected === false || typeof this._hass?.callService !== 'function') return null;
+    const metadata = entityMetadata(this._hass, target);
+    if (!metadata.available || metadata.hidden || metadata.disabled || metadata.category) return null;
+    const call = toggleCall(target);
+    return this._hass.services?.[call[0]]?.[call[1]] ? call : null;
   }
 
   // toggle: own entity, else the group controller; nothing usable (missing / unavailable): the popup says so.
@@ -2983,8 +3350,23 @@ class Taylors3dCard extends HTMLElement {
     if (action === 'popup' || !usable) {
       const a = (this._objects.displayAnchors ? this._objects.displayAnchors() : this._objects.anchors()).find((x) => x.id === id);
       if (a) this._popup.open(o.obj, a.world);
-    } else if (action === 'toggle') this._hass.callService(...toggleCall(target));
+    } else if (action === 'toggle') {
+      const call = this._objectToggleCall(target);
+      if (call) this._hass.callService(...call);
+    }
     else this._moreInfo(target);
+  }
+
+  _refreshMarkerNames() {
+    const current = new Map(buildMarkers(this._hass, this._layout, { group_by: this._config.group_by })
+      .map((marker) => [marker.id, marker]));
+    // Keep the current objects captured by native marker gestures, their source
+    // IDs, placement and DOM nodes. Only genuine HA-derived names change.
+    for (const marker of this._markers) {
+      const next = current.get(marker.id);
+      if (next?.entityId === marker.entityId) marker.name = next.name;
+      else if (marker.id === this._mowerMarkerId) marker.name = entityMetadata(this._hass, marker.entityId).name;
+    }
   }
 
   _buildMarkers() {
@@ -3012,9 +3394,8 @@ class Taylors3dCard extends HTMLElement {
         if (mm) { this._markers = this._markers.filter((m) => m !== mm); this._positions.delete(mm.id); }
         mm = null;
       } else if (!mm) {
-        const st = h.states[cfg.entity];
         mm = { id: 'mower:' + cfg.entity, entityId: cfg.entity, domain: cfg.entity.split('.')[0],
-          name: (st && st.attributes.friendly_name) || cfg.entity, entities: [], secondaryId: null };
+          name: entityMetadata(h, cfg.entity).name, entities: [], secondaryId: null };
         this._markers.push(mm);
       }
       if (mm) {
@@ -3083,7 +3464,7 @@ class Taylors3dCard extends HTMLElement {
     el.title = m.name;
     el.tabIndex = 0;
     el.setAttribute('role', 'button');
-    el.setAttribute('aria-label', `Open ${m.name} controls`);
+    el.setAttribute('aria-label', localize(this._hass, 'marker.openControls', { name: m.name }, 'Open {name} controls'));
     el.addEventListener('keydown', (e) => {
       if (!this._editing && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); e.stopPropagation(); this._tap(m); }
     });
@@ -3130,9 +3511,9 @@ class Taylors3dCard extends HTMLElement {
       if (icon.getAttribute('icon') !== ic) icon.setAttribute('icon', ic);
       const own = displayValue(h, m.entityId);
       el.querySelector('.fp-val').textContent = own || (m.secondaryId ? displayValue(h, m.secondaryId) : '');
-      const name = st && st.attributes.friendly_name;
+      const name = entityMetadata(h, m.entityId).name;
       el.title = m.name + (name && name !== m.name ? ' – ' + name : '');
-      el.setAttribute('aria-label', `Open ${m.name} controls`);
+      el.setAttribute('aria-label', localize(this._hass, 'marker.openControls', { name: m.name }, 'Open {name} controls'));
 
       if (m.domain === 'light') {
         el.style.setProperty('--fp-light', g ? `rgb(${g.rgb.join(',')})` : '');
@@ -3213,6 +3594,29 @@ class Taylors3dCard extends HTMLElement {
     this._gesture = g;
   }
 
+  _roomShortcutData(roomId) {
+    const descriptor = (source) => {
+      try { return Object.getOwnPropertyDescriptor(source || {}, 'room_actions'); }
+      catch { return {}; }
+    };
+    const saved = descriptor(this._layout) ?? descriptor(this._config);
+    // Imported settings are data: an accessor cannot run before the strict reader
+    // inspects them. Own shared null/undefined still take precedence over a card.
+    const settings = saved === undefined ? undefined
+      : Object.hasOwn(saved, 'value') ? saved.value : Symbol('unreadable room shortcuts');
+    return roomActionsFor({ hass: this._hass, settings, roomId,
+      rooms: (this._roomList || []).map((entry) => entry.room) });
+  }
+
+  _runRoomShortcut(roomId, actionId) {
+    const selection = this._devicePopup?._selection;
+    if (!this._devicePopup?.isOpen || selection?.kind !== 'room' || selection.room?.id !== roomId || this._editing || this._loading)
+      return Promise.reject(new Error('Reopen the current room controls and choose the shortcut deliberately.'));
+    const current = this._roomShortcutData(roomId).actions.find((action) => action.id === actionId);
+    if (!current?.available) return Promise.reject(new Error(current?.issue || 'This room shortcut is no longer available.'));
+    return this._hass.callService(current.domain, current.service, { entity_id: current.entityId });
+  }
+
   _openRoomAt(x, y) {
     const rooms = this._navigationRooms();
     const hit = this._view.pickModel(x, y);
@@ -3281,9 +3685,24 @@ class Taylors3dCard extends HTMLElement {
     if (this._miniMapKey !== key || !this._miniMap) {
       if (this._miniMap) this._miniMap.dispose();
       this._miniMap = new MiniMap(this._stage, {
-        size, corner, returnFocus: () => this._miniMapBtn, onFocus: (point) => this._focusPlan(point),
+        size, corner, returnFocus: () => this._miniMapBtn, onFocus: (point) => {
+          // Security validates the original source intent before its own focus
+          // transition. Other map targets retain the existing focus callback.
+          if (!/^security:([a-z0-9_-]+):(\d+)$/.test(point.markerId || '')) this._focusPlan(point);
+        },
         cameraForFloor: (snapshot, floorId) => this._miniMapSourceCamera(snapshot, floorId),
-        onMarker: (id, point) => { if (point.tracked) this._showTrackedEntity(id); },
+        onMarker: (id, point) => {
+          const security = /^security:([a-z0-9_-]+):(\d+)$/.exec(id);
+          if (security) {
+            this._syncSecurity();
+            const record = this._currentPlanSecurityRecord(security[1], { entity: point.entityId, generation: Number(security[2]) });
+            if (!record) return;
+            this._focusPlan(point);
+            this._showPlanSecurityEntity(record.id, { entity: record.entity, generation: this._securitySessionGeneration });
+          }
+          else if (point.alert) this._showMapAlert(id, point);
+          else if (point.tracked) this._showTrackedEntity(id);
+        },
         onVisibilityChange: (visible) => { this._miniMapVisible = visible; this._syncToolbar(); },
       });
       this._miniMapKey = key;
@@ -3292,6 +3711,9 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _syncMiniMap() {
+    // The normal HA update already reaches this hook, including locale-only
+    // changes. Relabel controls without scheduling another render or resize.
+    this._syncToolbarLabels();
     this._syncFloorPresentation();
     this._syncSecurity();
     this._syncTracking();
@@ -3308,14 +3730,16 @@ class Taylors3dCard extends HTMLElement {
       if (!entity) continue;
       const floorId = this._sourceObjectFloor(object, anchor.world);
       if (!floorId) continue;
-      const id = `object:${anchor.id}`, st = this._hass && this._hass.states[entity];
-      markers.push({ id, entityId: entity, name: st && st.attributes.friendly_name || object.obj.label || object.obj.id });
+      const id = `object:${anchor.id}`;
+      markers.push({ id, entityId: entity, name: entityMetadata(this._hass, entity).name || object.obj.label || object.obj.id });
       positions.set(id, { x: anchor.world.x, y: -anchor.world.z, floorId });
     }
     this._miniMap.setVisible(this._miniMapVisible);
     this._miniMap.update({ rooms: this._navigationRooms(), floors: this._floors || [], visibleFloors: this._navigationFloors(),
-      positions, markers, markerStates: this._view._markerStates, states: this._hass && this._hass.states,
-      trackedMarkers: this._trackingData.miniMap,
+      positions, markers, markerStates: this._view._markerStates, states: this._hass && this._hass.states, hass: this._hass,
+      trackedMarkers: [...this._trackingData.miniMap, ...this._securityPlanData.miniMap.map((marker) => ({ ...marker,
+        id: `${marker.id}:${this._securitySessionGeneration}` }))],
+      alertMarkers: this._alertMapMarkers(),
       camera: this._view.getCamera(), topCamera: this._view.getTopCamera(), mode: this._mode, editing: this._editing,
       selectedRoomId: this._selectedRoomId });
   }
@@ -3370,7 +3794,29 @@ class Taylors3dCard extends HTMLElement {
     const icon = { auto: 'mdi:theme-light-dark', day: 'mdi:white-balance-sunny', night: 'mdi:weather-night' }[this._skyMode];
     const el = this._dayBtn.querySelector('ha-icon');
     if (el && el.getAttribute('icon') !== icon) el.setAttribute('icon', icon);
-    this._dayBtn.title = `Day / night: ${this._skyMode}`;
+    this._dayBtn.title = localize(this._hass, 'toolbar.dayNight', { mode: localize(this._hass, `toolbar.sky.${this._skyMode}`, {}, this._skyMode) });
+  }
+
+  _syncToolbarLabels() {
+    this._showNotice();
+    if (this._empty) {
+      const caption = localize(this._hass, 'plan.empty');
+      if (this._empty.textContent !== caption) this._empty.textContent = caption;
+    }
+    if (!this._toolbar) return;
+    const key = JSON.stringify([localeKey(this._hass), !!this._editing, this._skyMode]);
+    if (this._toolbarTextNode === this._toolbar && this._toolbarTextKey === key) return;
+    this._toolbarTextNode = this._toolbar; this._toolbarTextKey = key;
+    this._toolbar.setAttribute('aria-label', localize(this._hass, 'toolbar.aria'));
+    this._toolbar.querySelector('.seg')?.setAttribute('aria-label', localize(this._hass, 'toolbar.mode.aria'));
+    for (const button of this._toolbar.querySelectorAll('[data-mode]')) button.textContent = localize(this._hass, `toolbar.mode.${button.dataset.mode}`);
+    for (const [id, message] of [['reset', 'toolbar.reset'], ['section', 'toolbar.section'], ['minimap', 'toolbar.miniMapToggle'], ['edit', 'toolbar.edit']]) {
+      const button = this._toolbar.querySelector(`[data-bubble="${id}"]`);
+      if (button) { button.title = localize(this._hass, message); button.setAttribute('aria-label', button.title); }
+    }
+    const editText = this._editBtn?.querySelector('span');
+    if (editText) editText.textContent = localize(this._hass, this._editing ? 'common.done' : 'common.edit');
+    if (this._dayBtn) { this._paintDayBtn(); this._dayBtn.setAttribute('aria-label', this._dayBtn.title); }
   }
 
   // Auto reads sun.sun; setSky only when night moved > 0.01 or the sun > 1 degree since the last call.
@@ -3424,22 +3870,27 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _syncToolbar() {
+    this._syncToolbarLabels();
     const hasModel = !!(this._view && this._view.model);
     // without a model: one chip per floor plus All (not while editing), shown with 2+ floors
     const views = this._views.filter((v) => !v.hidden && (hasModel || !this._editing || v.id !== 'all'));
     const show = hasModel ? views.length > 1 : this._views.filter((v) => !v.hidden && v.id !== 'all').length > 1;
-    this._chips.innerHTML = '';
+    const chips = new Map([...this._chips.children].map((button) => [button.dataset.view, button]));
+    const desired = [];
     if (show) {
       for (const v of views) {
-        const btn = document.createElement('button');
+        const btn = chips.get(v.id) || document.createElement('button');
         btn.className = 'chip' + (v.id === this._viewId && !this._floorOnly ? ' on' : '');
         btn.dataset.view = v.id;
         btn.dataset.taylors3dTone = 'floor';
         btn.setAttribute('aria-pressed', String(v.id === this._viewId && !this._floorOnly));
         btn.textContent = v.label;
-        this._chips.append(btn);
+        desired.push(btn);
       }
     }
+    for (const button of chips.values()) if (!desired.includes(button)) button.remove();
+    let nextChip = this._chips.firstElementChild;
+    for (const button of desired) { if (button !== nextChip) this._chips.insertBefore(button, nextChip); nextChip = button.nextElementSibling; }
     for (const btn of this.shadowRoot.querySelectorAll('.seg button')) {
       btn.classList.toggle('on', btn.dataset.mode === this._mode);
       btn.setAttribute('aria-pressed', String(btn.dataset.mode === this._mode));
@@ -3453,7 +3904,7 @@ class Taylors3dCard extends HTMLElement {
     this._paintDayBtn();
     this._dayBtn.setAttribute('aria-label', this._dayBtn.title);
     this._editBtn.hidden = !(this._hass && this._hass.user && this._hass.user.is_admin);
-    this._editBtn.querySelector('span').textContent = this._editing ? 'Done' : 'Edit';
+    this._editBtn.querySelector('span').textContent = localize(this._hass, this._editing ? 'common.done' : 'common.edit');
     this._miniMapBtn.setAttribute('aria-pressed', String(this._miniMapVisible));
     this._miniMapBtn.classList.toggle('on', this._miniMapVisible);
     this._miniMapBtn.disabled = !!this._editing || !(this._roomList && this._roomList.length);
@@ -3467,7 +3918,11 @@ class Taylors3dCard extends HTMLElement {
       if (id === 'daynight') available = hasModel;
       control.hidden = !(available && (controls.includes(id) || (id === 'edit' && this._editing)));
     }
-    for (const id of controls) actions.append(actions.querySelector(`[data-bubble="${id}"]`));
+    // Reordering an already correctly placed native button would blur it.
+    const ordered = [...actions.children].filter((node) => !controls.includes(node.dataset.bubble))
+      .concat(controls.map((id) => actions.querySelector(`[data-bubble="${id}"]`)));
+    let nextAction = actions.firstElementChild;
+    for (const node of ordered) { if (node !== nextAction) actions.insertBefore(node, nextAction); nextAction = node.nextElementSibling; }
     this._toolbar.hidden = this._config.show_bubble_bar === false && !this._editing;
     this._syncScenePreviews();
     this._syncMiniMap();
