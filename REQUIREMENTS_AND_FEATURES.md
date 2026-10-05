@@ -18,7 +18,7 @@ Every idea has a permanent number, such as **F01**, so we can discuss it without
 | Testing | Implemented, with checks still to complete. |
 | Done | Meets its completion checklist, with evidence recorded. |
 
-Taylor chose the first group: **bubble bar, room/device popups and 2D mini-map**. F18–F21 have a first implementation and are **Testing**, including checks against the actual Home Assistant/wall panel still to do. The next pass adds right-hand controls, editing history, targeted camera automations and room measurements/alerts. Other requested additions remain visible below. Existing foundations do not mean the complete requested feature is finished.
+Taylor chose the first group: **bubble bar, room/device popups and 2D mini-map**. F18–F21 have a first implementation and are **Testing**, including checks against the actual Home Assistant/wall panel still to do. Further deliveries add right-hand controls, editing history, targeted camera automations, room measurements/alerts, physical-camera views and coverage settings. Other requested additions remain visible below. Existing foundations do not mean the complete requested feature is finished.
 
 For each implementation, update its status, record the changed behavior, link its commit or pull request, and record the checks performed. Keep unfinished parts visible instead of marking a whole feature Done early.
 
@@ -32,8 +32,8 @@ For each implementation, update its status, record the changed behavior, link it
 | F04 | Full dashboard backup and restore | Layout JSON import/export | Needs input |
 | F05 | Temperature, power and energy views | Sensor readings, conversion, floor overlays and visual bindings | Testing |
 | F06 | Security doors/windows and animated doors | Contact/lock markers and room door points | Planned |
-| F07 | Camera coverage cones and live-feed popups | Camera markers and HA more-info | Planned |
-| F08 | Presence: people/devices in rooms | Motion/occupancy markers | Planned |
+| F07 | Camera coverage cones and live-feed popups | Native HA camera viewer, explicit approximate coverage and visual editor | Testing |
+| F08 | Presence: people/devices in rooms | Motion/occupancy markers; observed-location implementation started separately | In progress |
 | F09 | Alert pulses at the affected location | Located, labelled smoke/leak/unlocked/custom alerts | Testing |
 | F10 | Actual sun plus rain, clouds and snow | Automatic sun/day/night and moon already exist | Planned |
 | F11 | Hue colour/brightness lighting the rooms | Real coloured lamps and a bounded light pool | Planned |
@@ -42,13 +42,13 @@ For each implementation, update its status, record the changed behavior, link it
 | F14 | Camera-aware cut-away and glass/faded walls | Side Section, opacity and authored glass | Planned |
 | F15 | Furniture packs and drag-and-drop placement | Furniture inside GLB models and layer visibility | Planned |
 | F16 | Baked shadows for wall panels | Realtime shadows and model material textures | Planned |
-| F17 | Deeper HA floors/areas/entity integration | Registries, filtering, area/floor mappings | Planned |
+| F17 | Deeper HA floors/areas/entity integration | Shared metadata, precision, filtered choices and missing-link diagnostics | In progress |
 | F18 | Room selection and room control panels | Edit-mode room/model picking | Testing |
 | F19 | Bottom bubble navigation bar | Top toolbar and view chips | Testing |
 | F20 | Rich device control popups | HA more-info and supported object popups | Testing |
 | F21 | Persistent 2D mini-map | Full-card Top view | Testing |
-| F22 | Cars appearing on the drive | EV charger status; no vehicle detection/model | Planned |
-| F23 | Robot vacuums moving while running | Vacuum markers and reusable mower tracking math | Planned |
+| F22 | Cars appearing on the drive | Sustained vehicle detection/event-source implementation started separately | In progress |
+| F23 | Robot vacuums moving while running | Explicit measured-position/status implementation started separately | In progress |
 | F24 | Horizontal split floors and vertical layers | Individual floors, All and section views | Planned |
 | F25 | Translations, preview, screenshots and bundle checks | English service strings, mock HA, screenshots and source/bundle gates | In progress |
 
@@ -137,7 +137,7 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 
 **Want:** show each Ring camera's coverage cone, and tap a camera to open its live feed.
 
-**Already present:** camera markers can open HA more-info; image/camera sources can supply mower-map overlays. Dedicated camera coverage and stream popups are new work.
+**First delivery:** primary camera taps open Home Assistant's native muted viewer. Grouped light/camera devices and rooms offer a deliberate Camera view action for each camera. Edit → Cameras configures approximate coverage from a real positioned marker/model anchor, with explicit direction, horizontal field of view and range in metres, draft preview, Save/Cancel/Clear and Undo/Redo. Duplicate model mounts require the exact choice; hidden/removed mounts never relocate their saved coverage to another marker. Close/unavailable/disconnect removes the actual native player; late helper/capability responses cannot revive a closed viewer. Streaming format labels do not claim that a recording source is live. [Camera guide](docs/CAMERAS-GUIDE.md).
 
 **Complete when:** coverage position, direction and field of view can be set visually; cones can be shown/hidden; tapping the camera opens the available HA stream in a usable popup. Clearly show offline, unavailable or unsupported streams. Coverage is a configured approximation, not a guarantee of detection. Closing a feed releases streaming resources.
 
@@ -233,7 +233,9 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 
 **Want:** floors, areas, devices and entity pickers follow HA's setup and respect useful registry metadata.
 
-**Already present:** reads HA floors/areas/devices/entities, area inheritance, hidden/config/diagnostic filtering and names; devices appear by area. Sensor values currently use a fixed one-decimal display.
+**Delivered foundation:** one shared metadata helper resolves effective area/floor/device information, HA names, hidden/disabled/category flags, units, precision and filtered choices. Marker membership includes real state-only entities; ordinary reading changes keep marker/coverage objects and idle rendering stable. Sensor/climate readings prefer native HA formatting. Model-object/group and camera pickers use filtered names; missing selected IDs remain visible. Edit → Data reports saved references that need deliberate repair. Explicit deleted model room/floor links retain their ID; geometry is kept without inventing a new area, floor placement or height override. Exact-ID restoration recovers the link. GLB named-view geometry remains independent of HA area/floor assignments.
+
+**Still to do:** adopt these helpers in each future feature picker and test the actual household registry/integration versions. Entity renames are diagnosed as missing old IDs; there is no guess based on a similar name.
 
 **Complete when:** feature-specific pickers filter sensibly by domain, class, area and capabilities; display precision/units follow the available HA metadata; renamed, moved and removed entities/areas are handled visibly without corrupting the layout. Distinguish registry updates from explicitly chosen model-room bindings so a HA area change does not silently invent house geometry.
 
@@ -425,6 +427,25 @@ The right-side controls, saved-camera action, Undo/Redo and room/alert overlays 
 9. Keep your GLB backed up separately. Replacing/deleting its server file resets Undo history; full model-asset backup is still F04.
 
 Record actual HA version, browser/panel and entity IDs when these checks are completed. Do not mark F01/F03/F05/F09 Done based only on the mock preview.
+
+### Phase 3: camera pictures, coverage and Home Assistant metadata
+
+Physical-camera views, explicit approximate coverage and the Cameras visual editor are implemented. The shared metadata foundation adds HA formatting/precision, filtered entity choices, state-only marker membership and missing-link diagnostics. [The camera guide](docs/CAMERAS-GUIDE.md) explains the controls; [the controls guide](docs/FEATURES-GUIDE.md#missing-home-assistant-links) explains deliberate repairs.
+
+**Local validation:** all 933 JavaScript tests in 44 files pass, alongside lint. The new native-player fixture tests element removal, permissions, late async replies, grouped/room selection, focused drafts, Save/Undo/Redo, static cone floors, narrow touch controls and zero service calls on viewing. This is a simulated camera picture, not an actual Ring stream. The complete regression run and final built source are being checked separately before recording their final result.
+
+**Performance fix:** adding a new unplaced state-only sensor originally caused one unnecessary GLB frame. Visible marker DOM now stays intact when its contents/positions have not changed; semantic marker-visibility changes still redraw. The original strict overlay checks pass with ten unrelated updates causing zero extra frames, shadows or shadow-light work, both with overlays off and with unchanged configured temperature. Unit regressions retain actual grouping/entity changes, floor-height changes and hides. Cancelling an edit/reloading or replaying history invalidates the pose cache so a temporary dragged position cannot survive an identical saved layout.
+
+**Household checks still required:**
+
+1. Verify the chosen Ring live-view entity works in Home Assistant's own controls. Tap it in Taylor's 3D, and check that Close view, Escape and leaving the dashboard remove this viewer. Other camera cards/preload settings are independent.
+2. Map a real camera position. In Edit → Cameras, configure heading, horizontal viewing angle and approximate range; Save, Cancel, Clear, Undo and Redo. Compare the drawing to the real picture. Coverage does not detect vehicles or people and does not account for obstacles/vertical tilt.
+3. If a camera has several mapped model objects, choose the intended mount. Hidden/missing mounts must not relocate a cone to another marker. Check unavailable, missing and disabled states.
+4. Check grouped/room cameras and the camera panel on the actual wall-panel browser, including recovery/Retry and reduced motion. Playback is muted; HA handles its native player errors.
+5. Compare sensor names, decimals and units with HA. Check devices inheriting an area through their parent and hidden/disabled/diagnostic choices.
+6. With a harmless test layout, remove an assigned HA area/floor and inspect Edit → Data / Model. The exact old ID must remain labelled missing; choose a replacement or unassign it. Restoring the exact old ID recovers the link. Keep a backup of the real layout.
+
+F07 remains Testing for these household checks. F17 remains In progress as each later feature adopts the common helper. Presence, parked vehicles and measured vacuum positioning are the next independent implementation; they are not included in this camera checkpoint.
 
 The earlier local full-model regression run was stopped after its initial rendering/visibility/terrain/section/sky/merge checks passed, because its loaded script still expected the old default tap behavior. Those assertions now explicitly select Quick toggle. That local run remained partial; the final GitHub CI subsequently completed and passed the entire model suite.
 

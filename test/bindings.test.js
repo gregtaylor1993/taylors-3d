@@ -66,7 +66,7 @@ describe('resolveLevels', () => {
     const r = resolveLevels([L('ground', 'storey', 0)], floors, { ground: { show: 'only', floor: 'floor2' } });
     expect(r.ground).toMatchObject({ show: 'only', floor: 'floor2', auto: false });
     const g = resolveLevels([L('ground', 'storey', 0)], floors, { ground: { show: 'only', floor: 'gone' } });
-    expect(g.ground).toMatchObject({ show: 'with', floor: 'floor1', auto: true, stale: true });
+    expect(g.ground).toMatchObject({ show: 'only', floor: 'gone', auto: false, stale: true });
   });
 
   it('a saved { floor: null } puts the level on no floor (not stale)', () => {
@@ -75,9 +75,35 @@ describe('resolveLevels', () => {
     expect(r.ground).toMatchObject({ show: 'with', floor: 'floor1', auto: true });
   });
 
-  it('falls back to defaults when a saved floor no longer exists', () => {
+  it('preserves a saved missing floor instead of falling back to another floor', () => {
     const r = resolveLevels([L('ground', 'storey', 0)], floors, { ground: { floor: 'deleted' } });
-    expect(r.ground).toMatchObject({ show: 'with', floor: 'floor1', auto: true, stale: true });
+    expect(r.ground).toMatchObject({ show: 'with', floor: 'deleted', auto: false, stale: true });
+  });
+
+  it.each(['with', 'only', 'always', 'hidden', 'all-only'])('preserves the missing floor and %s mode until that exact ID returns', (show) => {
+    const levels = [L('floor1', 'storey', 0), L('exterior', 'exterior')];
+    const saved = { floor1: { floor: 'deleted', show } };
+    const available = [...floors, { id: 'deleted_2', name: 'Deleted', elevation: 6 }];
+    expect(resolveLevels(levels, available, saved).floor1)
+      .toEqual({ floor: 'deleted', show, auto: false, stale: true });
+    const restored = resolveLevels(levels, [...available, { id: 'deleted', name: 'Renamed floor', elevation: 9 }], saved);
+    expect(restored.floor1).toEqual({ floor: 'deleted', show, auto: false });
+    expect(saved).toEqual({ floor1: { floor: 'deleted', show } });
+  });
+
+  it('a stale storey cannot crash exterior mapping or reserve a different floor', () => {
+    const r = resolveLevels([L('gone', 'storey', 0), L('upper', 'storey', 1), L('exterior', 'exterior')], floors,
+      { gone: { floor: 'deleted' } });
+    expect(r.gone).toEqual({ show: 'with', floor: 'deleted', auto: false, stale: true });
+    expect(r.upper).toEqual({ show: 'with', floor: 'floor1', auto: true });
+    expect(r.exterior).toEqual({ show: 'always', floor: 'floor1', auto: true });
+    expect(resolveLevels([L('gone'), L('exterior', 'exterior')], [], { gone: { floor: 'deleted' } }).exterior)
+      .toEqual({ show: 'always', floor: null, auto: true });
+  });
+
+  it('an empty saved entry still permits automatic mapping rather than creating a missing link', () => {
+    expect(resolveLevels([L('ground', 'storey', 0)], floors, { ground: {} }).ground)
+      .toEqual({ show: 'with', floor: 'floor1', auto: true });
   });
 
   it('leftover storeys are always shown', () => {
@@ -114,7 +140,17 @@ describe('resolveRoomAreas', () => {
   });
   it('explicit "no area" sticks; a deleted area is stale', () => {
     expect(resolveRoomAreas(rooms.slice(0, 1), ['kitchen'], { kitchen: { area: null } }).kitchen).toEqual({ area: null, auto: false });
-    expect(resolveRoomAreas(rooms.slice(0, 1), ['kitchen'], { kitchen: { area: 'gone' } }).kitchen).toEqual({ area: 'kitchen', auto: true, stale: true });
+    expect(resolveRoomAreas(rooms.slice(0, 1), ['kitchen'], { kitchen: { area: 'gone' } }).kitchen).toEqual({ area: 'gone', auto: false, stale: true });
+  });
+  it('does not replace a deleted saved area with an exact room ID, suggestion, or similarly named ID', () => {
+    const saved = { kitchen: { area: 'old_kitchen' } };
+    const modelRooms = [{ id: 'kitchen', suggest: { area: 'suggested_kitchen' } }];
+    const areaIds = ['kitchen', 'suggested_kitchen', 'old_kitchen_2'];
+    expect(resolveRoomAreas(modelRooms, areaIds, saved).kitchen)
+      .toEqual({ area: 'old_kitchen', auto: false, stale: true });
+    expect(resolveRoomAreas(modelRooms, [...areaIds, 'old_kitchen'], saved).kitchen)
+      .toEqual({ area: 'old_kitchen', auto: false });
+    expect(saved).toEqual({ kitchen: { area: 'old_kitchen' } });
   });
   it('treats null/non-object saved as {} and ignores non-object entries', () => {
     const r1 = resolveRoomAreas([{ id: 'x', suggest: {} }], ['x'], null);
@@ -158,6 +194,23 @@ describe('modelRooms / combineRooms', () => {
     expect(combineRooms(drawn, fromModel).map((r) => r.id)).toEqual(['m:kitchen', 'm:garden', 'r2']);
   });
 
+  it('retains transformed geometry on a valid floor without assigning a stale area', () => {
+    const staleAreas = { ...areas, kitchen: { area: 'deleted', auto: false, stale: true } };
+    const out = modelRooms(rooms, levelAssign, staleAreas, { position: [2, 3, 0], scale: 2 });
+    expect(out[0]).toMatchObject({ modelId: 'kitchen', area_id: null, floor_id: 'floor1' });
+    expect(out[0].polygon).toEqual([[2, 3], [10, 3], [10, 9]]);
+    expect(out[0].doors).toEqual([[6, 3]]);
+    const drawn = [{ id: 'drawn', area_id: 'deleted' }];
+    expect(combineRooms(drawn, out).map((r) => r.id)).toContain('drawn');
+    const restored = resolveRoomAreas(rooms, ['deleted'], { kitchen: { area: 'deleted' } });
+    expect(modelRooms(rooms, levelAssign, restored, {})[0].area_id).toBe('deleted');
+  });
+
+  it.each(['with', 'only', 'always', 'hidden', 'all-only'])('a stale %s floor supplies no placement rooms', (show) => {
+    const assign = { ...levelAssign, ground: { floor: 'deleted', show, auto: false, stale: true } };
+    expect(modelRooms(rooms, assign, areas, {}).map((r) => r.id)).toEqual(['m:garden']);
+  });
+
   it('treats null levelAssign/roomAreas as {} and returns empty', () => {
     const testRooms = [{ kind: 'room', id: 'kitchen', label: 'Kitchen', level: 'ground', outline: [[0, 0], [4, 0], [4, 3]], doors: [] }];
     expect(modelRooms(testRooms, null, {}, {})).toEqual([]);
@@ -187,6 +240,14 @@ describe('levelFloorOverrides', () => {
   it('treats only like with', () => {
     const lv = [L('ground', 'storey', 0, { elevation: 0, height: 2.89 })];
     expect(levelFloorOverrides(lv, { ground: { show: 'only', floor: 'floor1' } }, {})).toEqual([{ id: 'floor1', elevation: 0, height: 2.89 }]);
+  });
+  it('does not fabricate elevation overrides for stale floors, and resumes when the exact ID returns', () => {
+    const lv = [L('ground', 'storey', 0, { elevation: 1, height: 2.89 })];
+    const saved = { ground: { show: 'only', floor: 'deleted' } };
+    expect(levelFloorOverrides(lv, resolveLevels(lv, floors, saved), { position: [0, 0, 2], scale: 2 })).toEqual([]);
+    const restored = resolveLevels(lv, [...floors, { id: 'deleted', elevation: 1 }], saved);
+    expect(levelFloorOverrides(lv, restored, { position: [0, 0, 2], scale: 2 }))
+      .toEqual([{ id: 'deleted', elevation: 4, height: 5.78 }]);
   });
   it('treats null levelAssign as {} and returns empty', () => {
     const lv = [L('ground', 'storey', 0, { elevation: 0, height: 2.89 })];
@@ -254,6 +315,16 @@ describe('levelVisible (stacking)', () => {
   it('falls back to equality when elevations are unknown', () => {
     expect(levelVisible(w('x'), 'y', () => undefined)).toBe(false);
     expect(levelVisible(w('x'), 'x', () => undefined)).toBe(true);
+  });
+  it.each(['with', 'only', 'always', 'all-only'])('a stale %s level is visible only in overview', (show) => {
+    const assign = { floor: 'deleted', show, auto: false, stale: true };
+    const unexpectedElevation = () => { throw new Error('a stale floor cannot be stacked'); };
+    expect(levelVisible(assign, 'all', unexpectedElevation)).toBe(true);
+    expect(levelVisible(assign, 'ground', unexpectedElevation)).toBe(false);
+    expect(levelVisible(assign, 'deleted', unexpectedElevation)).toBe(false);
+  });
+  it('an explicitly hidden stale level stays hidden even in overview', () => {
+    expect(levelVisible({ floor: 'deleted', show: 'hidden', stale: true }, 'all', elev)).toBe(false);
   });
 });
 

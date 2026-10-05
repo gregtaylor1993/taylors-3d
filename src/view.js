@@ -1347,9 +1347,12 @@ export class FloorplanView {
   // states: Map<markerId, {shown, faded}> or null (floor visibility rules). A marker (or glow)
   // whose id is missing from the map follows the floor rules.
   setMarkerStates(states) {
+    const key = states ? JSON.stringify([...states].map(([id, state]) => [id, !!state.shown, !!state.faded]).sort((a, b) => a[0].localeCompare(b[0]))) : null;
+    const changed = this._markerStateKey !== key;
+    this._markerStateKey = key;
     this._markerStates = states || null;
     this._applyFloorVisibility();
-    this.dirty = true;
+    if (changed) this.dirty = true;
   }
 
   // Clip height override (metres, world); null = no cut; undefined = automatic.

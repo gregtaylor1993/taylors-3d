@@ -3,39 +3,43 @@
 // with an area shows up on the plan without any extra work.
 
 import { SKIP_DOMAINS, domainPriority, sensorPriority } from './placement.js';
+import { entityMetadata, formatEntityValue } from './entity-metadata.js';
 
-export function registrySignature(hass) {
-  // Cheap identity check: HA replaces these objects when the registries change.
-  return [hass.entities, hass.devices, hass.areas, hass.floors];
+export function registrySignature(hass = {}) {
+  // HA replaces registries when they change. State-only entities also need membership/name
+  // changes observed, but readings and the states object's identity must not rebuild markers.
+  const states = hass.states || {};
+  const membership = JSON.stringify(Object.keys(states).sort().map((id) => {
+    const state = states[id], attr = state?.attributes || {};
+    return [id, !!state, attr.friendly_name || null, attr.device_class || null, attr.icon || null];
+  }));
+  const locale = hass.locale || {};
+  return [hass.entities, hass.devices, hass.areas, hass.floors, membership,
+    hass.language || '', locale.language || '', locale.number_format || '', hass.translationMetadata];
 }
 
-export function buildMarkers(hass, layout, opts = {}) {
+export function buildMarkers(hass = {}, layout = {}, opts = {}) {
   const groupBy = opts.group_by || 'device';
   const hidden = new Set(layout.hidden || []);
   const ents = hass.entities || {};
-  const devs = hass.devices || {};
   const byMarker = new Map();
 
-  for (const eid of Object.keys(ents)) {
-    const e = ents[eid];
-    if (!e || e.hidden || e.entity_category) continue;
-    const domain = eid.split('.')[0];
+  // Keep registered ordering (including priority ties), then include real state-only entities.
+  const candidates = new Set([...Object.keys(ents), ...Object.keys(hass.states || {})]);
+  for (const eid of candidates) {
+    const metadata = entityMetadata(hass, eid);
+    if (!metadata.hasState || metadata.hidden || metadata.disabled || metadata.category) continue;
+    const { domain, deviceId, areaId, floorId, deviceClass: dc, device } = metadata;
     if (SKIP_DOMAINS.has(domain)) continue;
-    const st = hass.states[eid];
-    if (!st) continue;
-    const dev = e.device_id ? devs[e.device_id] : null;
-    const areaId = e.area_id || (dev && dev.area_id) || null;
-    const id = groupBy === 'device' && e.device_id && !e.area_id ? 'device:' + e.device_id : 'entity:' + eid;
+    const id = groupBy === 'device' && deviceId && !metadata.registry?.area_id ? 'device:' + deviceId : 'entity:' + eid;
     if (hidden.has(id) || hidden.has(eid)) continue;
-    const dc = st.attributes.device_class;
     const cand = { eid, domain, dc, prio: domainPriority(domain) * 100 + (domain === 'sensor' ? sensorPriority(dc) : 0) };
     const cur = byMarker.get(id);
     if (!cur) {
       byMarker.set(id, {
         id,
-        areaId,
-        deviceId: e.device_id || null,
-        name: (dev && (dev.name_by_user || dev.name)) || st.attributes.friendly_name || eid,
+        areaId, floorId, deviceId,
+        name: (device && (device.name_by_user || device.name)) || metadata.name,
         entities: [cand],
       });
     } else {
@@ -54,7 +58,7 @@ export function buildMarkers(hass, layout, opts = {}) {
     const sec = m.entities.find((x) => x.domain === 'sensor' && x.eid !== p.eid);
     m.secondaryId = sec ? sec.eid : null;
     if (m.entities.length === 1 && m.id.startsWith('entity:')) {
-      m.name = hass.states[p.eid].attributes.friendly_name || m.name;
+      m.name = entityMetadata(hass, p.eid).name;
     }
     markers.push(m);
   }
@@ -88,13 +92,12 @@ const DC_ICONS = {
   moisture: 'mdi:water-alert', battery: 'mdi:battery', voltage: 'mdi:sine-wave', current: 'mdi:current-ac',
 };
 
-export function iconFor(hass, eid) {
-  const st = hass.states[eid];
-  const e = hass.entities && hass.entities[eid];
-  if (st && st.attributes.icon) return st.attributes.icon;
+export function iconFor(hass = {}, eid) {
+  const metadata = entityMetadata(hass, eid);
+  const st = metadata.state, e = metadata.registry;
+  if (st?.attributes?.icon) return st.attributes.icon;
   if (e && e.icon) return e.icon;
-  const d = eid.split('.')[0];
-  const dc = st && st.attributes.device_class;
+  const d = metadata.domain, dc = metadata.deviceClass;
   return (dc && DC_ICONS[dc]) || ICONS[d] || 'mdi:checkbox-blank-circle-outline';
 }
 
@@ -103,19 +106,15 @@ export function isActive(st) {
   return !!st && ACTIVE.has(st.state);
 }
 
-export function displayValue(hass, eid) {
-  const st = hass.states[eid];
+export function displayValue(hass = {}, eid) {
+  const st = Object.prototype.hasOwnProperty.call(hass.states || {}, eid) ? hass.states[eid] : null;
   if (!st) return '';
   const d = eid.split('.')[0];
-  if (d === 'sensor') {
-    const n = Number(st.state);
-    const unit = st.attributes.unit_of_measurement || '';
-    if (Number.isFinite(n)) return (Math.round(n * 10) / 10) + unit;
-    return st.state;
-  }
+  if (d === 'sensor') return formatEntityValue(hass, eid);
   if (d === 'climate') {
-    const t = st.attributes.current_temperature;
-    return t !== undefined && t !== null ? t + '°' : '';
+    if (st.state === 'unknown' || st.state === 'unavailable') return formatEntityValue(hass, eid);
+    const t = st.attributes?.current_temperature;
+    return t !== undefined && t !== null ? formatEntityValue(hass, eid, { attribute: 'current_temperature' }) : '';
   }
   return '';
 }

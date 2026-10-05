@@ -6,6 +6,7 @@ Original project by Ingus Stals / istals. This independent copy is maintained by
 
 See [Requirements and features](REQUIREMENTS_AND_FEATURES.md) for Taylor's development ideas, proposed build order and progress log.
 See the [plain-language controls guide](docs/FEATURES-GUIDE.md) for camera automations, Undo/Redo and room overlays.
+See the [camera guide](docs/CAMERAS-GUIDE.md) for camera pictures and approximate coverage.
 
 A Lovelace card that shows your home as a 3D floorplan with every device on it. Draw each room
 once and link it to a Home Assistant area. After that, every device assigned to the area appears
@@ -26,6 +27,10 @@ position over its map.
   tap a room or dot to move the main view there
 - Lights that are on cast a glow on the floor in their colour and brightness
 - Markers show a value next to the icon (temperature, power, …)
+- Camera controls use Home Assistant's native muted camera viewer. Edit → Cameras saves
+  approximate coverage with an explicit heading, viewing angle and range
+- Device names, hidden/disabled choices, areas and sensor precision follow Home Assistant's
+  metadata. Edit → Data reports missing saved links; model links keep their IDs for deliberate repair
 - Edit mode for admins: draw rooms, doors, floors, pin and hide devices, import/export
 - One layout shared by every user and device (stored by the companion integration)
 - Robot mower: live position, trail, map image or camera overlay, point calibration

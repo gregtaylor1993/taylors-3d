@@ -30,6 +30,10 @@ position and map overlay.
 - `preset-events.js` — authenticated integration-owned camera subscription, acknowledgements and optional return.
 - `status-overlays.js` — explicit room measurements/units/meters and located alerts; existing Three.js renderer. `setData()` returns whether visible data changed and invalidates only then. Unrelated HA updates must leave an idle model unrendered; identical data keeps an active pulse's phase.
 - `overlay-editor.js` — visual room sensor/alert bindings in Edit → Overlays.
+- `entity-metadata.js` — HA names, area/floor/device inheritance, picker filtering, native precision/units and read-only saved-reference diagnostics. Renamed IDs are never guessed from names.
+- `camera-feed.js` — native muted HA picture-entity card; removes the actual player element on close/unavailability/disconnect. Generation-guards late async helpers and capabilities. Opening never calls a service.
+- `camera-coverage.js` — opt-in approximate static camera sectors in the existing scene, explicit heading/FOV/range in plan metres; nonpickable helpers, stable data does not invalidate idle rendering.
+- `camera-editor.js` — Edit → Cameras drafts, preview/Save/Cancel/Clear, exact mount selection and missing-selection preservation. Undo, context changes and leaving the tab clear preview.
 
 Review these, fix bugs, add unit tests (vitest) for placement + mower math.
 
@@ -88,6 +92,7 @@ View mode:
   respect reduced motion and stop the render loop when disconnected. Never conflate W and Wh.
 - Undo/Redo changes layout/config snapshots, never hass state or services. Reload/key/GLB replacement
   resets history. Cancel transient edit gestures and ignore async old-context upload/import results.
+- Explicit deleted model area/floor IDs remain manual/stale until deliberately relinked/cleared or the exact ID returns. No stale-floor placement/elevation overrides; stale areas keep polygons without area devices. GLB named-view geometry rules remain independent from HA assignments.
 - Lights that are on: additive radial glow on the floor, colour from rgb_color, strength from brightness.
 - Marker shows secondary sensor value (e.g. temperature) when the device has one.
 

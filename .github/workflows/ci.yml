@@ -23,8 +23,8 @@ jobs:
         run: node scripts/screenshot.mjs && node scripts/edit-check.mjs && node scripts/navigation-check.mjs && (node scripts/model-check.mjs || (echo "model-check retry (slow shared runner timing)" && node scripts/model-check.mjs))
         env:
           CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (right panels, camera automations, overlays)
-        run: node scripts/panels-check.mjs && node scripts/presets-check.mjs && node scripts/overlays-check.mjs && node scripts/history-check.mjs
+      - name: Headless browser checks (right panels, camera automations, overlays, camera views)
+        run: node scripts/panels-check.mjs && node scripts/presets-check.mjs && node scripts/overlays-check.mjs && node scripts/history-check.mjs && node scripts/cameras-check.mjs
         env:
           CHROME_PATH: /usr/bin/google-chrome
       - uses: actions/upload-artifact@v4

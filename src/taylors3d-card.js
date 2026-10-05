@@ -28,6 +28,8 @@ import { bubbleControls, roomAtPlan, focusCamera } from './navigation.js';
 import { EditHistory } from './history.js';
 import { PresetEventController } from './preset-events.js';
 import { StatusOverlays, buildRoomOverlays, buildAlerts } from './status-overlays.js';
+import { CameraCoverageLayer } from './camera-coverage.js';
+import { entityMetadata } from './entity-metadata.js';
 
 const VERSION = '0.1.0';
 const NONE = Object.freeze({}); // stable stand-in for a missing layout.objects / groups (binding cache key)
@@ -411,6 +413,7 @@ class Taylors3dCard extends HTMLElement {
       this._presetEvents.interrupt();
       this._alertLatches = {};
       this._statusRefs = null;
+      this._cameraCoveragePreview = null;
       this._layoutLoaded(); // release any obsolete model request waiting for the old key
       this._layoutReady = new Promise((resolve) => { this._layoutLoaded = resolve; });
       this._layout = null;
@@ -720,6 +723,7 @@ class Taylors3dCard extends HTMLElement {
     });
     this._view = new FloorplanView(this._scene);
     this._statusOverlays = new StatusOverlays(this._view.scene, { onInvalidate: () => { this._view.dirty = true; } });
+    this._cameraCoverage = new CameraCoverageLayer(this._view.scene, { onInvalidate: () => { this._view.dirty = true; } });
     this._reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
     this._view.onFrame = (now) => this._statusOverlays.update(now, { reducedMotion: !!this._reducedMotion?.matches });
     this._objects = new ObjectLayer(this._view);
@@ -808,11 +812,65 @@ class Taylors3dCard extends HTMLElement {
   }
 
   resetHistory() {
+    this._markerRenderKey = null;
     this._history.reset(this._layout && this._config ? { layout: this._layout, config: this._config } : null);
     this._edit?.updateHistoryState?.();
   }
 
   commitFeatureLayout(patch) { this._commit({ ...this._layout, ...patch }); }
+
+  // Coverage uses actual placed cameras. Bound model anchors take precedence over a
+  // grouped device marker; a duplicate model binding remains an explicit choice.
+  cameraAnchors() {
+    if (!this._hass || !this._view) return [];
+    const anchors = [], modelEntities = new Set();
+    for (const anchor of this._objects?.anchors() || []) {
+      const object = this._objects.objectAt(anchor.id);
+      if (!object) continue;
+      const entity = object.binding?.entity || actionTarget(object.obj, object.binding, this._groups, this._hass.states);
+      if (typeof entity !== 'string' || !entity.startsWith('camera.')) continue;
+      // A hidden model binding still owns its physical placement; never relocate its
+      // saved entity-wide cone onto a surviving grouped-device marker.
+      modelEntities.add(entity);
+      const metadata = entityMetadata(this._hass, entity);
+      if (!metadata.hasState || metadata.hidden || metadata.disabled) continue;
+      if (this._mb?.levels?.[object.obj.level]?.stale) continue;
+      const floorId = this._levels?.levelFloor[object.obj.level] || floorAtHeight(this._floors || [], anchor.world.y);
+      if (!floorId) continue;
+      const elevation = this._view.floorElevation(floorId);
+      const shown = !object.binding?.hidden && nodeShown(object.obj.node) && !this._view._cutAway?.(anchor.world);
+      anchors.push({ id: `object:${anchor.id}`, entity, label: object.obj.label || metadata.name,
+        position: { x: anchor.world.x, y: -anchor.world.z, z: anchor.world.y - elevation, elevation, floorId }, shown });
+    }
+    for (const marker of this._markers || []) {
+      const position = this._positions?.get(marker.id);
+      if (!position) continue;
+      const shown = this._view._markerStates?.get(marker.id)?.shown !== false
+        && this._view.markerObjects?.get(marker.id)?.obj?.visible !== false;
+      const entities = new Set([marker.entityId, ...(marker.entities || []).map((candidate) => candidate.eid || candidate)]);
+      for (const entity of entities) {
+        if (typeof entity !== 'string' || !entity.startsWith('camera.') || modelEntities.has(entity)) continue;
+        const metadata = entityMetadata(this._hass, entity);
+        if (!metadata.hasState || metadata.hidden || metadata.disabled) continue;
+        anchors.push({ id: `${marker.id}:${entity}`, entity, label: metadata.name,
+          position: { ...position, elevation: this._view.floorElevation(position.floorId) }, shown });
+      }
+    }
+    return anchors;
+  }
+
+  previewCameraCoverage(bindings = null) {
+    this._cameraCoveragePreview = bindings;
+    this._syncCameraCoverage();
+  }
+
+  _syncCameraCoverage() {
+    if (!this._cameraCoverage || !this._layout || !this._hass) return;
+    this._cameraCoverage.setData({ anchors: this.cameraAnchors(),
+      bindings: this._cameraCoveragePreview ?? this._layout.camera_coverage ?? this._config.camera_coverage ?? NONE,
+      visibleFloors: this._navigationFloors() });
+    this._cameraCoverage.setVisible(!this._editing || this._edit?.tab === 'cameras');
+  }
 
   setPanelName(value) {
     const name = String(value || '').trim();
@@ -903,6 +961,9 @@ class Taylors3dCard extends HTMLElement {
 
   _restoreHistory(snapshot) {
     if (!snapshot) return;
+    this._markerRenderKey = null;
+    this._edit?._cameraEditor?.reset();
+    this._cameraCoveragePreview = null;
     this._historyReplaying = true;
     try {
       const configChanged = JSON.stringify(snapshot.config) !== JSON.stringify(this._config);
@@ -1255,7 +1316,7 @@ class Taylors3dCard extends HTMLElement {
       this._view.setModelLevels(mb.levels);
       const levelOrder = levelOrders(mb.manifest.levels);
       const levelFloor = {};
-      for (const [id, a] of Object.entries(mb.levels || {})) if (a && a.floor) levelFloor[id] = a.floor;
+      for (const [id, a] of Object.entries(mb.levels || {})) if (a && a.floor && !a.stale) levelFloor[id] = a.floor;
       this._levels = { levelOrder, levelFloor, floorLevel: floorLevels(levelFloor, levelOrder) };
     } else {
       this._levels = null;
@@ -1767,7 +1828,11 @@ class Taylors3dCard extends HTMLElement {
     if (!o || !this._hass) return;
     const action = objectAction(o.obj, which);
     if (action === 'none') return;
-    const target = actionTarget(o.obj, o.binding, this._groups || {}, this._hass.states);
+    // Opening a bound camera must retain that camera even when its stream is unavailable.
+    // Falling back to a group light here would silently open the wrong device's controls.
+    const cameraTap = which === 'tap' && this._config.device_tap_action !== 'toggle'
+      && typeof o.binding?.entity === 'string' && o.binding.entity.startsWith('camera.');
+    const target = cameraTap ? o.binding.entity : actionTarget(o.obj, o.binding, this._groups || {}, this._hass.states);
     const st = target && this._hass.states[target];
     const usable = st && st.state !== 'unavailable' && st.state !== 'unknown';
     if (which === 'tap' && this._config.device_tap_action !== 'toggle' && target) {
@@ -1822,6 +1887,15 @@ class Taylors3dCard extends HTMLElement {
       }
     }
 
+    // New state-only entities still belong in the editor/metadata list. If they have
+    // no plan position, their arrival must not recreate every visible marker.
+    const renderKey = JSON.stringify(this._markers.filter((marker) => this._positions.has(marker.id)).map((marker) => {
+      const p = this._positions.get(marker.id);
+      return [marker.id, marker.entityId, marker.domain, marker.deviceClass, marker.name, marker.areaId,
+        marker.secondaryId, (marker.entities || []).map((entity) => entity.eid || entity), p, this._view.floorElevation(p.floorId)];
+    }));
+    if (this._markerRenderKey === renderKey) { this._applyMarkerStates(); return; }
+    this._markerRenderKey = renderKey;
     this._markerEls.clear();
     const list = [];
     for (const m of this._markers) {
@@ -2052,6 +2126,7 @@ class Taylors3dCard extends HTMLElement {
   _syncMiniMap() {
     if (!this._miniMap || !this._view) return;
     this._syncStatus();
+    this._syncCameraCoverage();
     const markers = [...this._markers], positions = new Map(this._positions || []);
     // Bound GLB lamps replace ordinary markers, but still belong on the overview.
     for (const anchor of this._objects ? this._objects.anchors() : []) {

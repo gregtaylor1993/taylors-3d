@@ -11,6 +11,8 @@ Tap a room's floor to see its devices and readings on the right. Tap a device to
 controls. Opening the panel only reads device states. **Turn on**, **Turn off** or changing
 brightness sends a command to the actual device. **All controls** opens Home Assistant's own
 full controls, including the options for heating, cameras, blinds and vacuums.
+Camera devices can also open a muted camera picture directly in this panel. See the
+[camera guide](CAMERAS-GUIDE.md) for grouped devices, coverage settings and troubleshooting.
 
 On wide screens the house shrinks to leave room for the panel and mini-map. On small screens
 the panel covers part of the house and scrolls; its close button and the bottom bar remain
@@ -101,3 +103,17 @@ cannot suppress a sensor that is still reporting the trigger.
 
 These visuals need actual Home Assistant entities. A named room or model object alone does
 not supply temperature, camera detections, smoke readings or device location.
+
+## Missing Home Assistant links
+
+Open **Edit → Data** to check saved links. If a room, floor or device has been deleted or
+renamed in Home Assistant, the report identifies the old choice. The layout is kept so you
+can choose a replacement deliberately. In **Model**, a missing area or floor remains selected
+and clearly labelled; choose an existing one, or **no area / no floor**. Restoring the exact
+original ID makes that link work again.
+
+A model room with a missing area keeps its shape but has no automatic area devices. A
+missing floor supplies no room placement, camera coverage position or floor-height override.
+The GLB's named views still control its physical geometry independently; there is no guessed
+new floor or area assignment. A floor you deliberately saved in the layout can remain even
+when it is absent from Home Assistant.

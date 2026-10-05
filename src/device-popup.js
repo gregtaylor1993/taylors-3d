@@ -4,6 +4,11 @@
 // showRoom(room, markers, [clientX, clientY]). Positions are optional client-screen coordinates.
 // Stage capture handlers must skip composedPath().includes(popup.el), and the outside
 // pointer event popup.closedBy, so closing a popup cannot also select a room/device.
+// A primary camera marker opens its native view. Grouped/room camera entities get
+// deliberate Camera view buttons. openCamera(entityId) requires a matching visible row.
+
+import { CameraFeedController } from './camera-feed.js';
+import { entityMetadata, formatEntityValue } from './entity-metadata.js';
 
 const QUICK_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const DIMMABLE_MODES = new Set(['brightness', 'color_temp', 'hs', 'rgb', 'rgbw', 'rgbww', 'xy', 'white']);
@@ -56,21 +61,20 @@ export function roomEntityIds(room, markers) {
   return [...new Set((markers || []).filter((m) => m.areaId === room.area_id).flatMap(markerEntityIds))];
 }
 
-const available = (s) => !!s && s.state !== 'unavailable' && s.state !== 'unknown';
 const serviceExists = (hass, domain, service) => !hass.services || !!(hass.services[domain] && hass.services[domain][service]);
 
 // State is authoritative: controls never pretend a command succeeded before HA reports it.
 export function entityControl(hass, entityId) {
-  const state = (hass.states || {})[entityId];
+  const metadata = entityMetadata(hass, entityId);
+  const state = metadata.state;
   const attr = (state && state.attributes) || {};
-  const domain = entityId.split('.')[0];
-  const name = attr.friendly_name || entityId;
-  const value = !state ? 'Unavailable' : state.state === 'unavailable' ? 'Unavailable' : state.state === 'unknown' ? 'Unknown'
-    : `${state.state}${attr.unit_of_measurement ? ` ${attr.unit_of_measurement}` : ''}`;
+  const domain = metadata.domain;
   const modes = attr.supported_color_modes;
   const dimmable = Array.isArray(modes) ? modes.some((m) => DIMMABLE_MODES.has(m)) : Number.isFinite(attr.brightness);
   return {
-    entityId, name, value, available: available(state),
+    entityId, name: metadata.name, value: formatEntityValue(hass, entityId),
+    available: metadata.available && hass.connected !== false && hass.connection?.connected !== false,
+    camera: domain === 'camera',
     toggle: QUICK_TOGGLE.has(domain) && serviceExists(hass, domain, 'toggle'),
     dimmable: domain === 'light' && dimmable && serviceExists(hass, 'light', 'turn_on') && serviceExists(hass, 'light', 'turn_off'),
     on: !!state && state.state === 'on',
@@ -109,6 +113,10 @@ export class DevicePopup {
     this._rows = new Map();
     this._pending = new Set();
     this._errors = new Map();
+    this._cameraContainer = element('div', 't3d-popup-camera');
+    this._cameraFeed = new CameraFeedController(this._cameraContainer, {
+      onMoreInfo: (entityId) => { this.close(); return this.onMoreInfo(entityId); },
+    });
     this._onOutside = (e) => {
       if (!this.el || e.composedPath().includes(this.el)) return;
       this.closedBy = e;
@@ -124,9 +132,11 @@ export class DevicePopup {
   }
 
   get isOpen() { return !!this.el; }
+  get cameraFeed() { return this._cameraFeed; }
 
   showMarker(marker, position) {
     this._show({ kind: 'marker', marker, title: marker.name || marker.entityId || 'Device' }, position);
+    if (marker.entityId?.startsWith('camera.')) this.openCamera(marker.entityId);
   }
 
   showRoom(room, markers, position) {
@@ -160,7 +170,7 @@ export class DevicePopup {
       element('h3', '', selection.title));
     head.append(heading, close);
     this._body = element('div', 't3d-popup-body');
-    el.append(style, head, this._body);
+    el.append(style, head, this._cameraContainer, this._body);
     // Keep popup interactions out of orbiting, room selection and marker gestures.
     for (const type of STOP_EVENTS) el.addEventListener(type, (e) => e.stopPropagation());
     el.addEventListener('keydown', (e) => { this._onKey(e); e.stopPropagation(); });
@@ -181,6 +191,15 @@ export class DevicePopup {
   update(hass) {
     this.hass = hass || { states: {} };
     this._refreshRows();
+    this._cameraFeed.update(this.hass);
+  }
+
+  openCamera(entityId) {
+    if (!this.el || !this._rows.has(entityId) || !entityControl(this.hass, entityId).camera) return Promise.resolve(false);
+    const opening = this._cameraFeed.open(entityId, this.hass);
+    // Keep the chosen camera visible even after browsing a long grouped-device list.
+    this.el.scrollTop = 0;
+    return opening;
   }
 
   _entityIds() {
@@ -188,8 +207,8 @@ export class DevicePopup {
     const ids = s.kind === 'room' ? roomEntityIds(s.room, s.markers) : markerEntityIds(s.marker);
     // Registry-hidden and diagnostic entities are never included in a room's controls.
     return ids.filter((id) => {
-      const reg = this.hass.entities && this.hass.entities[id];
-      return !reg || (!reg.hidden && !reg.entity_category);
+      const metadata = entityMetadata(this.hass, id);
+      return !metadata.hidden && !metadata.category;
     });
   }
 
@@ -197,6 +216,7 @@ export class DevicePopup {
     if (!this.el) return;
     const ids = this._entityIds();
     const keep = new Set(ids);
+    if (this._cameraFeed.entityId && !keep.has(this._cameraFeed.entityId)) this._cameraFeed.close();
     for (const [id, row] of this._rows) {
       if (!keep.has(id)) { row.el.remove(); this._rows.delete(id); }
     }
@@ -209,7 +229,7 @@ export class DevicePopup {
     for (const id of ids) {
       const control = entityControl(this.hass, id);
       let row = this._rows.get(id);
-      const key = `${control.toggle}:${control.dimmable}`;
+      const key = `${control.toggle}:${control.dimmable}:${control.camera}`;
       if (!row || row.key !== key) {
         const next = this._makeRow(control, key);
         if (row) row.el.replaceWith(next.el);
@@ -222,6 +242,10 @@ export class DevicePopup {
       row.info.setAttribute('aria-label', `${control.name}: all controls`);
       const busy = this._pending.has(id);
       row.el.setAttribute('aria-busy', String(busy));
+      if (row.camera) {
+        row.camera.disabled = !control.available;
+        row.camera.setAttribute('aria-label', `${control.name}: camera view`);
+      }
       if (row.toggle) {
         row.toggle.textContent = control.on ? 'Turn off' : 'Turn on';
         row.toggle.setAttribute('aria-label', `${control.name}: ${control.on ? 'turn off' : 'turn on'}`);
@@ -229,6 +253,7 @@ export class DevicePopup {
       }
       if (row.slider) {
         row.slider.disabled = !control.available || busy;
+        row.slider.setAttribute('aria-label', `${control.name}: brightness`);
         if (!row.slider.dataset.editing) {
           row.slider.value = String(Math.min(100, Math.max(0, control.brightness)));
           row.brightness.textContent = `Brightness: ${row.slider.value}%`;
@@ -252,7 +277,9 @@ export class DevicePopup {
     const actions = element('div', 't3d-entity-actions');
     const info = button('All controls', 'more-info', id);
     const toggle = control.toggle ? button('', 'toggle', id) : null;
+    const camera = control.camera ? button('Camera view', 'camera-view', id) : null;
     if (toggle) actions.append(toggle);
+    if (camera) actions.append(camera);
     actions.append(info);
     el.append(name, value, actions);
     let slider = null, brightness = null;
@@ -272,15 +299,17 @@ export class DevicePopup {
     const status = element('p', 't3d-entity-status');
     status.setAttribute('role', 'status');
     el.append(error, status);
-    return { el, key, name, value, info, toggle, slider, brightness, error, status };
+    return { el, key, name, value, info, toggle, camera, slider, brightness, error, status };
   }
 
   _click(e) {
+    e.stopPropagation();
     const b = e.target.closest && e.target.closest('button[data-action]');
     if (!b || b.disabled) return;
     const id = b.dataset.entity;
     if (b.dataset.action === 'close') this.close();
     else if (b.dataset.action === 'more-info') { this.close(); this.onMoreInfo(id); }
+    else if (b.dataset.action === 'camera-view') this.openCamera(id);
     else if (b.dataset.action === 'toggle') {
       const c = entityControl(this.hass, id);
       if (c.toggle && c.available) this._run(id, id.split('.')[0], 'toggle', { entity_id: id });
@@ -346,6 +375,7 @@ export class DevicePopup {
   close({ restoreFocus = true } = {}) {
     const hadPopup = !!this.el;
     this._session++;
+    this._cameraFeed.close();
     window.removeEventListener('pointerdown', this._onOutside, true);
     window.removeEventListener('keydown', this._onKey);
     if (this.el) this.el.remove();
@@ -363,7 +393,7 @@ export class DevicePopup {
     this._opener = null;
   }
 
-  dispose() { this.close({ restoreFocus: false }); }
+  dispose() { this.close({ restoreFocus: false }); this._cameraFeed.dispose(); }
 
   setPlacement(placement) {
     this.placement = placement === 'right' ? 'right' : 'popup';

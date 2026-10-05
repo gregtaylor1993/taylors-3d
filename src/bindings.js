@@ -1,6 +1,6 @@
 // Bindings between a model's manifest and Home Assistant: which HA floor shows each level,
 // which HA area each room/zone is. Saved choices live in layout.model.levels / .rooms; anything
-// not saved is derived here, so re-exports and HA changes never need manual repair.
+// not saved is derived here. Explicit missing choices remain stale until relinked or restored.
 
 const SHOW = ['with', 'only', 'always', 'hidden', 'all-only'];
 
@@ -34,18 +34,20 @@ export function resolveLevels(levels, floors, saved = {}) {
   const safeSaved = isPlainObject(saved) ? saved : {};
   const ids = new Set(floors.map((f) => f.id));
   const out = {};
-  const stale = new Set();
   for (const l of levels) {
     const s = safeSaved[l.id];
     if (!isPlainObject(s)) continue;
+    const missingFloor = typeof s.floor === 'string' && !ids.has(s.floor);
     if (s.show && SHOW.includes(s.show) && s.show !== 'with' && s.show !== 'only') {
-      out[l.id] = { show: s.show, floor: ids.has(s.floor) ? s.floor : null, auto: false };
+      out[l.id] = { show: s.show, floor: ids.has(s.floor) || missingFloor ? s.floor : null, auto: false,
+        ...(missingFloor ? { stale: true } : {}) };
     } else if (s.floor === null && !s.show) {
       out[l.id] = { show: 'always', floor: null, auto: false }; // "belongs to no HA floor"
     } else if (ids.has(s.floor)) {
       out[l.id] = { show: s.show === 'only' ? 'only' : 'with', floor: s.floor, auto: false };
-    } else {
-      stale.add(l.id); // saved floor was deleted in HA: fall back to the defaults below
+    } else if (missingFloor) {
+      // A saved ID is authoritative. Never silently assign its geometry to another floor.
+      out[l.id] = { show: s.show === 'only' ? 'only' : 'with', floor: s.floor, auto: false, stale: true };
     }
   }
   for (const l of levels) if (!out[l.id] && ids.has(l.id)) out[l.id] = { show: 'with', floor: l.id, auto: true };
@@ -65,7 +67,7 @@ export function resolveLevels(levels, floors, saved = {}) {
 
   // the exterior goes with the lowest above-ground storey's floor (not a basement)
   const storeyFloors = levels.filter((l) => (l.role === 'storey' || l.role === 'basement') && out[l.id] && out[l.id].floor)
-    .map((l) => floors.find((f) => f.id === out[l.id].floor));
+    .map((l) => floors.find((f) => f.id === out[l.id].floor)).filter(Boolean);
   const byElev = (a, b) => a.elevation - b.elevation;
   const ground = storeyFloors.filter((f) => f.elevation >= 0).sort(byElev)[0] || storeyFloors.sort(byElev)[0]
     || floors.slice().sort(byElev)[0];
@@ -76,7 +78,6 @@ export function resolveLevels(levels, floors, saved = {}) {
     else if (l.role === 'exterior') out[l.id] = { show: 'always', floor: groundFloor, auto: true };
     else out[l.id] = { show: 'always', floor: null, auto: true };
   }
-  for (const id of stale) out[id] = { ...out[id], stale: true };
   return out;
 }
 
@@ -85,6 +86,7 @@ export function resolveLevels(levels, floors, saved = {}) {
 export function levelVisible(assign, visibleFloor, elevationOf) {
   if (!assign) return true;
   if (assign.show === 'hidden') return false;
+  if (assign.stale) return visibleFloor === 'all';
   if (assign.show === 'always') return true;
   if (assign.show === 'all-only') return visibleFloor === 'all';
   if (visibleFloor === 'all' || visibleFloor === assign.floor) return true;
@@ -100,10 +102,13 @@ export function resolveRoomAreas(rooms, areaIds, saved = {}) {
   const out = {};
   for (const r of rooms) {
     const s = safeSaved[r.id];
-    if (isPlainObject(s) && 'area' in s && (s.area === null || areas.has(s.area))) { out[r.id] = { area: s.area, auto: false }; continue; }
+    if (isPlainObject(s) && 'area' in s) {
+      out[r.id] = { area: s.area, auto: false, ...(s.area !== null && !areas.has(s.area) ? { stale: true } : {}) };
+      continue;
+    }
     const sug = r.suggest && r.suggest.area;
     const area = sug && areas.has(sug) ? sug : areas.has(r.id) ? r.id : null;
-    out[r.id] = isPlainObject(s) && 'area' in s ? { area, auto: true, stale: true } : { area, auto: true };
+    out[r.id] = { area, auto: true };
   }
   return out;
 }
@@ -130,10 +135,10 @@ export function modelRooms(rooms, levelAssign, roomAreas, align) {
   const out = [];
   for (const r of rooms) {
     const lv = safeLevelAssign[r.level];
-    if (!r.outline || !lv || !lv.floor || lv.show === 'hidden') continue; // levels without an HA floor or hidden carry no rooms
+    if (!r.outline || !lv || !lv.floor || lv.show === 'hidden' || lv.stale) continue; // missing/hidden floor links carry no placement rooms
     out.push({
       id: 'm:' + r.id, modelId: r.id, label: r.label,
-      area_id: safeRoomAreas[r.id] ? safeRoomAreas[r.id].area : null,
+      area_id: safeRoomAreas[r.id] && !safeRoomAreas[r.id].stale ? safeRoomAreas[r.id].area : null,
       floor_id: lv.floor,
       polygon: r.outline.map((p) => transformPoint(p, align)),
       doors: (r.doors || []).map((p) => transformPoint(p, align)),
@@ -155,7 +160,7 @@ export function levelFloorOverrides(levels, levelAssign, { position = [0, 0, 0],
   const done = new Set();
   for (const l of levels) {
     const a = safeLevelAssign[l.id];
-    if (l.role === 'exterior' || l.role === 'roof' || !a || (a.show !== 'with' && a.show !== 'only') || !a.floor || done.has(a.floor)) continue;
+    if (l.role === 'exterior' || l.role === 'roof' || !a || a.stale || (a.show !== 'with' && a.show !== 'only') || !a.floor || done.has(a.floor)) continue;
     if (l.elevation === null || l.elevation === undefined) continue;
     done.add(a.floor);
     const o = { id: a.floor, elevation: Math.round((l.elevation * scale + (position[2] || 0)) * 1000) / 1000 };
