@@ -3,7 +3,7 @@
 export const FLOOR_PRESENTATION_LIMITS = Object.freeze({ maxFloors: 4, maxGapM: 100,
   maxBaseElevationM: 1000, maxWorldCoordinate: 1000000, maxIdLength: 256 });
 export const FLOOR_PRESENTATION_DEFAULTS = Object.freeze({ mode: 'assembled', floors: null,
-  gap_m: 2, axis: 'east', base_elevation_m: 0 });
+  gap_m: 2, axis: 'east', base_elevation_m: 0, panels: false });
 
 const plain = (value) => !!value && typeof value === 'object' && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 const finite = (value) => typeof value === 'number' && Number.isFinite(value);
@@ -30,6 +30,10 @@ export function readFloorPresentation(value) {
   const bad = (code, message, id) => policy.diagnostics.push(issue(code, message, id));
   if (value !== undefined && !plain(value)) bad('invalid_policy', 'Floor presentation settings must be an object.');
   const raw = plain(value) ? value : {};
+  if (Object.hasOwn(raw, 'panels')) {
+    if (typeof raw.panels === 'boolean') policy.panels = raw.panels;
+    else bad('invalid_panels', 'Separate floor panels must be true or false.');
+  }
   for (const [field, choices] of [['mode', ['assembled', 'horizontal', 'vertical']], ['axis', ['east', 'north']]]) {
     if (!Object.hasOwn(raw, field)) continue;
     if (choices.includes(raw[field])) policy[field] = raw[field];
@@ -68,17 +72,19 @@ const boundsValid = (bounds) => plain(bounds) && vector(bounds.min) && vector(bo
 const cloneBounds = (bounds) => ({ min: bounds.min.slice(), max: bounds.max.slice() });
 
 /** compileFloorPresentation(raw,{floors,bounds,model}) ->
- * {mode,requestedMode,valid,diagnostics,rows:[{floor_id,elevation,bounds,offset}]}.
+ * {mode,requestedMode,panels,valid,diagnostics,rows:[{floor_id,elevation,bounds,offset}]}.
  * `floors` are current exact resolved {id,elevation}; `bounds` are SOURCE-world
  * {floor_id,min:[x,y,z],max:[x,y,z]} footprints. Optional `model` is current
  * {present,supported,diagnostics}; supported must be a caller's explicit ownership
  * proof. Every selected floor must pass before any split row is returned.
  * Assembled needs no bounds/model proof/selection limit and provides identity rows
  * for unique, finite known floors. Failed splits return assembled with no rows.
+ * Separate panels are optional and activate only for a proven horizontal split.
+ * Other arrangements keep the saved preference without applying extra cameras.
  */
 export function compileFloorPresentation(value, { floors = [], bounds = [], model } = {}) {
   const policy = readFloorPresentation(value), diagnostics = policy.diagnostics.map((entry) => ({ ...entry }));
-  const result = { mode: 'assembled', requestedMode: policy.mode, valid: policy.valid, diagnostics, rows: [] };
+  const result = { mode: 'assembled', requestedMode: policy.mode, panels: false, valid: policy.valid, diagnostics, rows: [] };
   const currentFloors = Array.isArray(floors) ? Array.from(floors) : [];
   if (policy.mode === 'assembled') {
     const counts = new Map();
@@ -148,7 +154,7 @@ export function compileFloorPresentation(value, { floors = [], bounds = [], mode
       bad('display_bounds_limit', 'The separated floor would exceed the safe display coordinate limit.', row.floor_id);
   }
   if (!result.valid) return result;
-  result.mode = policy.mode; result.rows = rows;
+  result.mode = policy.mode; result.panels = policy.mode === 'horizontal' && policy.panels; result.rows = rows;
   return result;
 }
 

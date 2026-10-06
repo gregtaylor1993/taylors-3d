@@ -1002,10 +1002,19 @@ class Taylors3dCard extends HTMLElement {
     this._view.onFrame = (now) => this._animateFeatures(now);
     this._view.onCameraInteraction = this._onAmbientCameraInteraction;
     this._objects = new ObjectLayer(this._view);
+    this._view.floorPanelContext = () => ({ rooms: this._roomList || [], statusOverlays: this._statusOverlays,
+      alerts: this._alertData?.alerts || [], trackingLayer: this._trackingLayer, cameraCoverage: this._cameraCoverage,
+      furnitureLayer: this._furnitureLayer, planSecurityLayer: this._planSecurityLayer, securityLayer: this._securityLayer });
+    this._view.onFloorPanelSelect = () => {
+      this._popup?.close(); this._devicePopup?.close(); this._selectedRoomId = null;
+      this._syncMiniMap();
+    };
     this._view.onObjectsInvalidate = () => { this._updateObjects(); this._syncFurniture(); }; // view, section or placement changed
     this._popup = new ObjectPopup(this._stage, {
       onAction: (domain, service, data) => this._hass && this._hass.callService(domain, service, data),
-      project: (w) => this._view.projectWorld(w),
+      project: (w, members) => this._view.projectWorld(w,
+        this._view._floorPanels?.active
+          ? this._view._floorPanels.floorForNode(this._objects.objectAt(this._popup?._id)?.obj?.node, members) : undefined),
       anchor: (id) => this._objects.displayAnchorOf ? this._objects.displayAnchorOf(id) : this._objects.anchorOf(id),
       resolve: (id) => {
         const o = this._objects.objectAt(id);
@@ -1029,10 +1038,25 @@ class Taylors3dCard extends HTMLElement {
       },
     });
     this._configureMiniMap();
-    this._view.onRender = () => {
-      this._trackingLayer?.arrangeScreenLabels(this._scene.getBoundingClientRect());
-      this._popup.position();
-      this._miniMap.updateCamera({ camera: this._view.getCamera(), topCamera: this._view.getTopCamera(), mode: this._mode });
+    this._view.onRender = (paneFrame) => {
+      const panels = this._view._floorPanels, box = this._scene.getBoundingClientRect();
+      if (panels?.active && this._trackingLayer?.parts?.size) {
+        const overlaps = [];
+        const entries = paneFrame?.entries || panels.entries(), members = paneFrame?.members || panels.participants();
+        const controls = this._trackingControlObstacles(entries, members);
+        for (const entry of entries) {
+          const sx = box.width / this._view.size.w, sy = box.height / this._view.size.h, rect = entry.rect;
+          panels.withFloor(entry.floorId, () => this._trackingLayer.arrangeScreenLabels({
+            left: box.left + rect.x * sx, top: box.top + (rect.y + 52) * sy,
+            width: rect.width * sx, height: Math.max(0, rect.height - 52) * sy }, controls.get(entry.floorId)), members);
+          overlaps.push(...this._trackingLayer.screenLabelOverlaps);
+        }
+        this._trackingLayer.screenLabelOverlaps = overlaps;
+      } else this._trackingLayer?.arrangeScreenLabels(box);
+      if (paneFrame) this._popup.position(paneFrame.members);
+      else this._popup.position();
+      this._miniMap.updateCamera(this._view._floorPanels?.active ? this._view._floorPanels.cameraSnapshot()
+        : { camera: this._view.getCamera(), topCamera: this._view.getTopCamera(), mode: this._mode });
     };
     this._view.setOcclusion(this._config.occlusion !== false);
     this._view.setMode(this._mode);
@@ -1050,6 +1074,12 @@ class Taylors3dCard extends HTMLElement {
       this._scenePreviewInteraction(e);
       this._presetEvents.interrupt();
       if (!this._editing && this._view._tween) this._view.stopCameraMotion();
+      const path = e.composedPath();
+      if (this._view._floorPanels?.active && !path.some((node) => node?.hasAttribute?.('data-taylors3d-ui'))
+        && !path.includes(this._popup?.el) && !path.includes(this._devicePopup?.el)) {
+        const pane = this._view._floorPanels.paneAt(e.clientX, e.clientY);
+        if (pane) this._view._floorPanels.select(pane.floorId);
+      }
       if (this._editing && e.target === canvas) this._edit.canvasDownCapture(e);
     }, true);
     this._stage.addEventListener('pointerup', (event) => this._edit?._furnitureDrag?.up(event), true);
@@ -1601,6 +1631,8 @@ class Taylors3dCard extends HTMLElement {
   _showPlanSecurityEntity(id, expected) {
     this._syncSecurity(); const record = this._currentPlanSecurityRecord(id, expected);
     if (!record || !this._devicePopup) return false;
+    if (this._view._floorPanels?.active && ![record.location.x, record.location.y, record.location.z].every(Number.isFinite)) return false;
+    if (!this._selectControlFloor(record.location.floorId)) return false;
     this._popup?.close(); this._devicePopup.update(this._hass);
     this._securityPopup = { id, entity: record.entity, generation: this._securitySessionGeneration };
     this._devicePopup.showMarker({ id: `security:${id}`, entityId: record.entity, name: record.name, entities: [{ eid: record.entity }] },
@@ -1788,6 +1820,8 @@ class Taylors3dCard extends HTMLElement {
       const item = entityMetadata(this._hass, eid);
       return item.hasState && !item.hidden && !item.disabled && !item.category;
     }).map((eid) => ({ eid }));
+    if (this._view._floorPanels?.active && ![record.location.x, record.location.y, record.location.z].every(Number.isFinite)) return false;
+    if (!this._selectControlFloor(record.location.floorId)) return false;
     this._popup?.close();
     this._devicePopup.update(this._hass);
     const p = record.location;
@@ -2494,7 +2528,8 @@ class Taylors3dCard extends HTMLElement {
     const st = this._viewState;
     const mode = this._config.room_labels || 'size';
     this._labelKey = this._labelKeyNow();
-    const labelled = (r) => !hasModel || !!this._editing || (!!st && !st.overview && !!st.primary && r.levelId === st.primary);
+    const labelled = (r) => !hasModel || !!this._editing || this._view._floorPanels?.active
+      || (!!st && !st.overview && !!st.primary && r.levelId === st.primary);
     const rooms = (this._roomList || []).map((r) => ({
       room: r.room, floorId: r.floorId, label: labelled(r) ? roomLabel(r.name, r.room.polygon, mode) : '',
     }));
@@ -2508,6 +2543,7 @@ class Taylors3dCard extends HTMLElement {
   _labelKeyNow() {
     const st = this._viewState;
     if (!this._view.model || this._editing) return '*';
+    if (this._view._floorPanels?.active) return 'panels:' + this._view._floorCompiled.rows.map((row) => row.floor_id).join('|');
     return st && !st.overview && st.primary ? 'p:' + st.primary : '';
   }
 
@@ -3110,6 +3146,9 @@ class Taylors3dCard extends HTMLElement {
         view.stopCameraMotion?.();
         const cameraFrame = view.captureCameraFrame?.();
         this._floorPresentationCameraTransition(previous, this._floorPresentationReportValue, cameraFrame);
+        view._floorPanels?.clear();
+        view._wallCameraDirty = true;
+        if ((previous?.panels === true || report.panels === true) && this._labelKeyNow() !== this._labelKey) this._pushStructure();
         this._objects?.refreshFloorPresentation?.();
         this._statusRefs = null; this._weatherRefs = null; this._trackingInputKey = null;
       }
@@ -3138,6 +3177,8 @@ class Taylors3dCard extends HTMLElement {
     const wasActive = previous?.valid === true && previous.mode !== 'assembled';
     const active = next?.valid === true && next.mode !== 'assembled';
     if (!wasActive && !active) return;
+    if (wasActive && active && previous.mode === next.mode && previous.panels !== next.panels
+      && JSON.stringify(previous.rows.map((row) => [row.floor_id, row.bounds, row.offset])) === JSON.stringify(next.rows.map((row) => [row.floor_id, row.bounds, row.offset]))) return;
     const session = this._floorCameraSession, life = this._floorCameraLife(), scope = this._floorCameraScope();
     const sameLife = session?.life.every((value, index) => value === life[index]);
     const sameScope = sameLife && session.scope.every((value, index) => value === scope[index]);
@@ -3178,7 +3219,8 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _miniMapSourceCamera(snapshot, floorId) {
-    if (!this._floorPresentationActive()) return snapshot;
+    // Pane snapshots already use the house's saved source coordinates.
+    if (this._view._floorPanels?.active || !this._floorPresentationActive()) return snapshot;
     return { ...snapshot,
       camera: translateFloorCamera(snapshot.camera, this._floorPresentationReportValue, floorId, this._floors, { toSource: true }),
       topCamera: translateFloorCamera(snapshot.topCamera, this._floorPresentationReportValue, floorId, this._floors, { toSource: true, top: true }) };
@@ -3222,6 +3264,39 @@ class Taylors3dCard extends HTMLElement {
     return !this._editing || (this._edit && this._edit.tab === 'objects');
   }
 
+  // Reserve current device controls during this frame only. Actor labels move
+  // in CSS; source positions, model geometry and the frame's ownership stay put.
+  _trackingControlObstacles(entries, members) {
+    const panels = this._view._floorPanels, controls = new Map(entries.map((entry) => [entry.floorId, []]));
+    const append = (floorId, rect) => {
+      if (controls.has(floorId) && [rect.left, rect.top, rect.width, rect.height].every(Number.isFinite)
+        && rect.width > 0 && rect.height > 0) controls.get(floorId).push({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
+    };
+    for (const row of this._view.cssObjects || []) {
+      const el = row.obj?.element;
+      if (row.kind !== 'marker' || !el?.isConnected || el.hidden || el.style.display === 'none' || el.style.visibility === 'hidden'
+        || el.style.pointerEvents === 'none' || !nodeShown(row.obj) || !this._editing && el.classList.contains('fp-occluded')) continue;
+      append(panels.floorForNode(row.obj, members), el.getBoundingClientRect());
+    }
+    const layer = this._objects;
+    if (!layer?.model || !this._hass) return controls;
+    const panes = new Map(entries.map((entry) => [entry.floorId, entry])), box = this._view.renderer.domElement.getBoundingClientRect();
+    const levelShown = this._levelShown(), groups = this._groups || {}, radius = OBJECT_HIT_PX.touch;
+    for (const anchor of layer.displayAnchors ? layer.displayAnchors() : layer.anchors()) {
+      const object = layer.objectAt(anchor.id), binding = object?.binding;
+      if (!binding || binding.hidden || !binding.missing && !actionTarget(object.obj, binding, groups)
+        || !levelShown(object.obj.level) || !nodeShown(object.obj.node)) continue;
+      const pane = panes.get(panels.floorForNode(object.obj.node, members));
+      if (!pane) continue;
+      const point = anchor.world.clone().project(pane.camera), rect = pane.rect;
+      if (![point.x, point.y, point.z].every(Number.isFinite) || Math.abs(point.x) > 1 || Math.abs(point.y) > 1 || Math.abs(point.z) > 1) continue;
+      const x = box.left + (rect.x + (point.x + 1) * rect.width / 2) * box.width / this._view.size.w;
+      const y = box.top + (rect.y + (1 - point.y) * rect.height / 2) * box.height / this._view.size.h;
+      append(pane.floorId, { left: x - radius, top: y - radius, width: radius * 2, height: radius * 2 });
+    }
+    return controls;
+  }
+
   // The nearest tappable object (visible, bound, not hidden, level shown) within radius px of a client point.
   _objectHit(x, y, radius, all = false) {
     const layer = this._objects;
@@ -3229,12 +3304,18 @@ class Taylors3dCard extends HTMLElement {
     const groups = this._groups || {};
     const levelShown = this._levelShown();
     const pts = [];
+    const panels = this._view._floorPanels;
+    const pane = panels?.active ? panels.paneAt(x, y) : null;
+    if (panels?.active && !pane) return null;
+    const paneMembers = pane ? panels.participants() : undefined;
     for (const a of layer.displayAnchors ? layer.displayAnchors() : layer.anchors()) {
       const o = layer.objectAt(a.id);
       const b = o && o.binding;
       if (!all && (!b || b.hidden || (!b.missing && !actionTarget(o.obj, b, groups)))) continue;
       if (!levelShown(o.obj.level) || !nodeShown(o.obj.node)) continue;
-      const p = this._view.projectWorld(a.world);
+      const floorId = pane ? panels.floorForNode(o.obj.node, paneMembers) : undefined;
+      if (pane && floorId !== pane.floorId) continue;
+      const p = this._view.projectWorld(a.world, floorId);
       if (p) pts.push({ id: a.id, x: p[0], y: p[1], world: a.world, node: o.obj.node });
     }
     // nearest first; one hidden behind visible model geometry (a lamp behind a facade wall) is skipped
@@ -3338,17 +3419,28 @@ class Taylors3dCard extends HTMLElement {
     const target = cameraTap ? o.binding.entity : actionTarget(o.obj, o.binding, this._groups || {}, this._hass.states);
     const st = target && this._hass.states[target];
     const usable = st && st.state !== 'unavailable' && st.state !== 'unknown';
-    if (which === 'tap' && this._config.device_tap_action !== 'toggle' && target) {
+    const popupTap = which === 'tap' && this._config.device_tap_action !== 'toggle' && target;
+    const popupAction = popupTap || action === 'popup' || !usable;
+    const a = popupAction && (this._objects.displayAnchors ? this._objects.displayAnchors() : this._objects.anchors()).find((x) => x.id === id);
+    let floorId;
+    if (popupAction && this._view._floorPanels?.active) {
+      const metadata = target && entityMetadata(this._hass, target);
+      if (o.binding?.hidden || !o.obj.node?.isObject3D || !nodeShown(o.obj.node) || metadata?.hidden || metadata?.disabled || metadata?.category
+        || !a || ![a.world?.x, a.world?.y, a.world?.z].every(Number.isFinite)) return;
+      const panels = this._view._floorPanels, members = panels.participants();
+      floorId = panels.floorForNode(o.obj.node, members);
+      if (!this._selectControlFloor(floorId)) return;
+    }
+    if (popupTap) {
       this._popup.close();
-      const a = (this._objects.displayAnchors ? this._objects.displayAnchors() : this._objects.anchors()).find((x) => x.id === id);
       this._devicePopup.update(this._hass);
       this._devicePopup.showMarker({ name: o.obj.label || o.obj.id, entityId: target,
-        entities: (o.chain && o.chain.entities || [target]).map((eid) => ({ eid })) }, a && this._view.projectWorld(a.world));
+        entities: (o.chain && o.chain.entities || [target]).map((eid) => ({ eid })) }, a && this._view.projectWorld(a.world,
+          floorId));
       return;
     }
     this._devicePopup.close();
     if (action === 'popup' || !usable) {
-      const a = (this._objects.displayAnchors ? this._objects.displayAnchors() : this._objects.anchors()).find((x) => x.id === id);
       if (a) this._popup.open(o.obj, a.world);
     } else if (action === 'toggle') {
       const call = this._objectToggleCall(target);
@@ -3526,6 +3618,11 @@ class Taylors3dCard extends HTMLElement {
     this._view.setGlows(glows);
   }
 
+  _selectControlFloor(floorId) {
+    const panels = this._view?._floorPanels;
+    return !panels?.active || panels.select(floorId);
+  }
+
   _tap(m) {
     if (!this._layout) return;
     // A retained marker's event listener can predate a name-only registry update.
@@ -3534,8 +3631,14 @@ class Taylors3dCard extends HTMLElement {
     if (!m) return;
     this._stopScenePreview('device selected');
     if (this._config.device_tap_action !== 'toggle') {
-      this._popup.close();
       const p = this._positions.get(m.id);
+      if (this._view._floorPanels?.active) {
+        const metadata = entityMetadata(this._hass, m.entityId), marker = this._view.markerObjects?.get(m.id);
+        if (!p || ![p.x, p.y, p.z ?? 0].every(Number.isFinite) || p.shown === false
+          || this._view._markerStates?.get(m.id)?.shown === false || marker?.obj?.visible === false
+          || !metadata.hasState || metadata.hidden || metadata.disabled || metadata.category || !this._selectControlFloor(p.floorId)) return;
+      }
+      this._popup.close();
       this._devicePopup.update(this._hass);
       this._devicePopup.showMarker(m, p && this._view.screenPoint(p.x, p.y, p.z || 0, p.floorId));
     } else if (TAP_TOGGLE.has(m.domain)) {
@@ -3618,7 +3721,9 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _openRoomAt(x, y) {
-    const rooms = this._navigationRooms();
+    const panels = this._view._floorPanels, pane = panels?.active ? panels.paneAt(x, y) : null;
+    if (panels?.active && !pane) return;
+    const rooms = this._navigationRooms().filter((room) => !pane || room.floorId === pane.floorId);
     const hit = this._view.pickModel(x, y);
     let selected = hit && ['room', 'zone'].includes(hit.kind) ? rooms.find((r) => r.room.modelId === hit.id) : null;
     if (!selected && hit) {
@@ -3663,10 +3768,13 @@ class Taylors3dCard extends HTMLElement {
     this._view.stopCameraMotion();
     this._popup.close();
     this._devicePopup.close();
-    if (point.floorId && this._floor !== point.floorId) this._setFloor(point.floorId);
+    const panels = this._view._floorPanels;
+    if (!panels?.active && point.floorId && this._floor !== point.floorId) this._setFloor(point.floorId);
     const displayed = this._displayFeaturePosition({ ...point, elevation: this._view.floorElevation(point.floorId) });
     if (!displayed) return;
-    if (this._mode === 'top') {
+    if (panels?.active) {
+      if (!panels.focusPlan(displayed)) return;
+    } else if (this._mode === 'top') {
       const c = this._view.getTopCamera();
       if (c) this._view.setTopCamera({ ...c, center: [displayed.x, displayed.y] });
     } else {
@@ -3735,12 +3843,14 @@ class Taylors3dCard extends HTMLElement {
       positions.set(id, { x: anchor.world.x, y: -anchor.world.z, floorId });
     }
     this._miniMap.setVisible(this._miniMapVisible);
-    this._miniMap.update({ rooms: this._navigationRooms(), floors: this._floors || [], visibleFloors: this._navigationFloors(),
+    const panels = this._view._floorPanels, paneSnapshot = panels?.active ? panels.cameraSnapshot() : null;
+    this._miniMap.update({ rooms: this._navigationRooms(), floors: this._floors || [],
+      visibleFloors: paneSnapshot ? [panels.activeFloorId] : this._navigationFloors(),
       positions, markers, markerStates: this._view._markerStates, states: this._hass && this._hass.states, hass: this._hass,
       trackedMarkers: [...this._trackingData.miniMap, ...this._securityPlanData.miniMap.map((marker) => ({ ...marker,
         id: `${marker.id}:${this._securitySessionGeneration}` }))],
       alertMarkers: this._alertMapMarkers(),
-      camera: this._view.getCamera(), topCamera: this._view.getTopCamera(), mode: this._mode, editing: this._editing,
+      camera: paneSnapshot?.camera || this._view.getCamera(), topCamera: paneSnapshot?.topCamera || this._view.getTopCamera(), mode: this._mode, editing: this._editing,
       selectedRoomId: this._selectedRoomId });
   }
 
@@ -3845,7 +3955,8 @@ class Taylors3dCard extends HTMLElement {
     const location = auto ? readHaLocation(this._hass) : null;
     const locationKey = location ? JSON.stringify([location.status, location.latitude, location.longitude]) : null;
     const locationChanged = auto && locationKey !== this._skyLocationKey;
-    if (same && !locationChanged && !(auto && now - (this._moonAt ?? -Infinity) >= MOON_EVERY_MS)) return;
+    // The minute timer moves sky bodies; disabled bodies need no idle frame.
+    if (same && !locationChanged && !(auto && this._config.sky_bodies !== false && now - (this._moonAt ?? -Infinity) >= MOON_EVERY_MS)) return;
     if (!same) {
       this._skyLast = sky;
       this._daylight = sky.night < 0.5;

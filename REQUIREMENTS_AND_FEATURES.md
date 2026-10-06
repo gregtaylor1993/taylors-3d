@@ -8,6 +8,53 @@ Created: 4 October 2026. Starting point: version `0.1.0`, base commit `055e30f2e
 
 **Current work:** the combined `0.2.0` source candidate brings the recorded features and photo-inspired House layout together. Its final local checks and remaining acceptance work are recorded below. The published HACS release and local source candidate remain separate; package/publication status is recorded with this checkpoint. Earlier package and CI notes describe their own checkpoints.
 
+**Current local version: Phase 20, `0.2.0`.** F24 now adds optional separate floor
+panels with linked camera controls. The local checks and installation ZIP below
+cover this version. The frozen Phase 19 source, package and earlier results remain
+historical. This has not published a HACS update or validated your actual house.
+
+## Phase 20 0.2.0 local checkpoint
+
+Recorded: **2026-10-06**. This checkpoint records a tested local candidate;
+features remain Testing until their Home Assistant and household acceptance checks.
+
+The new floor panels give each selected floor its own picture. The same rendering
+engine and fixed light pool draw all the pictures, keeping resource use bounded.
+Orbit, pan and zoom move them together. Real room/device positions and calibration
+points keep their original coordinates, so returning to the assembled house does
+not require moving them back. Exact floor picking, current room/device menus,
+mini-map selection, label spacing and camera-side walls are covered by this run.
+Automatic sun/time refresh also works while the house is otherwise idle.
+
+| Final local check | Recorded result |
+|---|---|
+| Complete JavaScript unit run | 6054/6054 tests in 196/196 files; terminal exit 0 |
+| Lint | Passed; terminal exit 0 |
+| Build | Passed; terminal exit 0 |
+| Source/bundle freshness and integration copy | Passed; terminal exit 0; both frontend copies match |
+| Complete native browser checks | 30/30 declared scripts across two runs on the same frozen source/build; every terminal exit 0; source/built-card scenarios use simulated HA |
+| Tested frontend checksum (SHA-256) | `aea868aafcb9ee885e1caba618326bdc46272c7ad9cc9a73710663691178235a` |
+| Local installation package | `taylors3d-phase20-local-candidate.zip`: 20 checked entries, each matching current integration source; packaged frontend matches the tested build |
+| Local ZIP checksum (SHA-256) | `9c5db533a83f76e61b36543d676078def7f17133b110b2ef6e3956b3ffb8e241` |
+
+All 30 native scripts, including floor panels, navigation, room/device controls,
+editing/history, backup, tracking, security, weather, lighting, model presentation
+and translations, ran on the same frozen runtime. Nineteen scripts completed on
+5 October before an overnight interruption. The incomplete House check was not
+counted; it and the remaining ten scripts were run again/completed on 6 October.
+Full local logs and private verification files are retained outside this
+repository. Earlier failures and
+Phase 19 counts remain recorded below rather than being replaced by these results.
+
+This ZIP is for local evaluation, not a public release. Actual Home Assistant
+installation, use beside the original integration, the real GLB/device/panel
+checks, Linux Home Assistant compatibility and current-candidate GitHub CI remain
+separate. The published HACS release remains **v0.1.0**. For full dashboard backup,
+the earlier 157/158 standard-library backend result and Windows symlink skip are
+historical; the 83 prepared real-HA cases still have no passing Linux result here.
+The browser backup checks use simulated HA. Independent camera movement in each
+floor panel remains an optional unanswered preference; this version links movement.
+
 ## Combined 0.2.0 local checkpoint
 
 Recorded: **2026-10-05**. Source code freeze: `bb702089c6324d4e99b4c7ae3ba559b555a4f7f2d7de482bd39bc9f411e6c3b2`.
@@ -62,9 +109,12 @@ HA result. Record any later Linux result separately before changing that status.
 Your actual house model, device integrations, touch use and wall-panel performance
 also remain to verify.
 
-F24 currently separates floor geometry side by side or into stacked layers in
-one house view. Independent floor panels/cameras are not implemented. Taylor's
-choice about those panels remains pending; this acceptance point stays open.
+**Floor behavior at the historical Phase 19 checkpoint:**
+
+That version separated floor geometry side by side or into stacked layers in
+one house view; it did not provide separate floor pictures. The Phase 20 checkpoint
+above adds opt-in panels with linked camera movement. Independent movement in each
+panel remains an optional unanswered preference.
 
 The aim is a realistic, useful Home Assistant house dashboard that is comfortable to use on a wall panel. Taylor should be able to configure it visually, see what is happening at home, and reach the relevant controls by tapping a room or device.
 
@@ -93,30 +143,30 @@ For each implementation, update its status, record the changed behavior, link it
 | ID | Feature | Existing foundation | Status |
 |---|---|---|---|
 | F01 | Named camera presets and automation-triggered flights | Named saved 3D/top views and smooth camera moves | Testing |
-| F02 | Complete visual configuration | Combined local candidate adds imported-setting recovery, exact placement and remaining advanced controls; joint and real-HA checks remain | In progress |
+| F02 | Complete visual configuration | Supported advanced controls, imported-setting recovery and exact placement pass combined local checks; actual HA persistence remains | Testing |
 | F03 | General undo and redo | General session history and grouped gestures | Testing |
-| F04 | Full dashboard backup and restore | Combined local Data screen connects whole-dashboard export, inspection, preparation and explicit new-dashboard creation; Linux HA/browser checks remain | In progress |
+| F04 | Full dashboard backup and restore | Whole-dashboard ZIP workflow passes simulated-HA browser checks; Linux HA compatibility and actual restore remain | Testing |
 | F05 | Temperature, power and energy views | Sensor readings, conversion, floor overlays and visual bindings | Testing |
-| F06 | Security doors/windows and animated doors | Combined local candidate adds exact plan locations and distinct lock states alongside model contacts/hinges; browser/household checks remain | In progress |
+| F06 | Security doors/windows and animated doors | Exact plan locations, distinct lock states and model contacts/hinges pass local checks; real sources/pivots remain | Testing |
 | F07 | Camera coverage cones and live-feed popups | Native HA camera viewer, explicit approximate coverage and visual editor | Testing |
 | F08 | Presence: people/devices in rooms | Explicit room observations, anonymous activity and verified identity bindings | Testing |
 | F09 | Alert pulses at the affected location | Located, labelled smoke/leak/unlocked/custom alerts | Testing |
 | F10 | Actual sun plus rain, clouds and snow | Strict sun/location evidence and opt-in bounded outdoor weather | Testing |
 | F11 | Hue colour/brightness lighting the rooms | Validated light readings, inline colour/white controls and a bounded pool | Testing |
 | F12 | Scene previews | Explicit light targets, current-light capture, editor and saved-bar controls verified; household checks remain | Testing |
-| F13 | Ambient idle rotation and night dimming | Optional delay/rotation and sun/quiet-hours picture dimming verified locally and by CI; household checks remain | Testing |
-| F14 | Camera-aware cut-away and glass/faded walls | Exact wall drafts, owned material copies and composed clipping pass full local/GitHub checks; actual-house checks remain | Testing |
-| F15 | Furniture packs and drag-and-drop placement | Local furniture checkpoint passes complete JavaScript/browser checks and is packaged separately; complete dashboard backup and actual-house checks remain | Testing |
+| F13 | Ambient idle rotation and night dimming | Optional delay/rotation and sun/quiet-hours picture dimming pass Phase 20 local checks; current CI and household checks remain | Testing |
+| F14 | Camera-aware cut-away and glass/faded walls | Exact wall drafts, owned material copies and composed clipping pass Phase 20 local checks; current CI and actual-house checks remain | Testing |
+| F15 | Furniture packs and drag-and-drop placement | Furniture placement and the full-dashboard workflow pass local checks; Linux HA, actual restore and household checks remain | Testing |
 | F16 | Baked shadows for wall panels | Saved shadow/lighting policy, authored texture diagnostics and external AO guide | Testing |
-| F17 | Deeper HA floors/areas/entity integration | Shared metadata, precision, filtered choices and missing-link diagnostics | In progress |
+| F17 | Deeper HA floors/areas/entity integration | Shared metadata, precision, filtered choices and exact missing-link diagnostics pass local checks; current household HA remains | Testing |
 | F18 | Room selection and room control panels | Room taps open responsive controls and readings; the local candidate adds explicit saved scene/script shortcuts | Testing |
 | F19 | Bottom bubble navigation bar | Saved view buttons, camera controls, map and editing with visual ordering and visibility settings | Testing |
 | F20 | Rich device control popups | Supported current light/media/climate/cover/lock/vacuum controls plus Home Assistant's All controls | Testing |
 | F21 | Persistent 2D mini-map | North-up floor map, current device/tracked symbols, camera focus and located alerts | Testing |
 | F22 | Cars appearing on the drive | Maintained vehicle occupancy/counts and fixed-expiry sighting bindings | Testing |
 | F23 | Robot vacuums moving while running | Measured/status actors with visual calibration and separate source-age forms | Testing |
-| F24 | Horizontal split floors and vertical layers | Explicit side-by-side/stacked display in one house picture, canonical coordinates and visual drafts | Testing |
-| F25 | Translations, preview, screenshots and bundle checks | Common controls, feature editors, guidance and owned notices have English/German/French/Spanish keys; the final browser and CI gates remain | In progress |
+| F24 | Horizontal split floors and vertical layers | Optional responsive floor panels with linked controls pass Phase 20 local checks; side-by-side geometry and stacked layers remain available; real model/panel remains | Testing |
+| F25 | Translations, preview, screenshots and bundle checks | Four-language controls, simulated preview/screenshots and bundle matching pass local checks; documented English prose, current CI/release and household gates remain | Testing |
 
 ## Proposed build order
 
@@ -151,7 +201,7 @@ Taylor confirmed Phase 1 first on 4 October 2026. The 5 October pass also develo
 
 **Want:** configure everything through the card rather than having to write YAML.
 
-**Already present:** a visual Lovelace editor and the card's Rooms, Devices, Objects, Mower, Views, Model and Data tabs. Some advanced settings are still not exposed in a unified visual workflow.
+**Starting point:** the visual Lovelace editor and the card's Rooms, Devices, Objects, Mower, Views, Model and Data tabs. Some advanced settings were not yet exposed in a unified visual workflow; the local extension below adds those supported controls.
 
 **Combined local candidate:** the visual card editor now exposes the starting named
 view and deliberate imported URL/floor/view override removal. Model controls keep
@@ -159,8 +209,9 @@ exact position values and zero opacity; lighting includes realtime shadows with
 lamps off. Tracking, Cameras, Security and Overlays expose their supported advanced
 appearance, age, area-filter and exact-location choices. Existing drawn-plan floor
 measurements already live in Rooms → Advanced (no model); GLB floor geometry remains
-authored in its file. Focused tests pass separately. Joint regression and actual HA
-card-config persistence remain. See the [visual settings guide](docs/VISUAL-SETTINGS-GUIDE.md).
+authored in its file. Combined unit and simulated-HA browser checks now pass at
+the Phase 20 checkpoint. Actual HA card-config persistence remains to verify.
+See the [visual settings guide](docs/VISUAL-SETTINGS-GUIDE.md).
 
 **Complete when:** every supported setting has a labelled visual control, sensible defaults and validation. Entity pickers can be filtered by the feature and area. A user can set up rooms, models, views, bindings and new overlays without entering YAML. Existing configurations remain usable. The normal viewing interface stays simple, and editing respects HA administrator permissions.
 
@@ -178,7 +229,7 @@ card-config persistence remain. See the [visual settings guide](docs/VISUAL-SETT
 
 **Want:** export and import the complete setup so the layout can be backed up and restored.
 
-**Already present:** layout JSON export/import, including views, bindings and model metadata. It does not include GLB bytes, every Lovelace card option or an entire HA dashboard.
+**Starting point:** layout JSON export/import covered views, bindings and model metadata, with no GLB bytes or whole HA dashboard. The separate complete-dashboard workflow below adds available owned assets and other cards.
 
 **Scope:** Taylor requested full dashboards. This covers the selected Home Assistant dashboard, including its other cards, plus the Taylor layouts and owned model/furniture assets it uses. The existing layout-only JSON remains labelled separately.
 
@@ -193,8 +244,9 @@ storage dashboard. External resources remain declared dependencies. There is no
 shared transaction or automatic retry, deletion or overwrite. Of 158 standard-library
 backend test methods, 157 pass and one Windows symlink case is skipped; 83 real-HA cases
 are prepared. Local HA testing stopped before collection because Windows lacks
-Unix `fcntl`; this is not a passing HA result. Client/editor checks pass separately;
-combined regression and native browser checks remain. See the
+Unix `fcntl`; this is not a passing HA result. Combined client/editor and native
+browser checks now pass with simulated HA at the Phase 20 checkpoint. Linux HA
+compatibility and an actual complete restore remain to verify. See the
 [backup guide](docs/DASHBOARD-BACKUP-GUIDE.md).
 
 ### F05 — temperature, power and energy overlays
@@ -219,15 +271,17 @@ combined regression and native browser checks remain. See the
 
 **Needs:** inspect Taylor's actual GLB for independently movable door parts and hinge/pivot geometry. Those pivots have not been verified.
 
-**Phase 5 implementation:** Edit → Security drafts exact contact/object/state settings and optional rigid target/pivot/axis/angle offsets. Outlines are owned helpers; unknown/restored/stale readings stay uncertain. Source material and hierarchy remain intact; geometry, picking, occlusion, shadows and attached anchors refresh only after actual movement. No inferred hinge or device command. The dedicated browser suite passes 30 checks, and the complete local and GitHub regressions pass. Actual household checks remain. F06 stays In progress because this pass covers model contacts/hinges; separate plan security displays and lock-specific bindings are unfinished. [Security guide](docs/SECURITY-AND-WEATHER-GUIDE.md).
+**Phase 5 implementation:** Edit → Security drafts exact contact/object/state settings and optional rigid target/pivot/axis/angle offsets. Outlines are owned helpers; unknown/restored/stale readings stay uncertain. Source material and hierarchy remain intact; geometry, picking, occlusion, shadows and attached anchors refresh only after actual movement. No inferred hinge or device command. The dedicated browser suite passes 30 checks, and the complete local and GitHub regressions pass. Actual household checks remain. At that checkpoint, F06 stayed In progress because plan security displays and lock-specific bindings were unfinished; the combined extension below now covers them. [Security guide](docs/SECURITY-AND-WEATHER-GUIDE.md).
 
 **Combined local extension:** exact plan room/marker/coordinate locations and lock
 sources are now connected to the editor, existing 3D renderer and north-up mini-map.
 Unlocked does not mean open; locking, unlocking, jammed and unavailable remain
 distinct. Closed/locked indicators clear by default. New plan helpers have no own
 render loop, light or shadow pool. All 185 scoped security checks pass, including
-actual root/map held-source-change regressions. Serial source/bundle browser proof
-is prepared, not yet passed. This local extension is not in the HACS release.
+actual root/map held-source-change regressions. Combined source/bundle browser
+checks now pass with simulated HA at the Phase 20 checkpoint. Actual contact/lock
+sources and model hinges still need household checks. This local extension is not
+in the published HACS release.
 
 ### F07 — camera cones and live feeds
 
@@ -445,7 +499,7 @@ checks remain; the card does not create baked textures or rewrite a GLB.
 
 ### F17 — tight Home Assistant integration
 
-**Working metadata candidate:** Objects, Mower and Overlays have temporary
+**Earlier metadata checkpoint:** Objects, Mower and Overlays have temporary
 All/Area/Unassigned filters and current Home Assistant names. Saved missing or
 filtered links remain warning choices; new links require current eligibility.
 Rooms, pins and mower locations retain exact missing floor IDs instead of
@@ -473,8 +527,10 @@ picker filters and actual household checks remain. See the
 security locations, weather and House sources against current exact IDs, including
 pending registry data and unreadable imported fields. 152 scoped checks pass.
 Scenes, Room shortcuts, Environment and House have current area filters; 253
-scoped editor checks pass. Native checks and actual household registry/integration
-versions still need testing. Entity renames are diagnosed as missing old IDs; there is no guess based on a similar name.
+scoped editor checks pass. Combined native metadata/filter/recovery checks now
+pass with simulated HA at the Phase 20 checkpoint. Actual household registry and
+integration versions still need testing. Entity renames are diagnosed as missing
+old IDs; there is no guess based on a similar name.
 
 **Complete when:** feature-specific pickers filter sensibly by domain, class, area and capabilities; display precision/units follow the available HA metadata; renamed, moved and removed entities/areas are handled visibly without corrupting the layout. Distinguish registry updates from explicitly chosen model-room bindings so a HA area change does not silently invent house geometry.
 
@@ -522,8 +578,8 @@ Navigation-only configuration changes preserve the selected viewing mode, tempor
 **Combined local extension:** the actual room/device popup now offers advertised
 media playback/volume, single-target thermostat temperature/mode, cover controls,
 lock/unlock and vacuum controls. Unsupported features, range thermostats and locks
-requiring a code use **All controls**. Focused checks pass **158/158**; the new joint
-native browser proof is being prepared. Controls retain unfinished typed values
+requiring a code use **All controls**. Focused checks pass **158/158**; combined
+native checks pass with simulated HA at the Phase 20 checkpoint. Controls retain unfinished typed values
 while displaying separately reported readings. Old presses and asynchronous errors
 cannot cross a source, account or connection change. This has not been published
 or tested against household devices.
@@ -537,7 +593,8 @@ positions on the current floor. A confirmed clear removes the symbol; uncertain
 readings remain labelled uncertain, and a previously latched alert keeps its
 existing acknowledgement rule. An alert tap opens current native entity details
 without acknowledging it or sending a device command. **172 scoped checks** pass,
-including 26 new alert-map checks. Native browser and wall-panel checks remain.
+including 26 new alert-map checks. Combined native checks now pass with simulated
+HA; actual wall-panel checks remain.
 
 **Want:** a small 2D overview alongside the 3D house.
 
@@ -549,7 +606,7 @@ including 26 new alert-map checks. Native browser and wall-panel checks remain.
 
 **Want:** show cars while they are parked on the drive, using camera vehicle detections. Taylor confirmed this meaning on 4 October 2026.
 
-**Current implementation:** maintained vehicle occupancy/counts and fixed-expiry timestamped sightings can be bound to explicit driveway locations. The Tracking editor requires a vehicle-specific source; real motion data does not identify a parked car. Exact optional identity matching and scene/mini-map symbols are being verified against simulated HA readings. Actual driveway detection remains unverified.
+**Current implementation:** maintained vehicle occupancy/counts and fixed-expiry timestamped sightings can be bound to explicit driveway locations. The Tracking editor requires a vehicle-specific source; real motion data does not identify a parked car. Exact optional identity matching and scene/mini-map symbols pass local checks with simulated HA readings. Actual driveway detection remains unverified.
 
 **Complete when:** an available HA detection entity/event is mapped to a driveway zone and parked-car model position; arrival makes it appear and departure/expiry clears it. Stale or unavailable detections do not leave a car present forever. If the goal is named household cars, identify a suitable presence/identity source rather than assuming generic vehicle detection identifies the owner.
 
@@ -569,13 +626,14 @@ including 26 new alert-map checks. Native browser and wall-panel checks remain.
 
 **Want:** two ways to separate floors: a horizontal flat split into different floor views, and a vertical stack of separated layers.
 
-**Already present:** single floor/storey views, an All view and a side section. Simultaneous split and separated-layer views are new work.
+**Original foundation:** single floor/storey views, an All view and a side section.
+The checkpoint notes below record the later separated-floor implementations.
 
 **Phase 11 verified implementation:** Edit → Model has Normal, Side by side and
 Stacked layers with explicit floor ordering, up to four floors, measured footprint
 spacing and Save/Cancel/Undo. It uses the existing single house view and fixed light
-pool. This first interpretation of horizontal split spreads floor geometry together;
-independent camera panels are not implemented.
+pool. That first interpretation of horizontal split spread floor geometry together;
+at that checkpoint, separate floor pictures were not implemented.
 
 Current model groups must be explicitly linked to exact floors, with all remaining
 geometry explicitly owned as background. Missing, automatic, conflicting or
@@ -609,21 +667,51 @@ regressions protect that repair. Four earlier native logs are retained, includin
 three test-fixture errors corrected without relaxing production behavior or room
 selection requirements. Actual household/model and wall-panel checks remain open.
 
+**Phase 20 local implementation — separate floor panels:** the horizontal arrangement now
+has an optional **Separate floor panels** setting in **Edit → Model → Floor
+presentation**. Save it; with a GLB, open **Edit → Views**, choose All or the
+intended overview in **View**, and check the wanted floors under **Linked HA
+floors**. Leave Edit and select that view to show up to four allowed selected
+floors together. Panels respect existing view floor assignments and model show/hide
+rules. A model All view without a saved assignment normally follows its highest
+visible storey's HA floor; the non-model All view allows all current floors.
+Wide scenes use columns; narrow scenes, including phones, stack the panels
+vertically. Each floor has its own
+framed picture, while orbit, pan and zoom remain linked across the pictures.
+Separate camera controls for each panel are a possible later choice.
+
+Tap a panel's floor-name header to choose the floor shown by the mini-map. A
+mini-map focus action moves the linked view to that floor's selected location.
+Room/device picking and located feature overlays use the panel's exact floor;
+unknown floor ownership must not repeat an item in another panel. All panels
+reuse the existing renderer, scene and fixed light pool. Normal, horizontal views
+with the option off, and vertical stacked layers keep their existing presentation.
+Edit and Section temporarily assemble the house and retain the saved panel setting.
+
+The Phase 20 checkpoint above records the complete local unit/native checks and
+the exact installation ZIP for these panels. Room/device menus select their actual
+floor, tracked labels keep their panel's screen space, and authored model lights
+are temporarily isolated without allocating another light pool. The assembled
+house and source positions return when panels are suspended or switched off.
+Earlier checkpoint results remain historical. Actual Home Assistant installation,
+the real GLB and wall-panel performance remain unverified; no public release is
+claimed. See the [floor guide](docs/FLOOR-PRESENTATION-GUIDE.md) for setup and checks.
+
 **Complete when:** horizontal panels can display selected floors at the same time; vertical layers can be spaced apart with a configurable gap. Devices, rooms, people/vacuums and alerts remain aligned with their floor. Selecting a floor focuses the right panel/layer and opens the right controls. Returning to the normal house restores its geometry/camera state. Total rendering/light cost remains bounded across views.
 
-**Needs:** validate Taylor's actual model groups/floor links and wall panel. If separate
-independent camera panels are wanted in addition to the current shared geometric
-view, record their camera linking and layout as a further implementation.
+**Needs:** validate Taylor's actual model groups, floor links, devices and wall
+panel in Home Assistant. Whether each panel should later have independent camera
+controls is an optional preference; this tested local version uses linked controls.
 
 ### F25 — polish, translations, preview and reliable bundles
 
 **Want:** translations, a usable mock-HA preview, screenshot tooling and CI that detects stale bundles.
 
-**Already present:** English integration strings, a mock HA demo, browser screenshots, 514 JavaScript tests in the inspected base and GitHub workflows. Card UI strings are mostly hard-coded English. Bundles are generated/ignored by Git rather than committed, and CI rebuilds them.
+**Starting point:** English integration strings, a mock HA demo, browser screenshots, 514 JavaScript tests and GitHub workflows. Most card UI strings were hard-coded English. Bundles are generated/ignored by Git rather than committed; CI rebuilds them. The later translation extension below covers the current local version.
 
 **Complete when:** new and existing card UI can be translated with sensible fallback; preview scenarios cover the new features without needing real household devices; screenshots can be recreated; relevant automated checks protect behavior. Release assets contain the current source's bundle, and the integration's frontend copy matches the generated `dist` file. Define the stale-bundle check around build/release contents rather than demanding a Git diff of ignored files. Keep local development instructions clear for Windows as well as macOS/Linux.
 
-**Current implementation:** new right-panel/preset/overlay browser suites and screenshots, English service translations, and `npm run check:bundle`. That command recompiles current source in memory and checks both distributed copies; CI and release packaging fail if either copy is missing or stale. Full card UI translation work remains.
+**Earlier foundation:** right-panel/preset/overlay browser suites and screenshots, English service translations, and `npm run check:bundle`. That command recompiles current source in memory and checks both distributed copies; CI and release packaging fail if either copy is missing or stale. The current translation coverage and limits are recorded below.
 
 **Combined local translation candidate:** bundled messages cover common
 controls, card setup and advanced Security/Tracking/Cameras/shading captions in
@@ -633,8 +721,9 @@ Focused checks cover retained native fields, literal names, unavailable imported
 settings and missing-reference recovery. Caption traversal was indexed after three
 unchanged Tracking tests exposed a performance problem. Presentation-only registry
 changes now retain open controls; actual membership changes still rebuild them.
-The complete combined regression and native translated-width checks are running or
-prepared. Room shortcuts, device controls, GPS calibration, minimum-pixel mower
+The complete combined unit regression and native translated-width checks now pass
+with simulated HA at the Phase 20 checkpoint. Current-candidate GitHub/Linux checks
+and household acceptance remain. Room shortcuts, device controls, GPS calibration, minimum-pixel mower
 controls, reference reports and runtime room/alert labels have additional translated
 messages. Some detailed explanations and other feature prose remain English. See the [translation guide](docs/TRANSLATION-GUIDE.md). No complete
 translation or actual household certification is claimed.
@@ -686,8 +775,8 @@ Local build, lint and all 514 JavaScript tests passed before upload. The full HA
 |---|---|---|
 | First feature group | Sets the implementation order | Confirmed: bubble bar, room/device popups and 2D mini-map. |
 | Vehicle meaning | Determines generic detection versus named household car presence | Confirmed: show cars parked on the drive using detections. |
-| Full backup scope | Whole HA dashboard, its Taylor layouts and owned model/furniture assets | Implemented in the combined local candidate; combined browser and Linux HA verification remain. |
-| Split-floor meaning | One shared camera versus separate floor panels with independent camera controls | One shared camera with side-by-side floors and vertical layers is implemented. Taylor's choice about independent panels is pending; that acceptance point remains open. |
+| Full backup scope | Whole HA dashboard, its Taylor layouts and owned model/furniture assets | Implemented and locally checked with simulated HA; Linux HA compatibility and actual restore remain. |
+| Split-floor controls | Whether each floor panel should later move independently | Phase 20 local checks pass for separate horizontal floor pictures with linked orbit/pan/zoom. Independent controls remain an optional unanswered preference; actual model/panel acceptance remains. |
 | Actual GLB and model tags | Door pivots, separated walls, room outlines and floors | Not verified against Taylor's model. |
 | Wall panel/browser | Sets realistic animation, lighting and split-view limits | Not recorded yet. |
 | HA entities/integrations | Presets, Ring feeds/detections, Hue, temperature/power, presence, smoke/leaks and vacuums | Use actual available entities; do not assume model names imply data availability. |
@@ -701,6 +790,7 @@ A feature is Done only after its agreed behavior works, it persists where approp
 
 | Date | Item | Progress / evidence | Commit or PR |
 |---|---|---|---|
+| 2026-10-06 | Phase 20 local checkpoint | Optional linked floor panels, responsive pictures, exact picking/menus/map, label spacing, authored lights and idle sky refresh pass 6054/6054 unit tests in 196/196 files, lint/build/bundle matching and all 30/30 native scripts with unchanged runtime. Exact 20-member local ZIP matches the tested frontend. Actual HA/model/panel, Linux/current CI and public release remain separate; Phase 19 history is preserved. | Local candidate; no public commit or release assigned |
 | 2026-10-04 | Base | Independent renamed base uploaded to `main`; local build/lint/514 JS tests passed; online checks need B02 | `055e30f` |
 | 2026-10-04 | Requirements | Taylor's complete initial feature list recorded; foundations and pending inputs checked against the code | `a2c49d0` |
 | 2026-10-04 | Phase 1 | First bubble bar, room/device panels and mini-map implemented. 571 JS unit tests and lint pass. Existing editor browser checks and the complete new navigation browser suite pass, covering real clicks, correct service payloads, grouped rooms, map floors, keyboard focus, narrow layouts and GLB overlays. Shared-storage/key-change regressions pass. Actual HA/panel testing remains. | `f42fded` |

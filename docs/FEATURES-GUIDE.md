@@ -46,10 +46,23 @@ read the [wall guide](WALL-PRESENTATION-GUIDE.md). Select actual wall meshes and
 side you want to fade. Glass is a lightweight transparent look; cut-away removes
 the upper section at a chosen height above that wall's floor. Changes apply on Save.
 
-For separate storeys, open **Edit → Model → Floor presentation**. Choose Side by
-side or Stacked layers, then save and leave Edit. The [floor guide](FLOOR-PRESENTATION-GUIDE.md)
-explains explicit model links, spacing, camera restoration and the source-coordinate
-mini-map. This uses one house view; it does not add independent camera panels.
+For separate storeys, open **Edit → Model → Floor presentation**. Choose **Side by
+side** for the horizontal arrangement or **Stacked layers** for a vertical stack.
+The Phase 20 local candidate adds **Separate floor panels** in Side by side. Turn it
+on, select up to four floors and save. With a GLB, open **Edit → Views**, choose
+**All** or the intended overview in **View**, and check those floors under **Linked
+HA floors**. A model's All view can otherwise follow only its highest visible
+storey's HA floor; panels preserve that view's floor and model visibility rules.
+Leave Edit and choose the configured view. Without a GLB, the standard All view
+allows all current floors by default. Wide scenes use columns; phones and other
+narrow scenes stack the pictures. Orbit, pan and zoom move all panels together.
+Tap a floor-name header to select the mini-map's floor; tap the map to focus that
+floor's location. Edit and Section temporarily use the assembled house and retain
+your saved setting. The [floor guide](FLOOR-PRESENTATION-GUIDE.md) explains model
+links, spacing, the shared renderer/light pool and household checks still to do.
+The [Phase 20 checkpoint](../REQUIREMENTS_AND_FEATURES.md#phase-20-020-local-checkpoint)
+records passing local checks and the install ZIP. Actual HA/model/panel acceptance
+and a public release remain separate.
 
 Tap a room's floor to see its devices and readings on the right. Tap a device to see its own
 controls. Opening the panel only reads device states. **Turn on**, **Turn off** or changing
@@ -122,9 +135,12 @@ Restored layouts are saved normally; a failed save remains visible in the edit p
 
 History holds up to 100 edits and 8 MiB in this browser session. Reloading, changing layout
 names, or replacing/deleting a GLB starts fresh history. A GLB file operation changes the file
-on the server, so a layout snapshot cannot recover its previous bytes. Keep a separate model
-backup until the full asset backup feature is delivered. Undo never changes live sensor
-readings or reverses a command sent to a real device.
+on the server, so a layout snapshot cannot recover its previous bytes. Before changing
+assets, use **Edit → Data → Create full dashboard ZIP**, then **Download ZIP** to keep
+the available uploaded models and owned furniture packs with the dashboard. Follow
+the [backup guide](DASHBOARD-BACKUP-GUIDE.md) to select/read the dashboard and review
+missing assets or external dependencies. Actual Linux HA restore remains to test.
+Undo never changes live sensor readings or reverses a command sent to a real device.
 
 ## Temperature, power, energy and alerts
 

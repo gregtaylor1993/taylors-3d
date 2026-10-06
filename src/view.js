@@ -17,6 +17,7 @@ import { readModelRendering } from './model-rendering.js';
 import { WallPresentationLayer } from './wall-presentation-rendering.js';
 import { wallTargetReport } from './wall-presentation.js';
 import { FloorPresentationLayer } from './floor-presentation-rendering.js';
+import { FloorPanelView } from './floor-panel-view.js';
 import { readFloorPresentation, compileFloorPresentation, sourceWorldToDisplay as floorToDisplay,
   displayWorldToSource as floorToSource } from './floor-presentation.js';
 import {
@@ -333,6 +334,7 @@ export class FloorplanView {
     this._ambientCamera = null; // private exact pose/controls baseline, owned by an idle-session token
     this._wallPresentation = null; // lazy, opt-in material owner; no default renderer writes
     this._floorPresentation = null; // explicit reversible level owner; SOURCE data remains canonical
+    this._floorPanels = new FloorPanelView(this);
     this._zoomTo = 'center'; // zoom pivot: 'center' (controls target) or 'cursor'
     this.pivotMarker = null; // edit mode: small cross at the rotation centre
     this._onWheel = () => { this.dirty = true; };
@@ -379,12 +381,20 @@ export class FloorplanView {
   }
 
   // Rotation centre under a screen point: the model surface, else the horizontal plane at height y.
+  _screenRay(clientX, clientY, floorId) {
+    if (this._floorPanels?.active) return this._floorPanels.rayAt(clientX, clientY, floorId);
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    return { camera: this.camera, ndc: new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1), pane: null };
+  }
+
   pivotPoint(clientX, clientY, y = 0) {
     const pick = this.pickModel(clientX, clientY);
     if (pick && pick.hit) return pick.hit.point;
-    const r = this.renderer.domElement.getBoundingClientRect();
-    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
-    this.raycaster.setFromCamera(ndc, this.camera);
+    const ray = this._screenRay(clientX, clientY);
+    if (!ray) return null;
+    this.raycaster.setFromCamera(ray.ndc, ray.camera);
     const { origin, direction } = this.raycaster.ray;
     return rayPlaneY(origin.toArray(), direction.toArray(), y);
   }
@@ -427,24 +437,26 @@ export class FloorplanView {
   }
 
   // Plan point [x, y] under a screen position, on the horizontal plane at world height `height`.
-  planPoint(clientX, clientY, height) {
-    const r = this.renderer.domElement.getBoundingClientRect();
-    if (!r.width || !r.height) return null;
-    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
-    this.raycaster.setFromCamera(ndc, this.camera);
+  planPoint(clientX, clientY, height, floorId) {
+    const ray = this._screenRay(clientX, clientY, floorId);
+    if (!ray) return null;
+    this.raycaster.setFromCamera(ray.ndc, ray.camera);
     const hit = this.raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -height), new THREE.Vector3());
     return hit ? [hit.x, -hit.z] : null;
   }
 
   // Screen position (client px) of a plan point, the inverse of planPoint.
   screenPoint(x, y, z, floorId) {
+    if (this._floorPanels?.active) return this._floorPanels.projectWorld(
+      this._displayWorld(planToWorld(x, y, z, this.floorElevation(floorId)), floorId), floorId);
     const v = this._displayWorld(planToWorld(x, y, z, this.floorElevation(floorId)), floorId).project(this.camera);
     const r = this.renderer.domElement.getBoundingClientRect();
     return [r.left + ((v.x + 1) / 2) * r.width, r.top + ((1 - v.y) / 2) * r.height];
   }
 
   // Client px of a world point, null when it is behind the camera or outside the depth range.
-  projectWorld(world) {
+  projectWorld(world, floorId) {
+    if (this._floorPanels?.active) return this._floorPanels.projectWorld(world, floorId);
     const v = world.clone().project(this.camera);
     if (!(v.z >= -1 && v.z <= 1)) return null;
     const r = this.renderer.domElement.getBoundingClientRect();
@@ -779,7 +791,7 @@ export class FloorplanView {
   displayPlanPoint(clientX, clientY, floorId, z = 0) {
     const planePoint = this.sourceWorldToDisplay([0, this.floorElevation(floorId) + z, 0], floorId);
     if (!planePoint.ok) return null;
-    const point = this.planPoint(clientX, clientY, planePoint.point[1]);
+    const point = this.planPoint(clientX, clientY, planePoint.point[1], floorId);
     if (!point) return null;
     const source = this.displayWorldToSource([point[0], planePoint.point[1], -point[1]], floorId);
     return source.ok ? [source.point[0], -source.point[2]] : null;
@@ -849,7 +861,7 @@ export class FloorplanView {
       } else this._floorCompiled = compileFloorPresentation(enabled ? this._floorRaw : undefined,
         { floors, bounds: options.bounds || [], model: { present: false } });
       const compiled = this._floorCompiled;
-      const sig = compiled.valid && compiled.mode !== 'assembled' ? compiled.mode + '|' + compiled.rows
+      const sig = compiled.valid && compiled.mode !== 'assembled' ? compiled.mode + '|' + (compiled.panels === true) + '|' + compiled.rows
         .map((row) => row.floor_id + ':' + row.offset.join(',')).join(';') : '';
       const mappingChanged = sig !== (this._floorDisplaySig || ''); this._floorDisplaySig = sig;
       if (!mappingChanged && !changedTargets.length) return;
@@ -912,7 +924,13 @@ export class FloorplanView {
     layer.context.freezeCameraSide = !!this._ambientCamera;
     this._wallCameraPosition ||= new THREE.Vector3(); this._wallCameraArray ||= [0, 0, 0];
     this.camera.getWorldPosition(this._wallCameraPosition).toArray(this._wallCameraArray);
-    const result = layer.update(now, this._wallCameraArray);
+    let cameraForMesh;
+    if (this._floorPanels?.active) {
+      const members = this._floorPanels.participants();
+      const cameras = new Map(this._floorPanels.entries().map((entry) => [entry.floorId, entry.camera.position.toArray()]));
+      cameraForMesh = (mesh) => cameras.get(this._floorPanels.floorForNode(mesh, members)) || null;
+    }
+    const result = layer.update(now, this._wallCameraArray, cameraForMesh);
     if (result.semanticChanged) {
       this._wallOcclusionRevision = (this._wallOcclusionRevision || 0) + 1;
       this._scheduleOcclusion(); // only crossing a presentation boundary, never each opacity step
@@ -1018,10 +1036,10 @@ export class FloorplanView {
   // First visible model intersection under a screen point (raycaster left set to that ray).
   _modelHit(clientX, clientY, { wallSelection = false } = {}) {
     if (!this.model) return null;
-    const r = this.renderer.domElement.getBoundingClientRect();
-    if (!r.width || !r.height) return null;
-    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
-    this.raycaster.setFromCamera(ndc, this.camera);
+    const ray = this._screenRay(clientX, clientY);
+    if (!ray) return null;
+    this.raycaster.setFromCamera(ray.ndc, ray.camera);
+    const paneMembers = ray.pane ? this._floorPanels.participants() : undefined;
     const shown = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
     const candidate = (hit) => {
       const o = hit.object;
@@ -1034,7 +1052,8 @@ export class FloorplanView {
       });
     };
     const hit = this.raycaster.intersectObject(this.model.root, true)
-      .find((h) => candidate(h) && shown(h.object) && h.point.y <= this.modelClip.constant + 1e-6 && !this._cutAway(h.point)
+      .find((h) => candidate(h) && shown(h.object) && (!ray.pane || this._floorPanels.floorForNode(h.object, paneMembers) === ray.pane.floorId)
+        && h.point.y <= this.modelClip.constant + 1e-6 && !this._cutAway(h.point)
         && this._modelIntersectionShown(h, { ignoreWallPresentation: wallSelection }));
     return hit || null;
   }
@@ -1074,7 +1093,8 @@ export class FloorplanView {
 
   _disposeModel() {
     if (this._ambientCamera) this.endAmbientCamera({ ...this._ambientCamera, restore: false });
-    this._releaseFloorPresentation(); // before any authored owner or geometry is torn down
+    // A repeated empty model request must retain the current drawn-floor policy.
+    if (this.model || this._floorPresentation) this._releaseFloorPresentation(); // before authored teardown
     this._wallPresentation?.dispose(); this._wallPresentation = null;
     this._wallIndexModel = null; this._wallIndex = null;
     this._wallShadowRevision = 0; this._wallOcclusionRevision = 0;
@@ -2349,11 +2369,13 @@ export class FloorplanView {
       const to = { pos: target.clone().addScaledVector(dir, dist), target: target.clone() };
       this._bounds = this._sceneBounds();
       this._moveCamera(to.pos, to.target, instant);
+      this._floorPanels?.resetFraming(to.pos, to.target);
       this._updateDepth();
       return;
     }
     this.controls.target.copy(target);
     this.controls.update();
+    this._floorPanels?.resetFraming();
     this._bounds = this._sceneBounds();
     this._updateDepth();
     this.dirty = true;
@@ -2457,7 +2479,10 @@ export class FloorplanView {
   // hides a world point from the camera: object taps skip lamps behind walls. One raycast.
   pointHidden(world, own = null) {
     if (!this.model || (this.model.opacity ?? 1) < 0.6) return false; // a see-through model hides nothing
-    const cam = this.camera;
+    const paneMembers = this._floorPanels?.active ? this._floorPanels.participants() : undefined;
+    const paneFloor = paneMembers && own ? this._floorPanels.floorForNode(own, paneMembers) : null;
+    const cam = paneFloor ? this._floorPanels.cameraForFloor(paneFloor) : this.camera;
+    if (!cam) return true;
     cam.updateMatrixWorld();
     const ndc = world.clone().project(cam);
     const rc = this._tapRay || (this._tapRay = new THREE.Raycaster());
@@ -2469,7 +2494,7 @@ export class FloorplanView {
     const ownMesh = (o) => { for (let p = o; p && own; p = p.parent) if (p === own) return true; return false; };
     const cut = this.modelClip.constant, tmp = new THREE.Vector3();
     for (const { mesh, box } of this._occluders()) {
-      if (ownMesh(mesh) || !shown(mesh)) continue;
+      if (ownMesh(mesh) || !shown(mesh) || paneFloor && this._floorPanels.floorForNode(mesh, paneMembers) !== paneFloor) continue;
       if (!box.containsPoint(origin)) {
         const at = rc.ray.intersectBox(box, tmp);
         if (!at || origin.distanceTo(at) > rc.far) continue;
@@ -2505,6 +2530,7 @@ export class FloorplanView {
     const origin = cam.getWorldPosition(new THREE.Vector3());
     const shown = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
     const boxes = this._occluders().filter((b) => shown(b.mesh));
+    const paneMembers = this._floorPanels?.active ? this._floorPanels.participants() : undefined;
     const shownMarkers = this.cssObjects.filter((c) => c.kind === 'marker' && c.obj.visible && (full || (ids && ids.has(c.id))));
     const markers = shownMarkers.slice(0, OCCLUSION_MAX);
     // past the budget: not tested, so not dimmed (a stale fp-occluded would leave them unclickable)
@@ -2521,6 +2547,11 @@ export class FloorplanView {
         if (performance.now() - t0 > OCCLUSION_SLICE_MS) { this._occTimer = setTimeout(slice, 0); return; }
         const c = markers[i];
         if (!c.obj.parent) continue; // removed meanwhile
+        if (this._floorPanels?.active) {
+          const paneCamera = this._floorPanels.cameraForFloor(c.floorId);
+          if (!paneCamera) { c.obj.element.classList.remove('fp-occluded'); continue; }
+          paneCamera.getWorldPosition(origin);
+        }
         c.obj.getWorldPosition(pos);
         const dist = origin.distanceTo(pos);
         rc.set(origin, dir.subVectors(pos, origin).normalize());
@@ -2528,6 +2559,7 @@ export class FloorplanView {
         rc.far = Math.max(dist - 0.3, 0);
         let hitD = null;
         for (const { mesh, box } of boxes) {
+          if (paneMembers && this._floorPanels.floorForNode(mesh, paneMembers) !== c.floorId) continue;
           if (!box.containsPoint(origin)) { // inside the box: the ray may hit it anywhere, test the mesh
             const at = rc.ray.intersectBox(box, tmp);
             if (!at || origin.distanceTo(at) > rc.far) continue; // box pre-filter
@@ -2588,6 +2620,10 @@ export class FloorplanView {
     this.persp.setViewOffset(w, h + TOOLBAR_PX, 0, 0, w, h);
     this._updateOrtho();
     this._sizeApplied = true;
+    if (this._floorPanels?._rows().length) {
+      this._wallCameraDirty = true;
+      this._scheduleOcclusion();
+    }
     this.dirty = true;
   }
 
@@ -2612,11 +2648,14 @@ export class FloorplanView {
       this.stats.frames++;
       this._updateDepth();
       this._placeSkyBodies();
-      this.labelRenderer.domElement.classList.toggle('compact', this.pixelsPerMetre() < COMPACT_PPM);
-      this.renderer.render(this.scene, this.camera);
-      if (this._ambientCamera) this._ambientCamera.labelsSkipped = true; // the owned label root is hidden
-      else this.labelRenderer.render(this.scene, this.camera);
-      if (this.onRender) this.onRender(); // e.g. the object popup follows its anchor
+      this.labelRenderer.domElement.classList.toggle('compact', !this._floorPanels?.active && this.pixelsPerMetre() < COMPACT_PPM);
+      const paneFrame = this._floorPanels?.render();
+      if (!paneFrame) {
+        this.renderer.render(this.scene, this.camera);
+        if (this._ambientCamera) this._ambientCamera.labelsSkipped = true; // the owned label root is hidden
+        else this.labelRenderer.render(this.scene, this.camera);
+      }
+      if (this.onRender) this.onRender(paneFrame); // e.g. the object popup follows its anchor
     };
     this._raf = requestAnimationFrame(loop);
     this._scheduleOcclusion(0);
@@ -2654,6 +2693,7 @@ export class FloorplanView {
 
   dispose() {
     this.stop();
+    this._floorPanels?.clear();
     this._disposed = true;
     this._cancelOcclusion();
     this.renderer.domElement.removeEventListener('wheel', this._onWheel);

@@ -10,8 +10,9 @@ Original project by Ingus Stals / istals. This independent copy is maintained by
 The features below describe this source version. Use a matching verified release,
 or build the source yourself: an older HACS release can contain fewer features.
 The feature log records the checks and installation packages for each checkpoint.
-The combined `0.2.0` checkpoint is a local source candidate. Its latest
-recorded checks are in the [feature log](REQUIREMENTS_AND_FEATURES.md#combined-020-local-checkpoint).
+The current Phase 20 `0.2.0` version is a tested local candidate with its own
+installation ZIP. Its checks and remaining Home Assistant tests are in the
+[feature log](REQUIREMENTS_AND_FEATURES.md#phase-20-020-local-checkpoint).
 Local checks alone do not publish a HACS update.
 
 See [Requirements and features](REQUIREMENTS_AND_FEATURES.md) for Taylor's development ideas, proposed build order and progress log.
@@ -79,8 +80,13 @@ position over its map.
   glass-like or cut-away appearance. Camera-side walls can expose the interior;
   authored materials and manual Section remain available. See the [wall guide](docs/WALL-PRESENTATION-GUIDE.md)
 - Edit → Model → Floor presentation separates up to four explicitly linked floors
-  side by side or into stacked layers in the existing house view. Real positions,
-  calibrations and the mini-map keep their source coordinates. See the [floor guide](docs/FLOOR-PRESENTATION-GUIDE.md)
+  side by side or into stacked layers. The tested Phase 20 local candidate optionally gives
+  horizontal floors separate panels: columns on wide scenes, stacked pictures on
+  phones, with linked orbit/pan/zoom and the same renderer/light pool. For a GLB,
+  use Edit → Views → Linked HA floors to allow the intended floors in All or your
+  overview, then choose that view. Panels respect its existing visibility rules.
+  Real positions, calibrations and the mini-map keep their source coordinates.
+  Local checks pass; actual HA/model/panel checks remain. See the [floor guide](docs/FLOOR-PRESENTATION-GUIDE.md)
 - Edit mode for admins: draw rooms, doors, floors, pin and hide devices, import/export
 - One layout shared by every user and device (stored by the companion integration)
 - Robot mower: live position, trail, map image or camera overlay, point calibration
@@ -138,6 +144,10 @@ The navigation delivery is tested with the mock HA preview. Testing with Taylor'
 house model, Home Assistant and wall panel is tracked in [the feature log](REQUIREMENTS_AND_FEATURES.md).
 
 ## Install
+
+HACS and the latest published release currently supply **v0.1.0**. To evaluate the
+Phase 20 `0.2.0` candidate, use the separately supplied local ZIP or build this
+source version. The latest local checks are linked at the top of this README.
 
 The repository is a Home Assistant integration that also serves the card, so one install
 covers both. The integration stores the layout and makes it available to all users.
@@ -405,6 +415,12 @@ layers, groups) with an eye per row: *default* → *shown* → *hidden* in this 
 of the model in 3D for a menu: **Hide in this view**, **Show in this view**, **Hide in all
 views**, **Reveal in tree**. Your changes are stored per view id in the layout and survive model
 re-exports; parts no longer in the model are listed for removal.
+
+For separate floor panels, choose the intended overview in the **View** list and
+check each current floor under **Linked HA floors**. A model view named All still
+defaults to its highest visible storey's HA floor when it has no saved assignment;
+it does not automatically mean every HA floor. Without a model, the standard All
+view allows all current floors. Panels keep the view's model show/hide rules.
 
 #### Camera
 

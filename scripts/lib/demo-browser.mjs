@@ -25,10 +25,18 @@ export async function launch() {
     res.writeHead(200, { 'content-type': types[path.extname(file)] || 'application/octet-stream' });
     fs.createReadStream(file).pipe(res);
   }).listen(0);
-  const browser = await puppeteer.launch({
-    executablePath: findChrome(), headless: true,
-    args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
-  });
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      executablePath: findChrome(), headless: true,
+      args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
+    });
+  } catch (error) {
+    // The server already owns a listening handle even when Chrome fails before
+    // a transport can be returned. Await its release and retain the real error.
+    await new Promise((resolve) => server.close(() => resolve()));
+    throw error;
+  }
   const close = async () => { await browser.close(); server.close(); };
   return { browser, base: `http://localhost:${server.address().port}`, close };
 }

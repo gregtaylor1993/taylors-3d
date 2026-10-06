@@ -21,7 +21,7 @@ function setup({ split = true, select } = {}) {
   camera.position.copy(display).add(new THREE.Vector3(0, 10, 0)); camera.up.set(0, 0, -1); camera.lookAt(display); camera.updateMatrixWorld(true);
   const view = { camera, renderer: { domElement: canvas }, controls: { enabled: true }, model: { root: new THREE.Group() },
     mode: 'top', visibleFloor: 'upper', floorPresentationActive: split, raycaster: new THREE.Raycaster(),
-    floorElevation: () => 4, planPoint: View.prototype.planPoint, displayPlanPoint: View.prototype.displayPlanPoint,
+    floorElevation: () => 4, _screenRay: View.prototype._screenRay, planPoint: View.prototype.planPoint, displayPlanPoint: View.prototype.displayPlanPoint,
     sourceWorldToDisplay: (p) => ({ ok: true, point: new THREE.Vector3(...p).add(offset).toArray() }),
     displayWorldToSource: (p) => ({ ok: true, point: new THREE.Vector3(...p).sub(offset).toArray() }) };
   const card = { ownerDocument: document, isConnected: true, _loading: false, _editing: true, _edit: { tab: 'furniture' },

@@ -392,12 +392,16 @@ export class TrackedEntitiesLayer {
    * No frame invalidation/timers; the real glyph/observation positions remain untouched.
    * screenLabelOverlaps reports the IDs that cannot fit in a densely occupied viewport.
    */
-  arrangeScreenLabels(bounds) {
+  arrangeScreenLabels(bounds, controls = []) {
     if (this.disposed || !this.group.visible || !this.onSelect || !bounds) return false;
     const left = bounds.left, top = bounds.top, right = finite(bounds.right) ? bounds.right : left + bounds.width,
       bottom = finite(bounds.bottom) ? bounds.bottom : top + bounds.height;
     if (![left, top, right, bottom].every(finite) || right <= left || bottom <= top) return false;
     const gap = 4, occupied = [], pending = [], pixels = (value) => Number.parseFloat(value) || 0;
+    for (const rect of controls) if (rect && [rect.left, rect.top, rect.width, rect.height].every(finite)
+      && rect.width > 0 && rect.height > 0 && rect.left < right && rect.left + rect.width > left
+      && rect.top < bottom && rect.top + rect.height > top) occupied.push({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
+    const fixedControls = occupied.length > 0;
     let changed = false; this.screenLabelOverlaps = [];
     const margin = (el, name, value) => {
       const next = `${Math.round(value * 1000) / 1000}px`;
@@ -427,10 +431,26 @@ export class TrackedEntitiesLayer {
       const choices = [...new Set(candidates)].filter((y) => finite(y) && y >= minTop && y <= maxTop)
         .sort((a, b) => Math.abs(a - base.top) - Math.abs(b - base.top) || a - b).slice(0, 128);
       const y = choices.find((at) => !obstacles.some((o) => intersects({ ...rect, top: at }, o)));
+      let placed = { ...rect, top: y ?? desired }, fitted = y !== undefined;
+      // A short pane may have room beside a device but none above or below it.
+      // Keep the ordinary layout unchanged when no fixed controls were supplied.
+      if (!fitted && fixedControls) {
+        const xs = [x, left, right - base.width];
+        for (const obstacle of occupied) xs.push(obstacle.left - base.width - gap, obstacle.left + obstacle.width + gap);
+        const alternatives = [...new Set(xs)].filter((at) => finite(at) && at >= left && at + base.width <= right)
+          .sort((a, b) => Math.abs(a - base.left) - Math.abs(b - base.left) || a - b).slice(0, 128);
+        for (const at of alternatives) {
+          const nearby = occupied.filter((o) => intersectsX({ ...base, left: at }, o)), ys = [desired, minTop, maxTop];
+          for (const obstacle of nearby) ys.push(obstacle.top - base.height - gap, obstacle.top + obstacle.height + gap);
+          const free = [...new Set(ys)].filter((v) => finite(v) && v >= minTop && v <= maxTop)
+            .sort((a, b) => Math.abs(a - base.top) - Math.abs(b - base.top) || a - b).slice(0, 128)
+            .find((v) => !nearby.some((o) => intersects({ ...base, left: at, top: v }, o)));
+          if (free !== undefined) { placed = { ...base, left: at, top: free }; fitted = true; break; }
+        }
+      }
       // A viewport can hold only so many 44px buttons. Preserve access/evidence rather
       // than inventing a world position or silently removing an actor when it is full.
-      const placed = { ...rect, top: y ?? desired };
-      if (y === undefined || base.width > right - left || base.height > bottom - top) this.screenLabelOverlaps.push(id);
+      if (!fitted || base.width > right - left || base.height > bottom - top) this.screenLabelOverlaps.push(id);
       margin(el, 'marginLeft', placed.left - base.left); margin(el, 'marginTop', placed.top - base.top);
       occupied.push(placed);
     }

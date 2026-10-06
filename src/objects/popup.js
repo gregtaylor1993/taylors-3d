@@ -505,10 +505,10 @@ export class ObjectPopup {
 
   // Next to the object's anchor (called after every render), kept inside the stage; hidden while
   // the anchor is off-screen or behind the camera.
-  position() {
+  position(members) {
     if (!this.el) return;
     const world = (this.anchorOf && this.anchorOf(this._id)) || this._anchor;
-    const p = world ? this.project(world) : null;
+    const p = world ? members === undefined ? this.project(world) : this.project(world, members) : null;
     const r = this.root.getBoundingClientRect();
     const ax = p ? p[0] - r.left : 0, ay = p ? p[1] - r.top : 0;
     if (!p || ax < 0 || ay < 0 || ax > r.width || ay > r.height) { this.el.style.visibility = 'hidden'; return; }

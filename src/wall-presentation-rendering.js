@@ -5,6 +5,13 @@ import { ghostMaterial } from './render-rules.js';
 import { wallTargetReport, readWallSide, stepWallTransition } from './wall-presentation.js';
 
 const finite = (value) => typeof value === 'number' && Number.isFinite(value);
+const cameraValues = (value) => {
+  try {
+    if (!Array.isArray(value) || value.length !== 3) return null;
+    const coordinates = [value[0], value[1], value[2]];
+    return coordinates.every(finite) ? coordinates : null;
+  } catch { return null; }
+};
 const materialsOf = (mesh) => Array.isArray(mesh.material) ? mesh.material : [mesh.material];
 const owners = new WeakMap();
 const diagnostic = (code, message, id) => ({ code, message, id });
@@ -22,7 +29,9 @@ const planesEqual = (left, right) => left === right || Array.isArray(left) && Ar
 
 /** Independent material owner integrated by View's existing render lifecycle.
  * setData(context) does not infer wall geometry or alter HA state. update(now,
- * cameraPosition) returns actual visible/semantic/shadow work to the caller.
+ * cameraPosition, cameraForMesh?) returns actual visible/semantic/shadow work.
+ * An optional pane resolver supplies exact current world coordinates per mesh;
+ * missing pane cameras keep the authored wall rather than guessing a master view.
  * Original material references, texture references and geometry stay intact.
  */
 export class WallPresentationLayer {
@@ -81,7 +90,7 @@ export class WallPresentationLayer {
           baseData: originals.map((material) => ({ ...material.userData, wasTransparent: material.userData.wasTransparent ?? material.transparent,
             baseOpacity: material.userData.baseOpacity ?? material.opacity, baseDepthWrite: material.userData.baseDepthWrite ?? material.depthWrite })),
           authoredSides: originals.map((material) => material.userData.sectionSide ?? material.side),
-          clipArrays: new Map(), baseDirty: true };
+          clipArrays: new Map(), baseDirty: true, sideCamera: [NaN, NaN, NaN], sideCameraValid: false, sideCameraSource: undefined };
         this.entries.set(mesh, entry);
         mesh.material = Array.isArray(originalReference) ? materials : materials[0];
         owners.set(mesh, this); this._pending.changed = true;
@@ -172,15 +181,14 @@ export class WallPresentationLayer {
     for (const material of new Set(entry.materials)) material.dispose();
   }
 
-  update(now, cameraPosition) {
+  update(now, cameraPosition, cameraForMesh) {
     const result = { ...this._pending, moving: false };
     this._pending = { changed: false, semanticChanged: false, shadowChanged: false };
     if (this.disposed || !finite(now) || now < 0) return result;
     const policy = this._report.policy;
     if (!policy) return result;
-    const cameraValid = Array.isArray(cameraPosition) && cameraPosition.length === 3 && cameraPosition.every(finite);
-    const cameraChanged = cameraValid && cameraPosition.some((value, index) => value !== this._camera[index]);
-    if (cameraValid) for (let index = 0; index < 3; index++) this._camera[index] = cameraPosition[index];
+    const globalCamera = cameraValues(cameraPosition);
+    if (globalCamera) for (let index = 0; index < 3; index++) this._camera[index] = globalCamera[index];
     const thawed = this._sideFrozen && !this.context.freezeCameraSide;
     this._sideFrozen = !!this.context.freezeCameraSide;
     for (const entry of this.entries.values()) {
@@ -188,11 +196,23 @@ export class WallPresentationLayer {
       const row = entry.row, previousActive = entry.active;
       let active = policy.scope === 'all_selected';
       if (policy.scope === 'camera_side') {
+        const paneCamera = cameraForMesh !== undefined;
+        let currentCamera = globalCamera;
+        if (paneCamera) {
+          currentCamera = null;
+          try { if (typeof cameraForMesh === 'function') currentCamera = cameraValues(cameraForMesh(entry.mesh)); } catch { /* A disappeared pane has no usable camera. */ }
+        }
+        const currentValid = currentCamera !== null;
+        const cameraChanged = entry.sideCameraSource !== paneCamera || entry.sideCameraValid !== currentValid
+          || currentValid && currentCamera.some((value, index) => value !== entry.sideCamera[index]);
+        entry.sideCameraSource = paneCamera; entry.sideCameraValid = currentValid;
+        if (currentValid) for (let index = 0; index < 3; index++) entry.sideCamera[index] = currentCamera[index];
         active = previousActive;
-        if (!this.context.freezeCameraSide) {
+        if (paneCamera && !currentValid) active = false;
+        else if (!this.context.freezeCameraSide) {
           entry.mesh.updateWorldMatrix(true, false);
           const face = row.face;
-          if (!face || !cameraValid) active = false;
+          if (!face || !currentValid) active = false;
           else {
             const matrix = entry.mesh.matrixWorld.elements;
             const worldChanged = !entry.worldKey || matrix.some((value, index) => value !== entry.worldKey[index]);
@@ -201,7 +221,7 @@ export class WallPresentationLayer {
               entry.plane.copy(entry.localPlane).applyMatrix4(entry.mesh.matrixWorld, entry.normalMatrix.getNormalMatrix(entry.mesh.matrixWorld));
             }
             if (worldChanged || cameraChanged || entry.baseDirty || thawed) {
-              const side = readWallSide({ constant: entry.plane.constant, normal: entry.plane.normal.toArray() }, cameraPosition, previousActive);
+              const side = readWallSide({ constant: entry.plane.constant, normal: entry.plane.normal.toArray() }, currentCamera, previousActive);
               active = side.valid && side.active;
             }
           }

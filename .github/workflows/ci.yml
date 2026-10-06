@@ -55,6 +55,10 @@ jobs:
         run: node scripts/floors-check.mjs
         env:
           CHROME_PATH: /usr/bin/google-chrome
+      - name: Headless browser checks (simultaneous floor panels, exact picking and shared resources)
+        run: node scripts/floor-panels-check.mjs
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
       - name: Headless browser checks (responsive House menus, room controls and real summary sources)
         run: node scripts/house-check.mjs
         env:

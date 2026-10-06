@@ -8,7 +8,7 @@ export const floorFixtureIds = Object.freeze({ ground: 'fp_ground', upper: 'fp_u
   groundRoom: 'fp_room_ground', upperRoom: 'fp_room_upper', lamp: 'fp_lamp', switch: 'fp_switch',
   mower: 'fp_mower', door: 'fp_door', camera: 'fp_camera' });
 
-export function floorPresentationFixtureGlb({ nested = false, unclassified = false } = {}) {
+export function floorPresentationFixtureGlb({ nested = false, unclassified = false, authoredLights = false } = {}) {
   const document = { asset: { version: '2.0', generator: "Taylor's 3D simulated independent-floor bench" },
     scene: 0, scenes: [], nodes: [], meshes: [], accessors: [], bufferViews: [], buffers: [{ byteLength: 0 }],
     materials: [], extensionsUsed: ['KHR_materials_unlit'] };
@@ -78,6 +78,15 @@ export function floorPresentationFixtureGlb({ nested = false, unclassified = fal
   const root = node({ name: 'simulated_floor_bench', children: [ground, ...(!nested ? [upper] : []), background, ...stray], extras: { fp: { north: 0,
     views: [{ id: 'all', label: 'Simulated all floors', show: ['level:fp_ground', 'level:fp_upper', 'level:fp_site'] },
       { id: 'ground', label: 'Simulated ground', show: ['level:fp_ground'] }, { id: 'upper', label: 'Simulated upper', show: ['level:fp_upper'] }] } } });
+  // Explicit opt-in only: preserve the original default GLB bytes and geometry.
+  // This imported light belongs to the actual authored Upper room hierarchy.
+  if (authoredLights) {
+    const name = 'simulated_upper_authored_light';
+    const light = node({ name, extensions: { KHR_lights_punctual: { light: 0 } } });
+    document.nodes[upperRoom].children.push(light);
+    document.extensionsUsed.push('KHR_lights_punctual');
+    document.extensions = { KHR_lights_punctual: { lights: [{ name, type: 'directional', intensity: 2.35, color: [1, 1, 1] }] } };
+  }
   document.scenes = [{ nodes: [root] }]; buffers.push(Buffer.alloc((4 - length % 4) % 4));
   const binary = Buffer.concat(buffers); document.buffers[0].byteLength = binary.length;
   const raw = Buffer.from(JSON.stringify(document)), json = Buffer.concat([raw, Buffer.alloc((4 - raw.length % 4) % 4, 32)]);

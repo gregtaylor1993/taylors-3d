@@ -79,7 +79,7 @@ describe('assembled identity is independent of split prerequisites', () => {
     expect(displayWorldToSource([1, 2, 3], 'duplicate', compiled)).toMatchObject({ ok: false, point: null });
   });
   it('returns a safe empty default with no context and never requests geometry', () => {
-    expect(compileFloorPresentation()).toEqual({ mode: 'assembled', requestedMode: 'assembled', valid: true, diagnostics: [], rows: [] });
+    expect(compileFloorPresentation()).toEqual({ mode: 'assembled', requestedMode: 'assembled', panels: false, valid: true, diagnostics: [], rows: [] });
   });
 });
 

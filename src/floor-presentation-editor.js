@@ -17,7 +17,7 @@ const tag = (value) => Array.isArray(value) ? ['array', Array.from(value, tag)] 
 const number = (value) => typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : '';
 const modesKeys = [['assembled', 'floor.normal'], ['horizontal', 'floor.horizontal'], ['vertical', 'floor.vertical']];
 const axesKeys = [['east', 'floor.east'], ['north', 'floor.north']];
-const fields = new Set(['mode', 'gap_m', 'axis', 'base_elevation_m', 'floors']);
+const fields = new Set(['mode', 'gap_m', 'axis', 'base_elevation_m', 'floors', 'panels']);
 const exactId = (id) => readFloorPresentation({ floors: [id] }).valid;
 const valueLabel = (value) => typeof value === 'string' ? value : JSON.stringify(value) ?? 'undefined';
 
@@ -39,7 +39,10 @@ export class FloorPresentationEditor {
   _notice(key, parameters = {}) { return editorExtraNotice(key, parameters); }
   _t(key, parameters = {}) { return editorExtraText(this.card._hass, key, parameters); }
   _caption(key) { return editorExtraCaption(this.card._hass, key); }
-  _diagnostic(value) { return editorExtraDiagnostic(this.card._hass, value); }
+  _diagnostic(value) {
+    return value?.code === 'invalid_panels' && value.message === 'Separate floor panels must be true or false.'
+      ? this._t('floor.invalidPanels') : editorExtraDiagnostic(this.card._hass, value);
+  }
   get effective() { return this.card._layout?.floor_presentation ?? this.card._config?.floor_presentation; }
   get canEdit() {
     const hass = this.card._hass, user = hass?.user;
@@ -155,6 +158,8 @@ export class FloorPresentationEditor {
       [data-floor-presentation-editor] label{display:flex;flex-direction:column;gap:5px;margin:10px 0;overflow-wrap:anywhere}
       [data-floor-presentation-editor] input,[data-floor-presentation-editor] select,[data-floor-presentation-editor] button{box-sizing:border-box;min-height:44px;max-width:100%;font:inherit;color:var(--primary-text-color,#212121);background:var(--secondary-background-color,var(--ha-card-background,var(--card-background-color,#f5f5f5)));border:1px solid var(--divider-color,#888);border-radius:9px;padding:8px}
       [data-floor-presentation-editor] input,[data-floor-presentation-editor] select{width:100%;min-width:0}
+      [data-floor-presentation-editor] .floor-presentation-toggle{flex-direction:row;align-items:center;min-height:44px}
+      [data-floor-presentation-editor] input[type="checkbox"]{width:44px;height:44px;flex-shrink:0;accent-color:var(--primary-color,#03a9f4)}
       [data-floor-presentation-editor] button{cursor:pointer}[data-floor-presentation-editor] :disabled{opacity:.6;cursor:default}
       [data-floor-presentation-editor] :focus-visible{outline:3px solid var(--primary-color,#03a9f4);outline-offset:2px}
       [data-floor-presentation-editor] .floor-presentation-actions{display:flex;gap:7px;flex-wrap:wrap}
@@ -164,6 +169,8 @@ export class FloorPresentationEditor {
       [data-floor-presentation-editor] .floor-presentation-hint{color:var(--secondary-text-color,#666)}
       </style><h3>${this._caption('floor.title')}</h3><p>${this._caption('floor.intro')}</p>
       <label>${this._caption('floor.view')}<select data-field="${prefix}mode" ${disabled}>${this._options(this._modes(), this._raw('mode'))}</select></label>
+      <label class="floor-presentation-toggle"><input type="checkbox" data-field="${prefix}panels" ${this._raw('panels') === true ? 'checked' : ''} ${this._blocked() || this._raw('mode') !== 'horizontal' ? 'disabled' : ''}>${this._caption('floor.panels')}</label>
+      <p class="floor-presentation-hint" data-floor-presentation-panels-help>${this._caption(this._raw('mode') === 'horizontal' ? 'floor.panelsHelp' : 'floor.panelsInactive')}</p>
       ${input('gap_m', this._caption('floor.spacing'), 'type="number" min="0" max="100" step="any"')}
       <label>${this._caption('floor.direction')}<select data-field="${prefix}axis" ${disabled}>${this._options(this._axes(), this._raw('axis'))}</select></label>
       ${input('base_elevation_m', this._caption('floor.height'), 'type="number" min="-1000" max="1000" step="any"')}
@@ -222,6 +229,13 @@ export class FloorPresentationEditor {
       if (control.tagName === 'SELECT') syncEditorOptions(control, this._options(field === 'mode' ? this._modes() : this._axes(), this._raw(field)), this._value(field));
       else if (!this.dirty) control.value = this._value(field);
     }
+    const panels = root.querySelector(`[data-field="${prefix}panels"]`);
+    if (panels) { panels.disabled = this._blocked() || this._raw('mode') !== 'horizontal'; panels.checked = this._raw('panels') === true; }
+    const panelsHelp = root.querySelector('[data-floor-presentation-panels-help] [data-editor-extra-caption]');
+    if (panelsHelp) {
+      const key = this._raw('mode') === 'horizontal' ? 'floor.panelsHelp' : 'floor.panelsInactive';
+      panelsHelp.dataset.editorExtraCaption = key; panelsHelp.textContent = this._t(key);
+    }
     const save = root.querySelector(`[data-act="${prefix}save"]`); if (save) save.disabled = !this.dirty || this._evaluation().issues.length > 0;
     const repair = root.querySelector(`[data-act="${prefix}repair"]`); if (repair) repair.disabled = !this.canEdit || this.stale;
   }
@@ -229,6 +243,12 @@ export class FloorPresentationEditor {
     if (this.disposed || !field?.startsWith(prefix) || !element) return false;
     this._ensure(); if (this._blocked()) return true;
     const key = field.slice(prefix.length);
+    if (key === 'panels') {
+      // Inactive arrangements retain imported preferences. Only a deliberate
+      // checkbox choice in horizontal mode repairs or changes this setting.
+      if (this._raw('mode') !== 'horizontal' || element.type !== 'checkbox' || typeof element.checked !== 'boolean') return true;
+      this.draft.panels = element.checked; this._mark(); this.updatePreviews(element.closest?.('[data-floor-presentation-editor]')); return true;
+    }
     if (['mode', 'axis', 'gap_m', 'base_elevation_m'].includes(key)) {
       this.draft[key] = ['gap_m', 'base_elevation_m'].includes(key) ? number(element.value) : element.value;
       this._mark(); this.updatePreviews(element.closest?.('[data-floor-presentation-editor]')); return true;
