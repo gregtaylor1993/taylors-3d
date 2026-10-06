@@ -941,6 +941,8 @@ async function liveSnapshot(page) {
   return page.evaluate(() => {
     const card = document.querySelector('taylors3d-card'), f = window.localizationFixture, feed = card._devicePopup.cameraFeed, bar = card._scenePreviewBar;
     const text = (selector) => feed.el?.querySelector(selector)?.textContent;
+    const dimensions = (node) => { const rectangle = node?.getBoundingClientRect();
+      return rectangle ? { x: rectangle.x, y: rectangle.y, width: rectangle.width, height: rectangle.height } : null; };
     return { camera: feed.el ? { aria: feed.el.getAttribute('aria-label'), title: text('.t3d-camera-title'), help: text('.t3d-camera-help'),
       status: text('.t3d-camera-status'), close: text('[data-action="close-camera"]'), retry: text('[data-action="retry-camera"]'),
       controls: text('[data-action="camera-more-info"]'), native: !!feed.nativeCard, muted: feed.nativeCard?.shadowRoot.querySelector('video').muted } : null,
@@ -952,7 +954,9 @@ async function liveSnapshot(page) {
     cameraConfigs: f.cameraConfigs, starts: f.cameraStarts, stops: f.cameraStops,
     cameraRequests: f.websocket.filter((message) => message.type === 'camera/capabilities').length,
     rendererSame: card._view.renderer === f.renderer, sceneSame: card._scene === f.scene, canvases: card.shadowRoot.querySelectorAll('canvas').length,
-    resources: { ...card._view.renderer.info.memory }, frames: card._view.stats.frames };
+    resources: { ...card._view.renderer.info.memory }, frames: card._view.stats.frames,
+    dimensions: { stage: dimensions(card._stage), scene: dimensions(card._scene), popup: dimensions(card._devicePopup.el), camera: dimensions(feed.el),
+      viewport: { ...card._view.size } } };
   });
 }
 
@@ -965,6 +969,9 @@ async function cameraLanguages(page, mode) {
   await focus(page, close); await remember(page, close, 'live-camera-close');
   await page.evaluate(() => { const card = document.querySelector('taylors3d-card'), f = window.localizationFixture;
     f.cameraNative = card._devicePopup.cameraFeed.nativeCard; f.cameraSection = card._devicePopup.cameraFeed.el; });
+  // Native scroll/focus is setup work too. Settle it before isolating the
+  // subsequent locale update, with the same bounded readiness predicate.
+  await ready(page);
   const baseline = await passiveState(page), native = await liveSnapshot(page);
   check('native camera helper receives only the exact simulated saved HA camera configuration', equal(native.cameraConfigs, [{
     type: 'picture-entity', entity: entities.camera, camera_view: 'live', show_name: false, show_state: false,
@@ -980,11 +987,20 @@ async function cameraLanguages(page, mode) {
       && await retained(page, close, 'live-camera-close', true)
       && await page.evaluate(() => { const card = document.querySelector('taylors3d-card'), f = window.localizationFixture;
         return card._devicePopup.cameraFeed.nativeCard === f.cameraNative && card._devicePopup.cameraFeed.el === f.cameraSection; }), current.camera);
-    check(`${language} camera language changes neither restart playback nor issue passive actions/writes/new GPU resources`,
-      equal(await passiveState(page), baseline) && current.starts === native.starts && current.stops === native.stops
-      && current.cameraRequests === native.cameraRequests && current.cameraConfigs.length === 1
-      && current.rendererSame && current.sceneSame && current.canvases === 1 && equal(current.resources, native.resources)
-      && current.frames === native.frames, current);
+    const passive = await passiveState(page);
+    const unchanged = {
+      passiveState: equal(passive, baseline), playerStarts: current.starts === native.starts, playerStops: current.stops === native.stops,
+      capabilityRequests: current.cameraRequests === native.cameraRequests, oneCameraConfig: current.cameraConfigs.length === 1,
+      rendererIdentity: current.rendererSame, sceneIdentity: current.sceneSame, oneCanvas: current.canvases === 1,
+      resources: equal(current.resources, native.resources), frames: current.frames === native.frames,
+    };
+    const pass = Object.values(unchanged).every(Boolean);
+    check(`${language} camera language changes neither restart playback nor issue passive actions/writes/new GPU resources`, pass,
+      pass ? current : { ...current, unchanged, baseline: { starts: native.starts, stops: native.stops, capabilityRequests: native.cameraRequests,
+        cameraConfigs: native.cameraConfigs.length, canvases: native.canvases, resources: native.resources, frames: native.frames,
+        dimensions: native.dimensions, services: baseline.services, commits: baseline.commits, saves: baseline.saves, configEvents: baseline.configEvents },
+      passiveUnchanged: Object.fromEntries(Object.keys(baseline).map((field) => [field, equal(passive[field], baseline[field])])),
+      currentCounts: { services: passive.services, commits: passive.commits, saves: passive.saves, configEvents: passive.configEvents } });
   }
   await locale(page, 'es'); await narrowOwned(page, '.taylors3d-camera-feed', mode, 'camera-player');
   await keyboard(page, close, 'Space'); let current = await liveSnapshot(page);

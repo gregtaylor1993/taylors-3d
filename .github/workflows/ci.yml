@@ -19,93 +19,85 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run check:bundle
-      - name: Headless browser checks (demo, edit mode, navigation, model)
-        run: node scripts/screenshot.mjs && node scripts/edit-check.mjs && node scripts/navigation-check.mjs && (node scripts/model-check.mjs || (echo "model-check retry (slow shared runner timing)" && node scripts/model-check.mjs))
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (right panels, camera automations, overlays, camera views, tracking)
-        run: node scripts/panels-check.mjs && node scripts/presets-check.mjs && node scripts/overlays-check.mjs && node scripts/history-check.mjs && node scripts/cameras-check.mjs && node scripts/tracking-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (visual calibration, contact motion, outdoor weather)
-        run: node scripts/calibration-check.mjs && node scripts/security-check.mjs && node scripts/weather-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (room lighting and light controls)
-        run: node scripts/lighting-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (model shading and authored textures)
-        run: node scripts/shading-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (scene light previews and deliberate scene actions)
-        run: node scripts/scenes-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (idle camera ownership, wake gestures and visual dimming)
-        run: node scripts/ambient-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (exact wall materials, cut-away and saved editing)
-        run: node scripts/walls-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (reversible floor display, canonical locations and camera ownership)
-        run: node scripts/floors-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (simultaneous floor panels, exact picking and shared resources)
-        run: node scripts/floor-panels-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (responsive House menus, room controls and real summary sources)
-        run: node scripts/house-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (licensed furniture, textured assets and native draft placement)
-        run: node scripts/furniture-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (exact missing links and current Home Assistant metadata)
-        run: node scripts/metadata-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (translated controls, native focus and unchanged action intent)
-        run: node scripts/localization-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (whole dashboard backup and deliberate new copies)
-        run: node scripts/dashboard-backup-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (advanced visual settings and exact imported options)
-        run: node scripts/visual-options-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (room shortcuts and supported inline device controls)
-        run: node scripts/room-actions-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (visual GPS calibration and exact source ownership)
-        run: node scripts/gps-calibration-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (area-filtered sources and retained native drafts)
-        run: node scripts/entity-area-filter-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
-      - name: Headless browser checks (object controls and calibration in four languages)
-        run: node scripts/runtime-localization-check.mjs
-        env:
-          CHROME_PATH: /usr/bin/google-chrome
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: card
-          path: |
-            dist/taylors3d-card.js
-            screenshots/
+          path: dist/taylors3d-card.js
+
+  browser:
+    name: browser (${{ matrix.group }})
+    needs: card
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        include:
+          - group: foundation
+            commands: |
+              node scripts/screenshot.mjs
+              node scripts/edit-check.mjs
+              node scripts/navigation-check.mjs
+              (node scripts/model-check.mjs || (echo "model-check retry (slow shared runner timing)" && node scripts/model-check.mjs))
+          - group: panels-views
+            commands: |
+              node scripts/panels-check.mjs
+              node scripts/presets-check.mjs
+              node scripts/overlays-check.mjs
+              node scripts/history-check.mjs
+          - group: devices-tracking
+            commands: |
+              node scripts/cameras-check.mjs
+              node scripts/tracking-check.mjs
+              node scripts/calibration-check.mjs
+              node scripts/security-check.mjs
+              node scripts/weather-check.mjs
+          - group: lighting-walls
+            commands: |
+              node scripts/lighting-check.mjs
+              node scripts/shading-check.mjs
+              node scripts/scenes-check.mjs
+              node scripts/ambient-check.mjs
+              node scripts/walls-check.mjs
+          - group: floors-menus
+            commands: |
+              node scripts/floors-check.mjs
+              node scripts/floor-panels-check.mjs
+              node scripts/house-check.mjs
+          - group: furniture-languages
+            commands: |
+              node scripts/furniture-check.mjs
+              node scripts/metadata-check.mjs
+              node scripts/localization-check.mjs
+          - group: data-controls
+            commands: |
+              node scripts/dashboard-backup-check.mjs
+              node scripts/visual-options-check.mjs
+              node scripts/room-actions-check.mjs
+          - group: positions-labels
+            commands: |
+              node scripts/gps-calibration-check.mjs
+              node scripts/entity-area-filter-check.mjs
+              node scripts/runtime-localization-check.mjs
+    env:
+      CHROME_PATH: /usr/bin/google-chrome
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run check:bundle
+      - name: Run native browser checks
+        run: ${{ matrix.commands }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-${{ matrix.group }}
+          path: screenshots/
 
   integration:
     runs-on: ubuntu-latest
