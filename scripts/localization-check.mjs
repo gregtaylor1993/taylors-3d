@@ -956,12 +956,17 @@ async function liveSnapshot(page) {
     rendererSame: card._view.renderer === f.renderer, sceneSame: card._scene === f.scene, canvases: card.shadowRoot.querySelectorAll('canvas').length,
     resources: { ...card._view.renderer.info.memory }, frames: card._view.stats.frames,
     dimensions: { stage: dimensions(card._stage), scene: dimensions(card._scene), popup: dimensions(card._devicePopup.el), camera: dimensions(feed.el),
+      toolbar: dimensions(card._toolbar), previewNote: dimensions(bar.el.querySelector('.scene-preview-note')), previewStatus: dimensions(bar.status),
       viewport: { ...card._view.size } } };
   });
 }
 
 async function cameraLanguages(page, mode) {
-  await page.evaluate(() => { const card = document.querySelector('taylors3d-card'); card.setConfig({ ...card._config, control_panel: 'right' }); });
+  // Translated toolbar text may legitimately wrap and resize a full-height scene.
+  // The shell expands around its existing 240px minimum scene instead, so these
+  // strict camera-only checks compare the same measured renderer viewport.
+  const originalHeight = await page.evaluate(() => { const card = document.querySelector('taylors3d-card'), height = card._config.height;
+    card.setConfig({ ...card._config, height: '240px', control_panel: 'right' }); return height; });
   await locale(page, 'en'); await keyboard(page, nav('security'), 'Space'); await ready(page);
   const cameraButton = `${row(entities.camera)} [data-action="camera-view"]`, close = '[data-action="close-camera"]';
   await keyboard(page, cameraButton, 'Enter');
@@ -973,6 +978,9 @@ async function cameraLanguages(page, mode) {
   // subsequent locale update, with the same bounded readiness predicate.
   await ready(page);
   const baseline = await passiveState(page), native = await liveSnapshot(page);
+  check('camera locale fixture uses the actual240px minimum scene and matching renderer viewport',
+    native.dimensions.scene.height === 240 && native.dimensions.viewport.h === 240
+    && native.dimensions.scene.width === native.dimensions.viewport.w, native.dimensions);
   check('native camera helper receives only the exact simulated saved HA camera configuration', equal(native.cameraConfigs, [{
     type: 'picture-entity', entity: entities.camera, camera_view: 'live', show_name: false, show_state: false,
     fit_mode: 'contain', tap_action: { action: 'none' },
@@ -994,6 +1002,9 @@ async function cameraLanguages(page, mode) {
       rendererIdentity: current.rendererSame, sceneIdentity: current.sceneSame, oneCanvas: current.canvases === 1,
       resources: equal(current.resources, native.resources), frames: current.frames === native.frames,
     };
+    check(`${language} camera locale fixture retains the actual240px scene and exact original renderer viewport`,
+      current.dimensions.scene.height === 240 && current.dimensions.viewport.h === 240
+      && equal(current.dimensions.viewport, native.dimensions.viewport), { baseline: native.dimensions, current: current.dimensions });
     const pass = Object.values(unchanged).every(Boolean);
     check(`${language} camera language changes neither restart playback nor issue passive actions/writes/new GPU resources`, pass,
       pass ? current : { ...current, unchanged, baseline: { starts: native.starts, stops: native.stops, capabilityRequests: native.cameraRequests,
@@ -1002,6 +1013,12 @@ async function cameraLanguages(page, mode) {
       passiveUnchanged: Object.fromEntries(Object.keys(baseline).map((field) => [field, equal(passive[field], baseline[field])])),
       currentCounts: { services: passive.services, commits: passive.commits, saves: passive.saves, configEvents: passive.configEvents } });
   }
+  // Keep the existing narrow, pending-stream and recovery scenarios at their
+  // original configured height; only the zero-frame locale measurement is short.
+  await page.evaluate((height) => { const card = document.querySelector('taylors3d-card'); card.setConfig({ ...card._config, height }); }, originalHeight);
+  await ready(page);
+  check('camera fixture restores the exact original configured height before narrow and stream-recovery checks',
+    await page.evaluate((height) => document.querySelector('taylors3d-card')._config.height === height, originalHeight));
   await locale(page, 'es'); await narrowOwned(page, '.taylors3d-camera-feed', mode, 'camera-player');
   await keyboard(page, close, 'Space'); let current = await liveSnapshot(page);
   check('translated native Close removes the actual simulated player exactly once without a camera service',
