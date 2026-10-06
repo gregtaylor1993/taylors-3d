@@ -1,6 +1,6 @@
 {
   "name": "taylors3d-card",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Home Assistant Lovelace card: 3D floorplan with auto-placed devices",
   "type": "module",
   "private": true,
@@ -36,7 +36,7 @@
     "check:localization": "node scripts/localization-check.mjs",
     "check:model": "node scripts/model-check.mjs",
     "check-model": "node tools/check-model.mjs",
-    "check": "npm run build && npm run check:bundle && node scripts/screenshot.mjs && node scripts/edit-check.mjs && node scripts/navigation-check.mjs && node scripts/panels-check.mjs && node scripts/presets-check.mjs && node scripts/overlays-check.mjs && node scripts/history-check.mjs && node scripts/cameras-check.mjs && node scripts/tracking-check.mjs && node scripts/calibration-check.mjs && node scripts/security-check.mjs && node scripts/weather-check.mjs && node scripts/lighting-check.mjs && node scripts/shading-check.mjs && node scripts/scenes-check.mjs && node scripts/ambient-check.mjs && node scripts/walls-check.mjs && node scripts/floors-check.mjs && node scripts/floor-panels-check.mjs && node scripts/house-check.mjs && node scripts/furniture-check.mjs && node scripts/metadata-check.mjs && node scripts/localization-check.mjs && node scripts/model-check.mjs && node scripts/dashboard-backup-check.mjs && node scripts/visual-options-check.mjs && node scripts/room-actions-check.mjs && node scripts/gps-calibration-check.mjs && node scripts/entity-area-filter-check.mjs && node scripts/runtime-localization-check.mjs",
+    "check": "npm run build && npm run check:bundle && node scripts/screenshot.mjs && node scripts/edit-check.mjs && node scripts/navigation-check.mjs && node scripts/panels-check.mjs && node scripts/presets-check.mjs && node scripts/overlays-check.mjs && node scripts/history-check.mjs && node scripts/cameras-check.mjs && node scripts/tracking-check.mjs && node scripts/calibration-check.mjs && node scripts/security-check.mjs && node scripts/weather-check.mjs && node scripts/lighting-check.mjs && node scripts/shading-check.mjs && node scripts/scenes-check.mjs && node scripts/ambient-check.mjs && node scripts/walls-check.mjs && node scripts/floors-check.mjs && node scripts/floor-panels-check.mjs && node scripts/house-check.mjs && node scripts/furniture-check.mjs && node scripts/metadata-check.mjs && node scripts/localization-check.mjs && node scripts/model-check.mjs && node scripts/dashboard-backup-check.mjs && node scripts/visual-options-check.mjs && node scripts/room-actions-check.mjs && node scripts/gps-calibration-check.mjs && node scripts/entity-area-filter-check.mjs && node scripts/runtime-localization-check.mjs && node scripts/custom-controls-check.mjs",
     "deploy": "node scripts/deploy.mjs",
     "make-demo-model": "node scripts/make-demo-model.mjs",
     "check:dashboard-backup": "node scripts/dashboard-backup-check.mjs",
@@ -44,7 +44,8 @@
     "check:room-actions": "node scripts/room-actions-check.mjs",
     "check:gps-calibration": "node scripts/gps-calibration-check.mjs",
     "check:area-filter": "node scripts/entity-area-filter-check.mjs",
-    "check:runtime-localization": "node scripts/runtime-localization-check.mjs"
+    "check:runtime-localization": "node scripts/runtime-localization-check.mjs",
+    "check:custom-controls": "node scripts/custom-controls-check.mjs"
   },
   "license": "MIT",
   "dependencies": {

@@ -12,6 +12,7 @@ import { entityMetadata, formatEntityValue } from './entity-metadata.js';
 import { lightCapabilities, readLightAppearance } from './light-state.js';
 import { buildRoomSummary } from './room-summary.js';
 import { localize } from './localization.js';
+import { CustomControlsView } from './custom-controls-view.js';
 import { readDeviceControls, deviceCommand, deviceAuthContext, sameDeviceAuth } from './device-controls.js';
 import deviceControlCaptions from './translations/device-controls.js';
 
@@ -163,11 +164,12 @@ function button(text, action, entityId) {
 }
 
 export class DevicePopup {
-  constructor(root, { onAction, onMoreInfo, placement = 'popup', onVisibilityChange, getRoomActions, onRoomAction } = {}) {
+  constructor(root, { onAction, onMoreInfo, placement = 'popup', onVisibilityChange, getRoomActions, onRoomAction, getCustomRoomControls, onCustomControl } = {}) {
     this.root = root;
     this.placement = placement === 'right' ? 'right' : 'popup';
     this.onVisibilityChange = onVisibilityChange || (() => {});
     this.getRoomActions = getRoomActions; this.onRoomAction = onRoomAction;
+    this.getCustomRoomControls = getCustomRoomControls; this.onCustomControl = onCustomControl;
     this.onAction = onAction || ((domain, service, data) => this.hass.callService(domain, service, data));
     this.onMoreInfo = onMoreInfo || ((entityId) => root.dispatchEvent(new CustomEvent('hass-more-info', {
       detail: { entityId }, bubbles: true, composed: true,
@@ -253,7 +255,14 @@ export class DevicePopup {
     this._roomActions = element('section','t3d-room-actions'); this._roomActions.hidden = true;
     this._roomActionsTitle = element('h4'); this._roomActionsGrid = element('div','t3d-room-actions-grid');
     this._roomActions.append(this._roomActionsTitle,this._roomActionsGrid);
-    el.append(style, head, this._cameraContainer, this._roomActions, this._body);
+    this._customControlsHost = element('div', 't3d-custom-room-controls'); this._customControlsHost.hidden = true;
+    el.append(style, head, this._cameraContainer, this._roomActions, this._customControlsHost, this._body);
+    if (selection.kind === 'room' && this.getCustomRoomControls) {
+      this._customControls = new CustomControlsView(this._customControlsHost, {
+        getContext: () => this.getCustomRoomControls(this._selection?.room),
+        onAction: (barId, buttonId) => this.onCustomControl?.(this._selection?.room?.id, barId, buttonId),
+      });
+    }
     for (const type of ['pointerdown','keydown']) el.addEventListener(type,(event) => this._devicePress(event),true);
     for (const type of ['pointerup','keyup']) el.addEventListener(type,(event) => this._deviceRelease(event),true);
     for (const type of ['pointercancel','focusout']) el.addEventListener(type,(event) => this._deviceCancel(event),true);
@@ -334,6 +343,7 @@ export class DevicePopup {
     }
     const ids = this._entityIds();
     this._refreshRoomActions();
+    this.updateCustomControls();
     if (this._roomSummary) {
       const house = this.root.getRootNode()?.host?.getAttribute('data-taylors3d-theme') === 'house';
       this._roomSummary.hidden = !house;
@@ -632,6 +642,7 @@ export class DevicePopup {
    */
   observeContexts(hass = this.hass) {
     this.hass = hass || {states:{}};
+    this.updateCustomControls();
     if (!this.el) return;
     for (const [target,intent] of this._deviceIntents) if (!this._sameDeviceState(intent.stamp,this._deviceState(target,hass))) intent.poisoned = true;
     for (const [target,intent] of this._fieldIntents) if (!this._sameDeviceState(intent.stamp,this._deviceState(target,hass))) intent.poisoned = true;
@@ -891,6 +902,7 @@ export class DevicePopup {
   close({ restoreFocus = true } = {}) {
     const hadPopup = !!this.el;
     this._session++;
+    this._customControls?.dispose(); this._customControls = null; this._customControlsHost = null;
     this._cameraFeed.close();
     window.removeEventListener('pointerdown', this._onOutside, true);
     window.removeEventListener('keydown', this._onKey);
@@ -913,6 +925,14 @@ export class DevicePopup {
   }
 
   dispose() { this.close({ restoreFocus: false }); this._cameraFeed.dispose(); }
+
+  updateCustomControls() {
+    this._customControls?.update();
+    if (this._customControlsHost && this._customControls?.el) {
+      const hidden = this._customControls.el.hidden === true;
+      if (this._customControlsHost.hidden !== hidden) this._customControlsHost.hidden = hidden;
+    }
+  }
 
   setPlacement(placement) {
     this.placement = placement === 'right' ? 'right' : 'popup';

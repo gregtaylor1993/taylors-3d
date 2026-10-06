@@ -55,13 +55,13 @@ describe('area-filter native proof prerequisites', () => {
   });
   it('prepares all four actual editor DOMs without attempting Chrome or claiming bundle execution', async () => {
     const run = await promisify(execFile)(process.execPath, ['scripts/entity-area-filter-check.mjs', '--preflight'], {
-      cwd: root, env: { ...process.env, CHROME_PATH: path.join(root, 'nonexistent-preflight-chrome.exe') }, maxBuffer: 1024 * 1024,
+      cwd: root, env: { ...process.env, CHROME_PATH: path.join(root, 'nonexistent-preflight-chrome.exe') }, maxBuffer: 1024 * 1024, timeout: 15000,
     });
     for (const spec of entityAreaSpecifications) expect(run.stdout).toContain(`${spec.name} actual editor delegates exactly one deliberate bounded configuration proposal`);
     expect(run.stdout).toMatch(/\d+\/\d+ entity-area-filter checks passed; no browser launched\./);
     expect(run.stdout).not.toContain('FAIL');
     expect(run.stdout).toContain('Native Root/source+bundle geometry, GPU and Undo/Redo await the browser run.');
-  });
+  }, 20000); // Four real editors plus a source build can exceed 5s under parallel Windows load.
 });
 
 describe('anonymous shared GLB area data', () => {

@@ -21,6 +21,7 @@ import { historyShortcut, isNativeEditing } from './history.js';
 import { OverlayEditor } from './overlay-editor.js';
 import { CameraEditor } from './camera-editor.js';
 import { RoomActionsEditor } from './room-actions-editor.js';
+import { CustomControlsEditor } from './custom-controls-editor.js';
 import { TrackingEditor } from './tracking-editor.js';
 import { WeatherEditor } from './weather-editor.js';
 import { SecurityEditor } from './security-editor.js';
@@ -68,6 +69,7 @@ export class EditMode {
     this._overlayEditor = new OverlayEditor(card, () => this.render());
     this._cameraEditor = new CameraEditor(card, () => this.render());
     this._roomActionsEditor = new RoomActionsEditor(card, () => this.render());
+    this._customControlsEditor = new CustomControlsEditor(card, () => this.render());
     this._trackingEditor = new TrackingEditor(card, () => this.render());
     this._weatherEditor = new WeatherEditor(card, () => this.render());
     this._securityEditor = new SecurityEditor(card, () => this.render());
@@ -183,6 +185,7 @@ export class EditMode {
     this._furnitureDrag.cancel();
     this._cameraEditor.cancel();
     this._roomActionsEditor.reset();
+    this._customControlsEditor.reset();
     this._trackingEditor.cancel();
     this._weatherEditor.reset();
     this._securityEditor.reset();
@@ -208,6 +211,7 @@ export class EditMode {
     this._furnitureDrag.dispose(); this._furnitureEditor.dispose();
     this._cameraEditor.dispose();
     this._roomActionsEditor.dispose();
+    this._customControlsEditor.dispose();
     this._trackingEditor.dispose();
     this._weatherEditor.dispose();
     this._securityEditor.dispose();
@@ -255,6 +259,7 @@ export class EditMode {
     this._modelPositionCommit = null;
     this._syncOwnedLabels();
     this._roomActionsEditor.observe();
+    this._customControlsEditor.observe();
     this._dashboardBackupEditor.onStates();
     this._furnitureDrag.update();
     if (this.tab === 'house' && this.card._config?.layout_style !== 'house') {
@@ -264,6 +269,10 @@ export class EditMode {
     this.card._applyMarkerSelection(this.selectedMarker);
     this.refreshOverlay();
     const active = this.panel.getRootNode().activeElement;
+    if (this.tab === 'controls') {
+      this._customControlsEditor.updatePreviews(this.panel);
+      return;
+    }
     if (this.tab === 'rooms' && this.panel.contains(active) && active?.closest?.('[data-room-actions-editor]')) {
       this._roomActionsEditor.updatePreviews(this.panel);
       return;
@@ -382,6 +391,7 @@ export class EditMode {
   cancelHistoryGestures() {
     this._dashboardBackupEditor.reset();
     this._roomActionsEditor.reset();
+    this._customControlsEditor.reset();
     this._furnitureDrag.cancel(); this._furnitureEditor.reset();
     this._generation++;
     // A cancelled drag can leave a transient pose while saved positions are unchanged.
@@ -429,6 +439,7 @@ export class EditMode {
     if (!history?.[action === 'undo' ? 'canUndo' : 'canRedo'] || typeof this.card[method] !== 'function') return false;
     this._dashboardBackupEditor.reset();
     this._roomActionsEditor.reset();
+    this._customControlsEditor.reset();
     this._furnitureDrag.cancel(); this._furnitureEditor.reset();
     this.message = null;
     this.confirmDelete = false;
@@ -565,7 +576,7 @@ export class EditMode {
       if (point?.length >= 2 && point.every(Number.isFinite)) this._trackingEditor.acceptPlanPoint(point.slice(0, 2), trackingPick.floorId, trackingPick.token);
       this.refreshOverlay(); return;
     }
-    if (this.tab === 'data' || this.tab === 'tracking' || this.tab === 'scenes' || this.tab === 'idle' || this.tab === 'house' || this.tab === 'furniture') return; // Source/appearance edits never fall through into room selection.
+    if (this.tab === 'data' || this.tab === 'controls' || this.tab === 'tracking' || this.tab === 'scenes' || this.tab === 'idle' || this.tab === 'house' || this.tab === 'furniture') return; // Source/appearance edits never fall through into room selection.
     if (this.pivoting) {
       this._setPivot(e);
       return;
@@ -723,7 +734,7 @@ export class EditMode {
   }
 
   selectRoom(id) {
-    if (this.tab === 'data' && id) return;
+    if (['data', 'controls'].includes(this.tab) && id) return;
     this.selectedRoom = id;
     this.selectedMarker = null;
     this.doorMode = false;
@@ -735,7 +746,7 @@ export class EditMode {
   }
 
   selectMarker(id) {
-    if (this.tab === 'data' && id) return;
+    if (['data', 'controls'].includes(this.tab) && id) return;
     this.selectedMarker = id;
     this.selectedRoom = null;
     this.doorMode = false;
@@ -921,6 +932,8 @@ export class EditMode {
   onStates() {
     this._syncOwnedLabels();
     this._roomActionsEditor.observe();
+    this._customControlsEditor.observe();
+    if (this.tab === 'controls') { this._customControlsEditor.updatePreviews(this.panel); return; }
     if (this.tab === 'rooms') this._roomActionsEditor.updatePreviews(this.panel);
     this._dashboardBackupEditor.onStates();
     if (this.tab === 'data') return;
@@ -1115,7 +1128,7 @@ export class EditMode {
 
   _vertexDown(e, roomId, index) {
     if (e.button !== 0) return;
-    if (this.tab === 'data' || this.tab === 'idle' || this.tab === 'house' || this.tab === 'furniture' || this._wallSurfacePick()) return;
+    if (this.tab === 'data' || this.tab === 'controls' || this.tab === 'idle' || this.tab === 'house' || this.tab === 'furniture' || this._wallSurfacePick()) return;
     e.stopPropagation();
     e.preventDefault();
     this._startWindowDrag({ kind: 'vertex', roomId, index, start: [e.clientX, e.clientY], moved: false });
@@ -1123,7 +1136,7 @@ export class EditMode {
 
   _midDown(e, roomId, edge) {
     if (e.button !== 0) return;
-    if (this.tab === 'data' || this.tab === 'idle' || this.tab === 'house' || this.tab === 'furniture' || this._wallSurfacePick()) return;
+    if (this.tab === 'data' || this.tab === 'controls' || this.tab === 'idle' || this.tab === 'house' || this.tab === 'furniture' || this._wallSurfacePick()) return;
     e.stopPropagation();
     e.preventDefault();
     this._startWindowDrag({ kind: 'mid', roomId, edge, start: [e.clientX, e.clientY], moved: false });
@@ -1132,7 +1145,7 @@ export class EditMode {
   markerDown(m, e) {
     if (e.button !== 0) return;
     e.stopPropagation();
-    if (this.tab === 'data' || this.tab === 'tracking' || this.tab === 'scenes' || this.tab === 'idle' || this.tab === 'house' || this.tab === 'furniture' || this.drawing || this.doorMode || this.calibrating || this.colorPick || this._trackingPlanPick() || this._wallSurfacePick()) return;
+    if (this.tab === 'data' || this.tab === 'controls' || this.tab === 'tracking' || this.tab === 'scenes' || this.tab === 'idle' || this.tab === 'house' || this.tab === 'furniture' || this.drawing || this.doorMode || this.calibrating || this.colorPick || this._trackingPlanPick() || this._wallSurfacePick()) return;
     if (m.id === this.card._mowerMarkerId) {
       this.selectMarker(m.id); // positioned live, nothing to drag
       return;
@@ -1386,7 +1399,7 @@ export class EditMode {
     this._renderedTab = this.tab;
     const hasObjects = this._hasObjects();
     if (this.tab === 'objects' && !hasObjects) this.tab = 'devices';
-    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ...(hasObjects ? [['objects', 'Objects']] : []), ['overlays', 'Overlays'], ['cameras', 'Cameras'], ['tracking', 'Tracking'], ['security', 'Security'], ['environment', 'Environment'], ['scenes', 'Scenes'], ['idle', 'Idle'], ['mower', 'Mower'], ['views', 'Views'], ['model', 'Model'], ['furniture', 'Furniture'], ...(this.card._config?.layout_style === 'house' ? [['house', 'House']] : []), ['data', 'Data']];
+    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ...(hasObjects ? [['objects', 'Objects']] : []), ['overlays', 'Overlays'], ['cameras', 'Cameras'], ['tracking', 'Tracking'], ['security', 'Security'], ['environment', 'Environment'], ['scenes', 'Scenes'], ['idle', 'Idle'], ['mower', 'Mower'], ['views', 'Views'], ['controls', 'Buttons and bars'], ['model', 'Model'], ['furniture', 'Furniture'], ...(this.card._config?.layout_style === 'house' ? [['house', 'House']] : []), ['data', 'Data']];
     const body = {
       rooms: () => this._roomsTab(), devices: () => this._devicesTab(), objects: () => this._objectsTab(), mower: () => this._mowerTab(), views: () => this._viewsTab(),
       model: () => this._modelTab(), data: () => this._dataTab(),
@@ -1396,6 +1409,7 @@ export class EditMode {
       environment: () => this._weatherEditor.render(),
       security: () => this._securityEditor.render(),
       scenes: () => this._scenePreviewEditor.render(),
+      controls: () => this._customControlsEditor.render(),
       idle: () => this._ambientIdleEditor.render(),
       house: () => this._houseSummaryEditor.render(),
       furniture: () => `<p><button data-act="library-refresh">${this._coreCaption('libraryRefresh')}</button></p>${this._furnitureEditor.render()}${this._furnitureLibraryDetails()}`,
@@ -1418,6 +1432,7 @@ export class EditMode {
     if (this.tab === 'security') this._securityEditor.updatePreviews(this.panel);
     if (this.tab === 'model') { this._modelRenderingEditor.updatePreviews(this.panel); this._wallPresentationEditor.updatePreviews(this.panel); this._floorPresentationEditor.updatePreviews(this.panel); this._syncModelPositionFields(); this._syncStageClasses(); }
     if (this.tab === 'scenes') this._scenePreviewEditor.updatePreviews(this.panel);
+    if (this.tab === 'controls') this._customControlsEditor.updatePreviews(this.panel);
     if (this.tab === 'idle') this._ambientIdleEditor.updatePreviews(this.panel);
     if (this.tab === 'house') this._houseSummaryEditor.updatePreviews(this.panel);
     if (this.tab === 'furniture') this._furnitureEditor.updatePreviews(this.panel);
@@ -2631,6 +2646,7 @@ export class EditMode {
     const id = btn.dataset.id;
     if (this._dashboardBackupEditor.onClick(btn.dataset.act, btn)) return;
     if (this._roomActionsEditor.onClick(btn.dataset.act, btn)) return;
+    if (this._customControlsEditor.onClick(btn.dataset.act, btn)) return;
     if (this._overlayEditor.onClick(btn.dataset.act, btn)) return;
     if (this._cameraEditor.onClick(btn.dataset.act, btn)) return;
     if (this._trackingEditor.onClick(btn.dataset.act, btn)) return;
@@ -2663,6 +2679,7 @@ export class EditMode {
       case 'history-redo': this._runHistory('redo'); return;
       case 'tab':
         if (this.tab === 'rooms' && id !== 'rooms') this._roomActionsEditor.reset();
+        if (this.tab === 'controls' && id !== 'controls') this._customControlsEditor.reset();
         if (id === 'house' && this.card._config?.layout_style !== 'house') return;
         if (id !== this.tab) {
           this.card._endGesture?.();
@@ -2685,7 +2702,7 @@ export class EditMode {
           this.view.highlightModelNode(null);
         }
         if (id !== 'objects') this.objSel = null;
-        if (id === 'data' || id === 'scenes' || id === 'idle' || id === 'house' || id === 'furniture') {
+        if (id === 'data' || id === 'controls' || id === 'scenes' || id === 'idle' || id === 'house' || id === 'furniture') {
           // Source/display settings must not leave a room tool or pinned
           // marker gesture active behind the form.
           this.drawing = this.calibrating = null;
@@ -2694,7 +2711,7 @@ export class EditMode {
           this.card._applyMarkerSelection(null);
         }
         this.tab = id;
-        if (id === 'data' || id === 'idle' || id === 'house' || id === 'furniture') {
+        if (id === 'data' || id === 'controls' || id === 'idle' || id === 'house' || id === 'furniture') {
           // A late release from an old room/device drag must not pin anything
           // after entering this settings-only tab. Remove old edit handles too.
           this._endWindowDrag(false);
@@ -2833,6 +2850,7 @@ export class EditMode {
     const f = el.dataset.field;
     if (this._dashboardBackupEditor.onChange(f, el)) return;
     if (this._roomActionsEditor.onChange(f, el)) return;
+    if (this._customControlsEditor.onChange(f, el)) return;
     if (this._overlayEditor.onChange(f, el)) return;
     if (this._cameraEditor.onChange(f, el)) return;
     if (this._trackingEditor.onChange(f, el)) return;
@@ -2993,6 +3011,7 @@ export class EditMode {
     const f = el.dataset.field;
     if (this._dashboardBackupEditor.onInput(f, el)) return;
     if (this._roomActionsEditor.onInput(f, el)) return;
+    if (this._customControlsEditor.onInput(f, el)) return;
     if (this._trackingEditor.onInput(f, el)) return;
     if (this._weatherEditor.onInput(f, el)) return;
     if (this._securityEditor.onInput(f, el)) return;

@@ -18,6 +18,10 @@ Tap an individual device to open its own panel.
 
 ## Add room shortcuts
 
+The `0.3.0` development source also has a separate [Buttons and bars builder](CUSTOM-BUTTONS-AND-BARS.md).
+It adds custom bars, drag-and-drop and more action choices. Existing room
+shortcuts continue to work alongside it.
+
 As a Home Assistant administrator, open the Taylor card's **Edit → Rooms** tab.
 In **Room shortcuts**, choose the exact room, then a current scene or script.
 Choose **Add selected shortcut**, type its button label and use **Move up** or

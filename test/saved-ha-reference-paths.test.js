@@ -1,6 +1,28 @@
 import { describe, expect, it, vi } from 'vitest';
 import { enumerateSavedHaReferences, SAVED_HA_REFERENCE_LIMITS } from '../src/saved-ha-reference-paths.js';
 describe('shared exact saved-reference paths', () => {
+  it('discovers only known custom button entity and exact room links, leaving camera IDs and labels literal', () => {
+    const controls = { version: 1, bars: [{ id: 'evening', label: 'scene.label', placement: 'room', room_id: 'exact-room', style: 'pills',
+      buttons: [{ id: 'movie', label: 'script.label', icon: 'mdi:movie', color: 'amber', action: { type: 'scene', entity: 'scene.actual' } },
+        { id: 'door', label: 'Door', icon: 'mdi:door', color: 'teal', action: { type: 'view', view_id: 'sensor.camera_view_name' } },
+        { id: 'routine', label: 'Routine', icon: 'mdi:play', color: 'theme', action: { type: 'automation', entity: 'automation.actual', skip_conditions: false } }] }] };
+    const before = structuredClone(controls), graph = enumerateSavedHaReferences({ layout: { custom_controls: controls } });
+    expect(graph.references.map((row) => [row.kind, row.id])).toEqual([['room', 'exact-room'], ['entity', 'scene.actual'], ['entity', 'automation.actual']]);
+    expect(graph.complete).toBe(true); expect(controls).toEqual(before);
+    expect(graph.references[1].segments).toEqual(['layout', 'custom_controls', 'bars', 0, 'buttons', 0, 'action', 'entity']);
+  });
+  it('retains own custom-controls authority and rejects future action interpretations without invoking accessors', () => {
+    const fallback = { custom_controls: { version: 1, bars: [{ room_id: 'fallback-room', buttons: [{ action: { type: 'scene', entity: 'scene.fallback' } }] }] } };
+    for (const value of [null, undefined, { version: 2, bars: [{ room_id: 'future-room' }] }]) {
+      expect(enumerateSavedHaReferences({ layout: { custom_controls: value }, config: fallback }).references).toEqual([]);
+    }
+    const getter = vi.fn(() => fallback.custom_controls), layout = {};
+    Object.defineProperty(layout, 'custom_controls', { enumerable: true, get: getter });
+    const unreadable = enumerateSavedHaReferences({ layout, config: fallback });
+    expect(getter).not.toHaveBeenCalled(); expect(unreadable.references).toEqual([]); expect(unreadable.complete).toBe(false);
+    const future = enumerateSavedHaReferences({ layout: { custom_controls: { version: 1, bars: [{ buttons: [{ action: { type: 'future-action', entity: 'scene.opaque' } }] }] } } });
+    expect(future.references).toEqual([]); expect(future.diagnostics).toContainEqual(expect.objectContaining({ code: 'reference_shape' }));
+  });
   it('uses actual shared nullish precedence while own room-actions remains authoritative', () => {
     const config = { weather: { entity: 'weather.card' }, house_summary: { alarm_entity: 'alarm_control_panel.card' },
       scene_previews: { items: [{ scene_entity: 'scene.card', lights: [{ entity: 'light.card' }] }] },

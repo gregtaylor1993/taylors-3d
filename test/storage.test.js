@@ -10,6 +10,14 @@ describe('normalise', () => {
     expect(normalise({ rooms: 'x', pins: null, floors: [{ id: 'g' }], extra: 1 }))
       .toMatchObject({ version: 1, rooms: [], pins: {}, floors: [{ id: 'g' }], hidden: [], extra: 1 });
   });
+  it('keeps saved button bars and future extensions through normalise and JSON backup round trips', () => {
+    const raw = { version: 1, rooms: [], custom_controls: { version: 1, bars: [{ id: 'evening', label: 'Evening', placement: 'bottom', style: 'pills',
+      buttons: [{ id: 'movie', label: 'Movie', icon: 'mdi:movie', color: 'amber', action: { type: 'scene', entity: 'scene.movie' }, extra: { literal: 'scene.label' } }] }],
+      extension: { retained: ['é', false, null] } } };
+    const before = structuredClone(raw), restored = normalise(JSON.parse(JSON.stringify(normalise(raw))));
+    expect(restored.custom_controls).toEqual(raw.custom_controls); expect(raw).toEqual(before);
+    expect(normalise({ custom_controls: { version: 99, future: 'preserve' } }).custom_controls).toEqual({ version: 99, future: 'preserve' });
+  });
   it('migrates the v0.1.4 model floor_map into level bindings', () => {
     expect(normalise({ model: { version: 'v', floor_map: { ground: 'floor1', attic: 'always' } } }).model)
       .toEqual({ version: 'v', levels: { ground: { floor: 'floor1' }, attic: { show: 'always' } } });

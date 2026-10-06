@@ -1,14 +1,62 @@
 # Taylor's 3D — requirements and features
 
+## Phase 21: custom buttons and bars
+
+**F26 — Testing.** Taylor chose a builder inside Taylor's 3D, covering custom
+bars and room panels. Add buttons with a name, icon, colour and action; drag bars
+into order and move buttons within or between them. Mouse, touch and keyboard
+controls must work. Save, Cancel, Undo and Redo apply to layout edits. Editing,
+dragging and previews must never run device actions.
+
+The first delivery connects saved camera views and existing Home Assistant
+scenes, scripts and automations, plus supported device toggles and All controls.
+Create full automation rules in Home Assistant's visual editor, then link them
+to a button. This work starts from
+the tested 0.2.0 commit `6cd23df` in a separate development checkout. The 0.2.0
+testing package and its completed checks remain the previous checkpoint.
+
+See [custom buttons and bars](docs/CUSTOM-BUTTONS-AND-BARS.md) for the user flow.
+
+The `0.3.0` local candidate adds **Edit → Buttons and bars**, up to eight named
+bars and twelve buttons per bar, mouse/touch dragging, keyboard alternatives,
+draft Save/Cancel and existing Undo/Redo. Bars can appear at the bottom or in one
+exact room panel. Buttons link saved views, existing scenes/scripts/automations,
+supported toggles and Home Assistant entity controls. Automation conditions are
+checked by default. Existing room shortcuts continue alongside the new bars.
+
+Shared storage, single-layout JSON and full dashboard backup preserve the new
+field and inert imported extras. Missing links remain labelled and disabled;
+edit/drag/preview/import operations send no device actions. Model loads and
+changed account/source contexts invalidate unfinished gestures and stale drafts.
+English, German, French and Spanish labels follow the existing catalogue.
+
+Local verification: the complete **6,311 JavaScript tests across 201 files
+passed**, followed by three additional inherited-array getter regressions.
+The final four affected suites passed **249/249**, covering **6,314 distinct
+unit tests** in total. The final custom-controls browser proof passed **384/384**
+on the source and bundled card. Editor/runtime suites also passed after the
+scoped theme repairs. Real-browser
+colour probes verified readable runtime and editor text in dark, light and HA
+themes, including disabled controls. Build/bundle freshness, native browser
+regressions and ZIP integrity are recorded in the separate local validation
+receipt. These checks use anonymous simulated HA readings and services.
+
+The candidate is `taylors3d-phase21-custom-controls-local-candidate.zip`.
+It is not installed or published. Actual-house testing remains **UNRUN**;
+the older HACS release remains `v0.1.0`. No new automation-rule editor is included.
+
 This is Taylor's ideas and progress log. It records what we want the app to do, what the current base already provides, and how we will know each new feature works.
 
 Created: 4 October 2026. Starting point: version `0.1.0`, base commit `055e30f2e46062a01dd83b4bbec4b793c477f75a`.
 
 **First installable release:** [v0.1.0](https://github.com/gregtaylor1993/taylors-3d/releases/tag/v0.1.0) contains verified checkpoint `93ab558`, including the chosen navigation group and later verified features through ambient idle mode. The published HACS zip's frontend matches the tested build byte for byte. Wall, furniture and separated-floor work is recorded separately below. Later historical notes describe their checkpoint dates; this release is now available.
 
-**Current work:** the combined `0.2.0` source candidate brings the recorded features and photo-inspired House layout together. Its final local checks and remaining acceptance work are recorded below. The published HACS release and local source candidate remain separate; package/publication status is recorded with this checkpoint. Earlier package and CI notes describe their own checkpoints.
+**Current work:** the `0.3.0` local source adds the custom builder described above.
+The combined `0.2.0` candidate and its previous verified packages remain recorded
+below as the Phase 20 checkpoint. Published HACS releases and local candidates
+remain separate.
 
-**Current local version: Phase 20, `0.2.0`.** F24 now adds optional separate floor
+**Previous local version: Phase 20, `0.2.0`.** F24 adds optional separate floor
 panels with linked camera controls. The local checks and installation ZIP below
 cover this version. The frozen Phase 19 source, package and earlier results remain
 historical. This has not published a HACS update or validated your actual house.
@@ -167,6 +215,7 @@ For each implementation, update its status, record the changed behavior, link it
 | F23 | Robot vacuums moving while running | Measured/status actors with visual calibration and separate source-age forms | Testing |
 | F24 | Horizontal split floors and vertical layers | Optional responsive floor panels with linked controls pass Phase 20 local checks; side-by-side geometry and stacked layers remain available; real model/panel remains | Testing |
 | F25 | Translations, preview, screenshots and bundle checks | Four-language controls, simulated preview/screenshots and bundle matching pass local checks; documented English prose, current CI/release and household gates remain | Testing |
+| F26 | Custom buttons, bars and drag-and-drop builder | Inside-card bottom/room bars, drafts, mouse/touch/keyboard ordering, six action types, backups and translated controls; local checks recorded above, actual HA pending | Testing |
 
 ## Proposed build order
 

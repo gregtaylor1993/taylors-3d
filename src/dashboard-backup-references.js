@@ -36,7 +36,7 @@ const features = {
     ...scalars('source x_attr y_attr latitude_attr longitude_attr units north_up plan_meters calibration trail track_image image_tracking image_blob heading interpolate_ms') }),
   presence_bindings: array(tracking), vehicle_bindings: array(tracking), vacuum_bindings: array(tracking),
   // These feature paths share the effective-schema reader with registryIssues.
-  room_actions: IGNORE, house_summary: IGNORE, weather: IGNORE, scene_previews: IGNORE, security_bindings: IGNORE,
+  room_actions: IGNORE, custom_controls: IGNORE, house_summary: IGNORE, weather: IGNORE, scene_previews: IGNORE, security_bindings: IGNORE,
   alert_bindings: array(object({ entity: E, area_id: A, floorId: F, floor_id: F, position, position_key: { marker: true }, markerId: { marker: true },
     ...scalars('id label type roomId room_id object_id x y z clear_rule trigger_states clear_states severity enabled color size threshold above below unit') })),
   room_overlays: object({ bindings: map({ arrayOrObject: overlayBinding, arrayItems: overlayEntity }), ...scalars('mode legend min max unit aggregation enabled') }),

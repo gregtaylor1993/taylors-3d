@@ -35,7 +35,7 @@ function setup() {
     _history: new EditHistory(), _store: { save: vi.fn() }, _presetEvents: { setHass: vi.fn() },
   };
   for (const name of ['_observeSecuritySession', '_observeAlertMapContext', '_syncSecurity', '_syncFurniture', '_syncHouseShell',
-    '_syncScenePreviews', '_syncAmbient', '_schedule', '_suspendAmbient', 'finishWallSelectionPreparation', '_clearTrackingTimer']) card[name] = vi.fn();
+    '_syncScenePreviews', '_syncAmbient', '_schedule', '_suspendAmbient', 'finishWallSelectionPreparation', '_clearTrackingTimer', '_syncCustomControls']) card[name] = vi.fn();
   card._houseLayoutEnabled = () => false;
   // Keep a pre-existing Undo step, so Cancel must preserve more than an empty history.
   card._history.reset({ layout: { ...clone(card._layout), prior_revision: true }, config: card._config });

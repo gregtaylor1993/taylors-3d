@@ -75,6 +75,7 @@ jobs:
               node scripts/dashboard-backup-check.mjs
               node scripts/visual-options-check.mjs
               node scripts/room-actions-check.mjs
+              node scripts/custom-controls-check.mjs
           - group: positions-labels
             commands: |
               node scripts/gps-calibration-check.mjs

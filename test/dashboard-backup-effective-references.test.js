@@ -14,6 +14,19 @@ const shortcuts = (entity) => ({ version: 1, rooms: [{ room_id: 'exact-room', ac
 const entityIds = (graph) => graph.references.filter((reference) => reference.kind === 'entity').map((reference) => reference.id);
 
 describe('effective Taylor references in a full dashboard backup', () => {
+  it('checks saved custom buttons, preserves their raw archive, and never revives an inactive fallback', () => {
+    const controls = (entity) => ({ version: 1, bars: [{ id: 'evening', label: 'sensor.literal', placement: 'bottom', style: 'pills',
+      buttons: [{ id: 'movie', label: 'Movie', icon: 'mdi:movie', color: 'amber', action: { type: 'scene', entity } },
+        { id: 'view', label: 'Front', icon: 'mdi:door', color: 'theme', action: { type: 'view', view_id: 'sensor.local_view_id' } }] }] });
+    const raw = archive({ custom_controls: controls('scene.current') }, [card({ custom_controls: controls('scene.inactive') })]), before = structuredClone(raw);
+    const graph = collectDashboardReferences(raw), hass = environment(['scene.current']);
+    expect(entityIds(graph)).toEqual(['scene.current']);
+    expect(graph.uninspected).toEqual([]); expect(resolveDashboardReferences(graph, hass).counts.missing).toBe(0);
+    expect(raw).toEqual(before); expect(hass.callService).not.toHaveBeenCalled(); expect(hass.callWS).not.toHaveBeenCalled();
+    expect(entityIds(collectDashboardReferences(archive({ custom_controls: null }, [card({ custom_controls: controls('scene.inactive') })])))).toEqual([]);
+    delete hass.states['scene.current'];
+    expect(resolveDashboardReferences(graph, hass).references.find((row) => row.id === 'scene.current').status).toBe('missing');
+  });
   it('does not flag shadowed weather or room shortcuts as required by the copied dashboard', () => {
     const raw = archive({ weather: { entity: 'weather.shared' }, room_actions: { version: 1, rooms: [] } },
       [card({ weather: { entity: 'weather.old_card' }, room_actions: shortcuts('scene.old_card') })]);

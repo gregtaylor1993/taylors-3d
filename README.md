@@ -10,10 +10,15 @@ Original project by Ingus Stals / istals. This independent copy is maintained by
 The features below describe this source version. Use a matching verified release,
 or build the source yourself: an older HACS release can contain fewer features.
 The feature log records the checks and installation packages for each checkpoint.
-The current Phase 20 `0.2.0` version is a tested local candidate with its own
+The Phase 20 `0.2.0` version is a tested local candidate with its own
 installation ZIP. Its checks and remaining Home Assistant tests are in the
 [feature log](REQUIREMENTS_AND_FEATURES.md#phase-20-020-local-checkpoint).
 Local checks alone do not publish a HACS update.
+
+This `0.3.0` development source adds the inside-card **Buttons and bars** builder.
+The [custom controls guide](docs/CUSTOM-BUTTONS-AND-BARS.md) explains draft editing,
+drag-and-drop, saved action links and what still needs testing on real devices.
+It is separate from the frozen `0.2.0` candidate and is not a published HACS release.
 
 See [Requirements and features](REQUIREMENTS_AND_FEATURES.md) for Taylor's development ideas, proposed build order and progress log.
 See the [plain-language controls guide](docs/FEATURES-GUIDE.md) for camera automations, Undo/Redo and room overlays.
@@ -43,6 +48,10 @@ position over its map.
   3D model the chips are the model's views (Exterior, Ground floor, …), linked to HA floors
 - Bottom bubble bar for saved views, 3D/Top, reset, section, day/night, mini-map and Edit.
   Choose the buttons and their order in the visual card editor
+- Custom named button bars below the house or in one exact room panel. Use Edit →
+  Buttons and bars to choose labels, icons, colours and actions, drag them into
+  order, and save one layout change with Undo/Redo. Link existing scenes, scripts,
+  automations, camera views, supported device toggles and Home Assistant controls
 - Tap a room to open its devices and readings; tap a device for quick controls. **All controls**
   opens Home Assistant's full options for that entity. Long-press opens more-info; the original
   single-tap toggle behavior is still available as a visual setting
@@ -146,7 +155,7 @@ house model, Home Assistant and wall panel is tracked in [the feature log](REQUI
 ## Install
 
 HACS and the latest published release currently supply **v0.1.0**. To evaluate the
-Phase 20 `0.2.0` candidate, use the separately supplied local ZIP or build this
+custom-controls `0.3.0` candidate, use its separately supplied local ZIP or build this
 source version. The latest local checks are linked at the top of this README.
 
 The repository is a Home Assistant integration that also serves the card, so one install
