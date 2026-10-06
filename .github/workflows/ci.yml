@@ -129,7 +129,12 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install Home Assistant test harness
         run: |
-          pip install -r requirements-test.txt "homeassistant==${{ matrix.ha }}" "pytest-homeassistant-custom-component==${{ matrix.harness }}"
+          HA_TEST_COMPAT=()
+          # HA 2024.7's acme 2.10 imports ComparableX509, removed in josepy 2.
+          if [ "${{ matrix.ha }}" = "2024.7.0" ]; then
+            HA_TEST_COMPAT+=("josepy==1.14.0")
+          fi
+          pip install -r requirements-test.txt "homeassistant==${{ matrix.ha }}" "pytest-homeassistant-custom-component==${{ matrix.harness }}" "${HA_TEST_COMPAT[@]}"
           # the frontend package matching the installed core, needed by the frontend dependency
           FRONTEND=$(python -c "import json, importlib.resources as r; print(json.load(open(r.files('homeassistant') / 'components/frontend/manifest.json'))['requirements'][0])")
           pip install "$FRONTEND"

@@ -99,7 +99,9 @@ async def test_entry_reload_preserves_published_library_and_exact_router_resourc
     hass.config.config_dir = str(tmp_path)
     entry = await setup_integration(hass)
     client = await hass_client()
-    response = await client.post(URL, data=upload(bundle()))
+    # Deduplication is by original archive bytes, including ZIP timestamps.
+    raw = bundle()
+    response = await client.post(URL, data=upload(raw))
     assert response.status == 200, await response.text()
     original = await response.json()
     library, layout_store, resources = hass.data[DATA_FURNITURE], hass.data[DOMAIN], furniture_routes(hass)
@@ -119,9 +121,11 @@ async def test_entry_reload_preserves_published_library_and_exact_router_resourc
         response = await client.get(original["pack"]["items"][0]["asset_url"])
         assert response.status == 200
         assert await response.read() == glb()
-    response = await client.post(URL, data=upload(bundle()))
+    response = await client.post(URL, data=upload(raw))
     assert response.status == 200
-    assert (await response.json())["imported"] is False
+    repeated = await response.json()
+    assert repeated["imported"] is False
+    assert repeated["pack"] == original["pack"]
 
 
 @pytest.mark.parametrize("path", [URL, f"{URL}/assets/{SHA}.glb", f"{URL}/packs/{SHA}.zip"])
