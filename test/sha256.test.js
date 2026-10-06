@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { Buffer } from 'node:buffer';
 import { createHash, randomBytes, webcrypto } from 'node:crypto';
 import { createSha256, sha256, SHA256_MAX_BYTES } from '../src/sha256.js';
 
@@ -28,7 +29,8 @@ describe('bounded SHA256 LAN fallback', () => {
       hash.update(data.subarray(offset, offset + count)); offset += count;
     }
     expect(hash.digest()).toBe('cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0');
-    expect(data).toEqual(snapshot);
+    // Compare every byte natively without walking a million matcher properties.
+    expect(Buffer.from(data).equals(Buffer.from(snapshot))).toBe(true);
   });
   it('handles subarray offsets, empty chunks and independent instances', () => {
     const source = bytes('ignoreabcignore'), a = createSha256(), b = createSha256();
