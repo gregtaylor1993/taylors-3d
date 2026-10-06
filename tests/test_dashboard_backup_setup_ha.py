@@ -21,7 +21,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.components import frontend
-from homeassistant.components.lovelace.const import LOVELACE_DATA
+from homeassistant.components.lovelace.const import DOMAIN as LOVELACE_DATA
 from homeassistant.setup import async_setup_component
 
 from custom_components.taylors3d import LayoutStore
@@ -87,7 +87,8 @@ async def seed_source(hass, hass_ws_client):
     await client.send_json_auto_id({"type": "taylors3d/layout/set", "key": "old", "layout": layout})
     assert (await client.receive_json())["success"]
     data = hass.data[LOVELACE_DATA]
-    default = data.dashboards.get("lovelace") or data.dashboards.get(None)
+    dashboards = data["dashboards"] if type(data) is dict else data.dashboards
+    default = dashboards.get("lovelace") or dashboards.get(None)
     assert default is not None
     await default.async_save(dashboard)
     return dashboard, layout, default
@@ -229,7 +230,9 @@ async def test_real_export_inspect_stage_preserves_full_raw_dashboard_model_lice
     assert inspected["report"]["complete"] and inspected["report"]["dependencyFree"]
     assert inspected["preview"]["dashboard"] == dashboard and inspected["restoreAvailable"] is False
     data = hass.data[LOVELACE_DATA]
-    dashboards_before, resources_before = data.dashboards.copy(), copy.deepcopy(data.resources.async_items())
+    dashboards = data["dashboards"] if type(data) is dict else data.dashboards
+    resources = data["resources"] if type(data) is dict else data.resources
+    dashboards_before, resources_before = dashboards.copy(), copy.deepcopy(resources.async_items())
     response = await client.post(URL + "/stage/recovered", data=body, headers={"Content-Type": "application/zip"})
     assert response.status == 200, await response.text()
     result = await response.json()
@@ -238,7 +241,7 @@ async def test_real_export_inspect_stage_preserves_full_raw_dashboard_model_lice
     assert result["ok"] and result["report"]["publication_available"] is False
     assert result["staging"]["layouts_persistence"] == "scheduled_not_durable"
     assert result["staging"]["dashboard_created"] is False and result["staging"]["resources_installed"] is False
-    assert data.dashboards == dashboards_before and data.resources.async_items() == resources_before
+    assert dashboards == dashboards_before and resources.async_items() == resources_before
     assert target not in hass.data.get(frontend.DATA_PANELS, {})
     assert await default.async_load(True) == dashboard
     expected_dashboard = copy.deepcopy(dashboard)

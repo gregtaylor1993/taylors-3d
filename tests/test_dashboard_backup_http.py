@@ -57,6 +57,46 @@ def unpack(prepared):
 
 
 class BackupHTTPPureTest(unittest.TestCase):
+    def test_lovelace_registry_key_supports_exported_legacy_domain(self):
+        modern = types.SimpleNamespace(LOVELACE_DATA="typed_lovelace", DOMAIN="lovelace")
+        legacy = types.SimpleNamespace(DOMAIN="lovelace")
+        self.assertEqual(adapter.lovelace_data_key(modern), "typed_lovelace")
+        self.assertEqual(adapter.lovelace_data_key(legacy), "lovelace")
+        for constants in (types.SimpleNamespace(), types.SimpleNamespace(DOMAIN=None),
+                          types.SimpleNamespace(LOVELACE_DATA=None, DOMAIN="lovelace")):
+            with self.subTest(constants=constants):
+                with self.assertRaises(adapter.BackupHTTPError) as caught:
+                    adapter.lovelace_data_key(constants)
+                self.assertEqual(caught.exception.code, "platform_unavailable")
+
+    def test_legacy_source_modes_use_actual_selected_backend_and_resource_mode(self):
+        value = payload()
+        value["source"].update(url_path=None, mode=None)
+        value["resources"]["mode"] = None
+        data = {"mode": "storage", "dashboards": {None: types.SimpleNamespace(mode="storage"),
+            "lovelace": types.SimpleNamespace(mode="yaml")}, "resources": object(), "yaml_dashboards": {}}
+        snapshot = data.copy()
+        modes = adapter.source_modes(data, value)
+        self.assertEqual(modes, {"mode": "yaml", "resource_mode": "storage"})
+        result = prepare(value, owned_source=modes)
+        self.assertEqual(result.manifest["dashboard"]["mode"], "yaml")
+        self.assertEqual(result.manifest["resources"]["mode"], "storage")
+        self.assertTrue(result.manifest["http_capture"]["source_mode_proven"])
+        self.assertEqual(data, snapshot)
+        value["source"]["mode"] = "storage"
+        with self.assertRaises(adapter.BackupHTTPError) as caught:
+            prepare(value, owned_source=modes)
+        self.assertEqual(caught.exception.code, "source_changed")
+
+    def test_present_malformed_legacy_or_modern_dashboard_registry_fails_closed(self):
+        for value in (None, [], False, "dashboards"):
+            for data in ({"mode": "storage", "dashboards": value},
+                         types.SimpleNamespace(resource_mode="storage", dashboards=value)):
+                with self.subTest(data=data):
+                    with self.assertRaises(adapter.BackupHTTPError) as caught:
+                        adapter.source_modes(data, payload())
+                    self.assertEqual(caught.exception.code, "platform_unavailable")
+
     def test_exact_shared_snapshot_and_unknown_fields_are_preserved_without_mutation(self):
         value, shared = payload(), {"shared": layout()}; before = copy.deepcopy((value, shared))
         prepared = prepare(value, shared); verified = unpack(prepared)

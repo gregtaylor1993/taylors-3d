@@ -88,6 +88,44 @@ class Content:
 
 
 class PanelCompatibilityTest(unittest.TestCase):
+    def test_frontend_store_reader_accepts_current_object_and_legacy_store_tuple(self):
+        data = {"occupied-null": None, "occupied-false": False}
+        modern = types.SimpleNamespace(data=data)
+        legacy_store = types.SimpleNamespace(async_save=lambda _data: None)
+        self.assertIs(adapter.user_storage_data(modern), data)
+        self.assertIs(adapter.user_storage_data((legacy_store, data)), data)
+        self.assertTrue("occupied-null" in adapter.user_storage_data((legacy_store, data)))
+        self.assertTrue("occupied-false" in adapter.user_storage_data(modern))
+
+    def test_frontend_store_reader_rejects_malformed_or_unproven_shapes(self):
+        legacy_store = types.SimpleNamespace(async_save=lambda _data: None)
+        for store in (None, [], ({}, {}), (legacy_store,), (legacy_store, {}, None),
+                      [legacy_store, {}], (legacy_store, None), (legacy_store, []),
+                      types.SimpleNamespace(), types.SimpleNamespace(data=None),
+                      types.SimpleNamespace(data=[])):
+            with self.subTest(store=store):
+                with self.assertRaises(adapter.RestoreHTTPError) as caught:
+                    adapter.user_storage_data(store)
+                self.assertEqual(caught.exception.code, "platform_unavailable")
+
+    def test_lovelace_maps_support_exact_legacy_dict_and_current_object(self):
+        dashboards, yaml = {"null": None}, {"yaml": {"mode": "yaml"}}
+        for data in ({"mode": "storage", "dashboards": dashboards, "yaml_dashboards": yaml},
+                     types.SimpleNamespace(resource_mode="storage", dashboards=dashboards, yaml_dashboards=yaml)):
+            with self.subTest(data=data):
+                actual = adapter.dashboard_maps(data)
+                self.assertIs(actual[0], dashboards)
+                self.assertIs(actual[1], yaml)
+                self.assertIn("null", actual[0])
+
+    def test_lovelace_maps_reject_absent_or_malformed_registry(self):
+        for data in (None, {}, [], {"dashboards": {}, "yaml_dashboards": None},
+                     {"dashboards": [], "yaml_dashboards": {}}, types.SimpleNamespace(dashboards={})):
+            with self.subTest(data=data):
+                with self.assertRaises(adapter.RestoreHTTPError) as caught:
+                    adapter.dashboard_maps(data)
+                self.assertEqual(caught.exception.code, "platform_unavailable")
+
     def test_current_public_api_is_used_without_reading_legacy_registry(self):
         hass = Hass()
         calls = []

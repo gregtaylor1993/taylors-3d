@@ -19,10 +19,10 @@ import threading
 import pytest
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 from homeassistant.components import frontend, http as http_component
-from homeassistant.components.frontend.storage import async_user_store
+from homeassistant.components.frontend import storage as frontend_storage
 from homeassistant.components.http import auth as http_auth, const as http_const
-from homeassistant.components.lovelace import LovelaceData
-from homeassistant.components.lovelace.const import LOVELACE_DATA
+from homeassistant.components import lovelace as lovelace_component
+from homeassistant.components.lovelace.const import DOMAIN as LOVELACE_DATA
 from homeassistant.setup import async_setup_component
 
 from custom_components.taylors3d import LayoutStore
@@ -82,7 +82,9 @@ async def restore_views(hass, tmp_path):
     hass.data[DOMAIN] = store
     hass.data[furniture.DATA_FURNITURE] = furniture.FurnitureLibrary(tmp_path / "taylors3d/furniture")
     # Exact real backend container without creating any dashboard or WS writer.
-    hass.data[LOVELACE_DATA] = LovelaceData(resource_mode="storage", dashboards={}, resources=None, yaml_dashboards={})
+    parts = {"dashboards": {}, "resources": None, "yaml_dashboards": {}}
+    data_type = getattr(lovelace_component, "LovelaceData", None)
+    hass.data[LOVELACE_DATA] = {"mode": "storage", **parts} if data_type is None else data_type(resource_mode="storage", **parts)
     views = await adapter.async_register_dashboard_restore(hass)
     await hass.async_block_till_done()
     return views
@@ -157,7 +159,9 @@ async def test_actual_stores_publish_exact_original_assets_and_new_shared_layout
     body = stored_archive(source, model=original_model, pack=original_pack)
     expected = await hass.async_add_executor_job(planner.plan_dashboard_restore, body, "recovered")
     old = copy.deepcopy(hass.data[DOMAIN].get("old"))
-    dashboards = hass.data[LOVELACE_DATA].dashboards.copy()
+    data = hass.data[LOVELACE_DATA]
+    actual_dashboards = data["dashboards"] if type(data) is dict else data.dashboards
+    dashboards = actual_dashboards.copy()
     client = await hass_client()
     response = await client.post(URL + "/recovered", data=body, headers={"Content-Type": "application/zip"})
     assert response.status == 200, await response.text()
@@ -172,7 +176,7 @@ async def test_actual_stores_publish_exact_original_assets_and_new_shared_layout
     key = expected.layouts[0]["target_key"]
     assert hass.data[DOMAIN].get(key) == source
     assert hass.data[DOMAIN].get("old") == old
-    assert hass.data[LOVELACE_DATA].dashboards == dashboards
+    assert actual_dashboards == dashboards
     assert expected.target_dashboard["url_path"] not in hass.data.get(frontend.DATA_PANELS, {})
     assert await hass.async_add_executor_job(model_path(hass, key).read_bytes) == original_model
     assert await hass.async_add_executor_job(hass.data[furniture.DATA_FURNITURE].archive, pack_id) == original_pack
@@ -204,16 +208,23 @@ async def test_real_collision_prevents_new_assets_and_old_values_remain(
     elif kind.startswith("user_"):
         # Any actual user's exact fallback key counts, even false/null values.
         other = await hass.auth.async_create_user("Another actual user")
-        user_store = await async_user_store(hass, other.id)
-        await user_store.async_set_item("taylors3d_" + key, False if kind == "user_false" else None)
+        user_store = await frontend_storage.async_user_store(hass, other.id)
+        if type(user_store) is tuple:
+            store, data = user_store
+            data["taylors3d_" + key] = False if kind == "user_false" else None
+            await store.async_save(data)
+        else:
+            await user_store.async_set_item("taylors3d_" + key, False if kind == "user_false" else None)
     elif kind in ("panel", "legacy_panel"):
         if kind == "legacy_panel":
             monkeypatch.delattr(frontend, "async_panel_exists", raising=False)
         frontend.async_register_built_in_panel(hass, "history", frontend_url_path=path)
     elif kind == "dashboard":
-        hass.data[LOVELACE_DATA].dashboards[path] = object()  # identity presence only; not a fake loader/writer
+        data = hass.data[LOVELACE_DATA]
+        (data["dashboards"] if type(data) is dict else data.dashboards)[path] = object()  # identity presence only; not a fake loader/writer
     else:
-        hass.data[LOVELACE_DATA].yaml_dashboards[path] = {"mode": "yaml", "filename": "ui-lovelace.yaml"}
+        data = hass.data[LOVELACE_DATA]
+        (data["yaml_dashboards"] if type(data) is dict else data.yaml_dashboards)[path] = {"mode": "yaml", "filename": "ui-lovelace.yaml"}
     before = await staged_files(hass, tmp_path)
     client = await hass_client()
     response = await client.post(URL + "/recovered", data=body, headers={"Content-Type": "application/zip"})
@@ -253,6 +264,73 @@ async def test_legacy_panel_added_during_awaited_user_lookup_blocks_all_staging(
     assert result["error"] == "collision" and result["orphans"] == []
     assert path in hass.data[frontend.DATA_PANELS]
     assert not hass.data[DOMAIN].contains(key)
+    assert await staged_files(hass, tmp_path) == before
+
+
+@pytest.mark.parametrize("kind", ["dashboard", "yaml", "replace_dashboards", "replace_yaml"])
+async def test_legacy_dashboard_maps_changed_during_user_storage_await_block_all_staging(
+    hass, restore_views, hass_client, tmp_path, monkeypatch, kind,
+):
+    """Use real user storage; replaced maps must not escape captured old maps."""
+    model = glb()
+    source = layout()
+    source["model"] = {"version": hashlib.sha256(model).hexdigest()[:12]}
+    body = stored_archive(source, model=model)
+    expected = await hass.async_add_executor_job(planner.plan_dashboard_restore, body, "recovered")
+    key, path = expected.layouts[0]["target_key"], expected.target_dashboard["url_path"]
+    legacy = {"mode": "storage", "dashboards": {}, "resources": None, "yaml_dashboards": {}}
+    hass.data[LOVELACE_DATA] = legacy
+    before = await staged_files(hass, tmp_path)
+    client = await hass_client()
+    original = frontend_storage.async_user_store
+    loaded = []
+
+    async def user_store_with_changed_maps(actual, user_id):
+        result = await original(actual, user_id)
+        if not loaded:
+            field = "yaml_dashboards" if kind in ("yaml", "replace_yaml") else "dashboards"
+            if kind.startswith("replace_"):
+                legacy[field] = {path: None}
+            else:
+                legacy[field][path] = None
+            loaded.append(True)
+        return result
+
+    monkeypatch.setattr(frontend_storage, "async_user_store", user_store_with_changed_maps)
+    response = await client.post(URL + "/recovered", data=body, headers={"Content-Type": "application/zip"})
+    assert response.status == 409, await response.text()
+    result = await response.json()
+    assert loaded == [True] and result["error"] == "collision" and result["orphans"] == []
+    assert not hass.data[DOMAIN].contains(key)
+    assert await staged_files(hass, tmp_path) == before
+
+
+@pytest.mark.parametrize("kind", ["inactive", "admin", "token", "removed"])
+async def test_legacy_data_user_storage_await_rechecks_current_account_before_staging(
+    hass, restore_views, hass_client, hass_admin_user, hass_access_token, tmp_path, monkeypatch, kind,
+):
+    """Actual version-specific tuple/UserStore loading cannot outlive access."""
+    hass.data[LOVELACE_DATA] = {"mode": "storage", "dashboards": {}, "resources": None, "yaml_dashboards": {}}
+    body = stored_archive()
+    expected = await hass.async_add_executor_job(planner.plan_dashboard_restore, body, "recovered")
+    before = await staged_files(hass, tmp_path)
+    client = await hass_client()
+    original = frontend_storage.async_user_store
+    revoked = []
+
+    async def revoked_user_store(actual, user_id):
+        result = await original(actual, user_id)
+        if not revoked:
+            await revoke(hass, hass_admin_user, hass_access_token, kind)
+            revoked.append(True)
+        return result
+
+    monkeypatch.setattr(frontend_storage, "async_user_store", revoked_user_store)
+    response = await client.post(URL + "/recovered", data=body, headers={"Content-Type": "application/zip"})
+    assert response.status == 401, await response.text()
+    result = await response.json()
+    assert revoked == [True] and result["error"] == "auth" and result["orphans"] == []
+    assert not hass.data[DOMAIN].contains(expected.layouts[0]["target_key"])
     assert await staged_files(hass, tmp_path) == before
 
 
@@ -394,7 +472,8 @@ async def test_real_executor_revocation_returns_new_model_orphan_and_no_shared_w
         key = result["orphans"][0]["target_key"]
         assert hass.data[DOMAIN].get(key) is None
         assert await hass.async_add_executor_job(model_path(hass, key).read_bytes) == model
-        assert hass.data[LOVELACE_DATA].dashboards == {}
+        data = hass.data[LOVELACE_DATA]
+        assert (data["dashboards"] if type(data) is dict else data.dashboards) == {}
     finally:
         await finish_request(task, release)
 

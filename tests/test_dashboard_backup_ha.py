@@ -21,8 +21,8 @@ import pytest
 from homeassistant.components import http as http_component
 from homeassistant.components.http import auth as http_auth
 from homeassistant.components.http import const as http_const
-from homeassistant.components.lovelace import LovelaceData
-from homeassistant.components.lovelace.const import LOVELACE_DATA
+from homeassistant.components import lovelace as lovelace_component
+from homeassistant.components.lovelace.const import DOMAIN as LOVELACE_DATA
 from homeassistant.components.lovelace.dashboard import LovelaceStorage, LovelaceYAML
 from homeassistant.setup import async_setup_component
 
@@ -225,14 +225,16 @@ async def test_current_shared_original_model_and_published_licensed_pack_are_col
     assert await configuration_files(hass, tmp_path) == before
 
 
+@pytest.mark.parametrize("legacy_data", [False, True])
 async def test_owned_lovelace_default_mode_and_resources_resolve_without_browser_guess(
-    hass, backup_views, hass_client,
+    hass, backup_views, hass_client, legacy_data,
 ):
     # Use actual HA source classes, never fake mode properties or inferred URLs.
     default = LovelaceStorage(hass, None)
     named_yaml = LovelaceYAML(hass, "lovelace", {"filename": "ui-lovelace.yaml"})
-    hass.data[LOVELACE_DATA] = LovelaceData(resource_mode="storage", dashboards={None: default, "lovelace": named_yaml},
-        resources=None, yaml_dashboards={})
+    parts = {"dashboards": {None: default, "lovelace": named_yaml}, "resources": None, "yaml_dashboards": {}}
+    data_type = getattr(lovelace_component, "LovelaceData", None)
+    hass.data[LOVELACE_DATA] = {"mode": "storage", **parts} if legacy_data or data_type is None else data_type(resource_mode="storage", **parts)
     client = await hass_client()
     value = payload()
     value["source"].update(url_path=None, mode=None)

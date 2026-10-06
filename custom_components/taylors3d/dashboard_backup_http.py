@@ -66,6 +66,21 @@ def _fail(code: str, message: str, path: str = "") -> None:
     raise BackupHTTPError(code, message, path)
 
 
+def lovelace_data_key(constants: Any) -> str:
+    """Use HA's exported registry identity, including its older DOMAIN key."""
+    key = constants.LOVELACE_DATA if hasattr(constants, "LOVELACE_DATA") else getattr(constants, "DOMAIN", None)
+    if not isinstance(key, str) or not key:
+        _fail("platform_unavailable", "Actual Lovelace registry identity is unavailable.")
+    return key
+
+
+def lovelace_field(data: Any, field: str) -> Any:
+    """Read the exact live legacy dict or modern LovelaceData field."""
+    if type(data) is dict:
+        return data.get("mode" if field == "resource_mode" else field)
+    return getattr(data, field, None)
+
+
 def _encode(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
 
@@ -412,9 +427,11 @@ def source_modes(data: Any, payload: dict) -> dict:
             path.encode("utf-8")
         except UnicodeError:
             _fail("source_path", "The selected dashboard path must be valid Unicode.", "source.url_path")
-    dashboards = getattr(data, "dashboards", {})
+    dashboards = {} if data is None else lovelace_field(data, "dashboards")
+    if type(dashboards) is not dict:
+        _fail("platform_unavailable", "Actual Lovelace dashboard registry cannot be checked.")
     selected = (dashboards.get("lovelace") or dashboards.get(None)) if path is None else dashboards.get(path)
-    return {"mode": getattr(selected, "mode", None), "resource_mode": getattr(data, "resource_mode", None)}
+    return {"mode": getattr(selected, "mode", None), "resource_mode": lovelace_field(data, "resource_mode")}
 
 
 @dataclass
@@ -453,8 +470,9 @@ async def async_register_dashboard_backup(hass: Any) -> dict:
     from aiohttp import web
     from homeassistant.components.http import HomeAssistantView, require_admin
     from homeassistant.components.http import const as http_const
-    from homeassistant.components.lovelace.const import LOVELACE_DATA
+    from homeassistant.components.lovelace import const as lovelace_const
     from .model import KEY_RE, model_path
+    data_key = lovelace_data_key(lovelace_const)
 
     def auth(request, admin):
         return AuthFence(hass, request, admin=admin, user_key=http_const.KEY_HASS_USER,
@@ -488,7 +506,7 @@ async def async_register_dashboard_backup(hass: Any) -> dict:
             _fail("body_size", "Request body exceeds its endpoint byte budget.")
 
     def owned_source(payload):
-        return source_modes(hass.data.get(LOVELACE_DATA), payload)
+        return source_modes(hass.data.get(data_key), payload)
 
     class ExportView(HomeAssistantView):
         url = URL + "/export"

@@ -47,7 +47,7 @@ from typing import Any, Callable
 
 from .const import DOMAIN
 from .dashboard_backup import DashboardBackupError, MAX_ARCHIVE_BYTES, MAX_JSON_BYTES, MAX_MANIFEST_BYTES
-from .dashboard_backup_http import AuthFence, BackupHTTPError, read_owned_model
+from .dashboard_backup_http import AuthFence, BackupHTTPError, lovelace_data_key, lovelace_field, read_owned_model
 from .dashboard_restore import DashboardRestoreError, DashboardRestorePlan, plan_dashboard_restore
 from .furniture import DATA_FURNITURE, FurnitureLibrary, FurnitureStorageError
 
@@ -94,6 +94,28 @@ def panel_exists(hass: Any, frontend: Any, path: str) -> bool:
     if type(panels) is not dict:
         _fail("platform_unavailable", "Actual frontend panel registry cannot be checked.")
     return path in panels
+
+
+def dashboard_maps(data: Any) -> tuple[dict, dict]:
+    """Read current actual dashboard namespaces without copying or guessing."""
+    dashboards = lovelace_field(data, "dashboards")
+    yaml_dashboards = lovelace_field(data, "yaml_dashboards")
+    if type(dashboards) is not dict or type(yaml_dashboards) is not dict:
+        _fail("platform_unavailable", "Actual Lovelace dashboard data is unavailable; namespace absence cannot be proven.")
+    return dashboards, yaml_dashboards
+
+
+def user_storage_data(store: Any) -> dict:
+    """Read HA's loaded UserStore or legacy (Store, data) result only."""
+    if type(store) is tuple:
+        if len(store) != 2 or not callable(getattr(store[0], "async_save", None)):
+            _fail("platform_unavailable", "Actual legacy per-user frontend storage cannot be checked.")
+        data = store[1]
+    else:
+        data = getattr(store, "data", None)
+    if type(data) is not dict:
+        _fail("platform_unavailable", "Actual per-user frontend storage cannot be checked.")
+    return data
 
 
 def _encode(value: Any) -> bytes:
@@ -431,10 +453,11 @@ async def async_register_dashboard_restore(hass: Any) -> dict:
     from homeassistant.components.http import HomeAssistantView, require_admin
     from homeassistant.components.http import const as http_const
     from homeassistant.components import frontend
-    from homeassistant.components.frontend.storage import async_user_store
-    from homeassistant.components.lovelace.const import LOVELACE_DATA
+    from homeassistant.components.frontend import storage as frontend_storage
+    from homeassistant.components.lovelace import const as lovelace_const
     from . import LayoutStore
     from .model import model_path
+    data_key = lovelace_data_key(lovelace_const)
 
     def fence_for(request):
         return AuthFence(hass, request, admin=True, user_key=http_const.KEY_HASS_USER,
@@ -444,11 +467,8 @@ async def async_register_dashboard_restore(hass: Any) -> dict:
 
     async def platform_check(plan, check):
         await check()
-        data = hass.data.get(LOVELACE_DATA)
-        dashboards = getattr(data, "dashboards", None)
-        yaml_dashboards = getattr(data, "yaml_dashboards", None)
-        if type(dashboards) is not dict or type(yaml_dashboards) is not dict:
-            _fail("platform_unavailable", "Actual Lovelace dashboard data is unavailable; namespace absence cannot be proven.")
+        data = hass.data.get(data_key)
+        dashboards, yaml_dashboards = dashboard_maps(data)
         path = plan.target_dashboard["url_path"]
         if path in dashboards or path in yaml_dashboards or panel_exists(hass, frontend, path):
             _fail("collision", "The new dashboard address is already in use.", "dashboard")
@@ -460,13 +480,14 @@ async def async_register_dashboard_restore(hass: Any) -> dict:
         for user in users:
             if not isinstance(user.id, str) or not user.id.strip():
                 _fail("platform_unavailable", "Actual user-storage identity is unavailable.")
-            store = await async_user_store(hass, user.id)
+            store = await frontend_storage.async_user_store(hass, user.id)
             await check()
-            if type(store.data) is not dict:
-                _fail("platform_unavailable", "Actual per-user frontend storage cannot be checked.")
-            if any(key in store.data for key in keys):
+            if any(key in user_storage_data(store) for key in keys):
                 _fail("collision", "A new target has an existing per-user Taylor fallback. Choose a fresh namespace.", "user_data")
-        if hass.data.get(LOVELACE_DATA) is not data or path in dashboards or path in yaml_dashboards or panel_exists(hass, frontend, path):
+        if hass.data.get(data_key) is not data:
+            _fail("collision", "Dashboard namespace changed during collision checking.", "dashboard")
+        current_dashboards, current_yaml = dashboard_maps(data)
+        if current_dashboards is not dashboards or current_yaml is not yaml_dashboards or path in current_dashboards or path in current_yaml or panel_exists(hass, frontend, path):
             _fail("collision", "Dashboard namespace changed during collision checking.", "dashboard")
         return {"dashboard": "absent_at_check", "user_fallbacks": "all_current_users_absent_at_check",
                 "browser": "not_read;unchanged_and_shadowed_by_populated_shared_layouts", "transaction": False}
