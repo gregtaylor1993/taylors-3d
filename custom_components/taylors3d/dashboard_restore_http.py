@@ -71,6 +71,31 @@ def _fail(code: str, message: str, path: str = "") -> None:
     raise RestoreHTTPError(code, message, path)
 
 
+def panel_exists(hass: Any, frontend: Any, path: str) -> bool:
+    """Read current HA panels across both supported frontend API versions.
+
+    HA 2026.2 keeps its live registry under DATA_PANELS; the newer public
+    async_panel_exists helper uses the same membership check. Read rather than
+    create the registry, and never mistake a malformed/null occupied slot for
+    an unused address. Unknown API shapes cannot prove safe staging.
+    """
+    if hasattr(frontend, "async_panel_exists"):
+        exists = frontend.async_panel_exists
+        if not callable(exists):
+            _fail("platform_unavailable", "Actual frontend panel existence API cannot be checked.")
+        present = exists(hass, path)
+        if type(present) is not bool:
+            _fail("platform_unavailable", "Actual frontend panel existence API returned an unknown result.")
+        return present
+    key = getattr(frontend, "DATA_PANELS", None)
+    if not isinstance(key, str) or not key:
+        _fail("platform_unavailable", "Actual frontend panel registry identity is unavailable.")
+    panels = hass.data.get(key, {})
+    if type(panels) is not dict:
+        _fail("platform_unavailable", "Actual frontend panel registry cannot be checked.")
+    return path in panels
+
+
 def _encode(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
 
@@ -405,7 +430,7 @@ async def async_register_dashboard_restore(hass: Any) -> dict:
     from aiohttp import web
     from homeassistant.components.http import HomeAssistantView, require_admin
     from homeassistant.components.http import const as http_const
-    from homeassistant.components.frontend import async_panel_exists
+    from homeassistant.components import frontend
     from homeassistant.components.frontend.storage import async_user_store
     from homeassistant.components.lovelace.const import LOVELACE_DATA
     from . import LayoutStore
@@ -425,7 +450,7 @@ async def async_register_dashboard_restore(hass: Any) -> dict:
         if type(dashboards) is not dict or type(yaml_dashboards) is not dict:
             _fail("platform_unavailable", "Actual Lovelace dashboard data is unavailable; namespace absence cannot be proven.")
         path = plan.target_dashboard["url_path"]
-        if path in dashboards or path in yaml_dashboards or async_panel_exists(hass, path):
+        if path in dashboards or path in yaml_dashboards or panel_exists(hass, frontend, path):
             _fail("collision", "The new dashboard address is already in use.", "dashboard")
         users = await hass.auth.async_get_users()
         await check()
@@ -441,7 +466,7 @@ async def async_register_dashboard_restore(hass: Any) -> dict:
                 _fail("platform_unavailable", "Actual per-user frontend storage cannot be checked.")
             if any(key in store.data for key in keys):
                 _fail("collision", "A new target has an existing per-user Taylor fallback. Choose a fresh namespace.", "user_data")
-        if hass.data.get(LOVELACE_DATA) is not data or path in dashboards or path in yaml_dashboards or async_panel_exists(hass, path):
+        if hass.data.get(LOVELACE_DATA) is not data or path in dashboards or path in yaml_dashboards or panel_exists(hass, frontend, path):
             _fail("collision", "Dashboard namespace changed during collision checking.", "dashboard")
         return {"dashboard": "absent_at_check", "user_fallbacks": "all_current_users_absent_at_check",
                 "browser": "not_read;unchanged_and_shadowed_by_populated_shared_layouts", "transaction": False}

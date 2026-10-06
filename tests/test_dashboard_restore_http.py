@@ -87,6 +87,72 @@ class Content:
         return value
 
 
+class PanelCompatibilityTest(unittest.TestCase):
+    def test_current_public_api_is_used_without_reading_legacy_registry(self):
+        hass = Hass()
+        calls = []
+        frontend = types.SimpleNamespace(async_panel_exists=lambda actual, path: calls.append((actual, path)) or True)
+        self.assertTrue(adapter.panel_exists(hass, frontend, "occupied"))
+        self.assertEqual(calls, [(hass, "occupied")])
+        frontend.async_panel_exists = lambda _actual, _path: False
+        self.assertFalse(adapter.panel_exists(hass, frontend, "fresh"))
+        self.assertEqual(hass.data, {})
+
+    def test_legacy_registry_membership_includes_null_and_false_entries(self):
+        hass = Hass()
+        registry = {"null": None, "false": False, "panel": object()}
+        hass.data["actual_registry"] = registry
+        frontend = types.SimpleNamespace(DATA_PANELS="actual_registry")
+        for path in registry:
+            with self.subTest(path=path):
+                self.assertTrue(adapter.panel_exists(hass, frontend, path))
+        self.assertFalse(adapter.panel_exists(hass, frontend, "fresh"))
+        self.assertIs(hass.data["actual_registry"], registry)
+
+    def test_legacy_uninitialised_registry_matches_ha_absence_without_creating_it(self):
+        hass = Hass()
+        frontend = types.SimpleNamespace(DATA_PANELS="actual_registry")
+        self.assertFalse(adapter.panel_exists(hass, frontend, "fresh"))
+        self.assertEqual(hass.data, {})
+
+    def test_legacy_collision_reader_uses_latest_registry_each_time(self):
+        hass = Hass()
+        frontend = types.SimpleNamespace(DATA_PANELS="actual_registry")
+        self.assertFalse(adapter.panel_exists(hass, frontend, "new"))
+        hass.data[frontend.DATA_PANELS] = {"new": None}
+        self.assertTrue(adapter.panel_exists(hass, frontend, "new"))
+        hass.data[frontend.DATA_PANELS] = {}
+        self.assertFalse(adapter.panel_exists(hass, frontend, "new"))
+
+    def test_unknown_or_malformed_legacy_registry_fails_closed(self):
+        hass = Hass()
+        for frontend in (types.SimpleNamespace(), types.SimpleNamespace(DATA_PANELS=None),
+                         types.SimpleNamespace(DATA_PANELS=[])):
+            with self.subTest(frontend=frontend), self.assertRaises(adapter.RestoreHTTPError) as caught:
+                adapter.panel_exists(hass, frontend, "fresh")
+            self.assertEqual(caught.exception.code, "platform_unavailable")
+        frontend = types.SimpleNamespace(DATA_PANELS="actual_registry")
+        for value in (None, [], "fresh", False):
+            hass.data[frontend.DATA_PANELS] = value
+            with self.subTest(value=value), self.assertRaises(adapter.RestoreHTTPError) as caught:
+                adapter.panel_exists(hass, frontend, "fresh")
+            self.assertEqual(caught.exception.code, "platform_unavailable")
+
+    def test_nonboolean_or_noncallable_new_api_fails_closed_without_fallback(self):
+        hass = Hass()
+        frontend = types.SimpleNamespace(DATA_PANELS="actual_registry")
+        for value in (None, False, 0, "function"):
+            frontend.async_panel_exists = value
+            with self.subTest(value=value), self.assertRaises(adapter.RestoreHTTPError) as caught:
+                adapter.panel_exists(hass, frontend, "fresh")
+            self.assertEqual(caught.exception.code, "platform_unavailable")
+        for value in (None, 0, 1, [], "absent"):
+            frontend.async_panel_exists = lambda _hass, _path: value
+            with self.subTest(value=value), self.assertRaises(adapter.RestoreHTTPError) as caught:
+                adapter.panel_exists(hass, frontend, "fresh")
+            self.assertEqual(caught.exception.code, "platform_unavailable")
+
+
 class RestoreArgumentsTest(unittest.TestCase):
     def test_strict_namespace_and_explicit_query(self):
         self.assertFalse(adapter.stage_arguments("r", {}))

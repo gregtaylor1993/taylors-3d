@@ -173,7 +173,7 @@ async def test_actual_stores_publish_exact_original_assets_and_new_shared_layout
     assert hass.data[DOMAIN].get(key) == source
     assert hass.data[DOMAIN].get("old") == old
     assert hass.data[LOVELACE_DATA].dashboards == dashboards
-    assert not frontend.async_panel_exists(hass, expected.target_dashboard["url_path"])
+    assert expected.target_dashboard["url_path"] not in hass.data.get(frontend.DATA_PANELS, {})
     assert await hass.async_add_executor_job(model_path(hass, key).read_bytes) == original_model
     assert await hass.async_add_executor_job(hass.data[furniture.DATA_FURNITURE].archive, pack_id) == original_pack
     # Public delayed persistence is eventually tested, not promised on response.
@@ -186,9 +186,9 @@ async def test_actual_stores_publish_exact_original_assets_and_new_shared_layout
     assert response.headers["Cache-Control"] == "private, no-store"
 
 
-@pytest.mark.parametrize("kind", ["shared", "shared_null", "model", "user_false", "user_null", "panel", "dashboard", "yaml"])
+@pytest.mark.parametrize("kind", ["shared", "shared_null", "model", "user_false", "user_null", "panel", "legacy_panel", "dashboard", "yaml"])
 async def test_real_collision_prevents_new_assets_and_old_values_remain(
-    hass, restore_views, hass_client, hass_admin_user, tmp_path, kind,
+    hass, restore_views, hass_client, hass_admin_user, tmp_path, monkeypatch, kind,
 ):
     body = stored_archive()
     expected = await hass.async_add_executor_job(planner.plan_dashboard_restore, body, "recovered")
@@ -206,7 +206,9 @@ async def test_real_collision_prevents_new_assets_and_old_values_remain(
         other = await hass.auth.async_create_user("Another actual user")
         user_store = await async_user_store(hass, other.id)
         await user_store.async_set_item("taylors3d_" + key, False if kind == "user_false" else None)
-    elif kind == "panel":
+    elif kind in ("panel", "legacy_panel"):
+        if kind == "legacy_panel":
+            monkeypatch.delattr(frontend, "async_panel_exists", raising=False)
         frontend.async_register_built_in_panel(hass, "history", frontend_url_path=path)
     elif kind == "dashboard":
         hass.data[LOVELACE_DATA].dashboards[path] = object()  # identity presence only; not a fake loader/writer
@@ -218,6 +220,39 @@ async def test_real_collision_prevents_new_assets_and_old_values_remain(
     assert response.status == 409, await response.text()
     result = await response.json()
     assert result["error"] == "collision" and result["orphans"] == []
+    assert await staged_files(hass, tmp_path) == before
+
+
+async def test_legacy_panel_added_during_awaited_user_lookup_blocks_all_staging(
+    hass, restore_views, hass_client, tmp_path, monkeypatch,
+):
+    """Recheck the real legacy registry after await, before new asset writes."""
+    model = glb()
+    source = layout()
+    source["model"] = {"version": hashlib.sha256(model).hexdigest()[:12]}
+    body = stored_archive(source, model=model)
+    expected = await hass.async_add_executor_job(planner.plan_dashboard_restore, body, "recovered")
+    key, path = expected.layouts[0]["target_key"], expected.target_dashboard["url_path"]
+    before = await staged_files(hass, tmp_path)
+    original = hass.auth.async_get_users
+    looked_up = []
+    client = await hass_client()
+
+    async def users_with_new_panel(_auth):
+        users = await original()
+        frontend.async_register_built_in_panel(hass, "history", frontend_url_path=path)
+        looked_up.append(True)
+        return users
+
+    monkeypatch.delattr(frontend, "async_panel_exists", raising=False)
+    monkeypatch.setattr(type(hass.auth), "async_get_users", users_with_new_panel)
+    response = await client.post(URL + "/recovered", data=body, headers={"Content-Type": "application/zip"})
+    assert response.status == 409, await response.text()
+    result = await response.json()
+    assert looked_up == [True]
+    assert result["error"] == "collision" and result["orphans"] == []
+    assert path in hass.data[frontend.DATA_PANELS]
+    assert not hass.data[DOMAIN].contains(key)
     assert await staged_files(hass, tmp_path) == before
 
 
@@ -261,7 +296,12 @@ async def test_incomplete_missing_layout_is_blocked_even_with_explicit_partial_o
     assert (await response.json())["error"] == "browser_fallback_unverifiable"
 
 
-async def test_candidate_public_existence_api_accepts_fresh_populated_shared_stage(hass, restore_views, hass_client):
+@pytest.mark.parametrize("legacy_frontend", [False, True])
+async def test_candidate_public_existence_api_accepts_fresh_populated_shared_stage(
+    hass, restore_views, hass_client, monkeypatch, legacy_frontend,
+):
+    if legacy_frontend:
+        monkeypatch.delattr(frontend, "async_panel_exists", raising=False)
     assert hass.data[DOMAIN].contains("old")
     assert not hass.data[DOMAIN].contains("missing")
     client = await hass_client()

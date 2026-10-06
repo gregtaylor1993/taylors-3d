@@ -239,7 +239,7 @@ async def test_real_export_inspect_stage_preserves_full_raw_dashboard_model_lice
     assert result["staging"]["layouts_persistence"] == "scheduled_not_durable"
     assert result["staging"]["dashboard_created"] is False and result["staging"]["resources_installed"] is False
     assert data.dashboards == dashboards_before and data.resources.async_items() == resources_before
-    assert not frontend.async_panel_exists(hass, target)
+    assert target not in hass.data.get(frontend.DATA_PANELS, {})
     assert await default.async_load(True) == dashboard
     expected_dashboard = copy.deepcopy(dashboard)
     expected_dashboard["views"][0]["sections"][0]["cards"][0]["card"]["layout_key"] = key
@@ -314,7 +314,7 @@ async def test_actual_setup_rechecks_current_account_during_model_stage(
         orphan = result["orphans"][0]
         assert orphan["kind"] == "model" and not hass.data[DOMAIN].contains(orphan["target_key"])
         assert await hass.async_add_executor_job(model_path(hass, orphan["target_key"]).read_bytes) == model
-        assert not frontend.async_panel_exists(hass, "taylors3d-restore-recovered")
+        assert "taylors3d-restore-recovered" not in hass.data.get(frontend.DATA_PANELS, {})
     finally:
         release.set()
         if not task.done():
