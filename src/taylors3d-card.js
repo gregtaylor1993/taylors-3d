@@ -61,7 +61,7 @@ import { floorPresentationContext } from './floor-presentation-context.js';
 import { displayPlanPosition, displayFloorFootprint, displayLocatedRecords, displayCameraAnchors,
   translateFloorCamera } from './floor-presentation-adapters.js';
 
-const VERSION = '0.4.0';
+const VERSION = '0.4.0-beta.1';
 const NONE = Object.freeze({}); // stable stand-in for a missing layout.objects / groups (binding cache key)
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LONG_PRESS_MS = 500;

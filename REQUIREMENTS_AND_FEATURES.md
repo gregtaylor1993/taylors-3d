@@ -1,5 +1,20 @@
 # Taylor's 3D — requirements and features
 
+## 7 October 2026: 0.4.0-beta.1 testing package
+
+Taylor requested an installable package of the newest source. Version metadata
+now identifies `0.4.0-beta.1` consistently in npm, its lockfile, the integration
+manifest and the frontend. Hyphenated release tags are published as GitHub
+prereleases so the older stable release is not silently replaced. The
+[testing release guide](docs/TESTING-RELEASE.md) covers HACS version selection,
+manual ZIP installation and actual household checks.
+
+The beta contains the UI from commit `6a241b8`, with no new device behaviour.
+The broader GitHub browser suite for that commit was not fully green. Some
+expectations describe the old layout/colours, while dragging, very short mobile
+panels and Tracking editor flows remain unverified. These limits are stated in
+the testing guide; a published package is not a claim of stable household readiness.
+
 ## 7 October 2026: approved room overview, House menu and search
 
 Taylor asked to implement the three final-review recommendations, test them and

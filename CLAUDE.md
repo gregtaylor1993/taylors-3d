@@ -7,6 +7,11 @@ position and map overlay.
 
 ## Current 0.4.0 development scope
 
+The installable testing version is `0.4.0-beta.1`; see
+[the testing release guide](docs/TESTING-RELEASE.md). This packages the existing
+UI with aligned version metadata. Hyphenated tags publish as prereleases; the
+broader browser CI limits and household acceptance remain open.
+
 Taylor approved the three recommendations from the
 [final design review](docs/FINAL-DESIGN-REVIEW.md): room-first marker display,
 configurable built-in House navigation and search. They are now implemented in
