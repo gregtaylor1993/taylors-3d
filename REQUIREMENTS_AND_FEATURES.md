@@ -15,6 +15,17 @@ expectations describe the old layout/colours, while dragging, very short mobile
 panels and Tracking editor flows remain unverified. These limits are stated in
 the testing guide; a published package is not a claim of stable household readiness.
 
+**Package verification:** exact tag `v0.4.0-beta.1` at `21c1462`; release workflow
+passed all 6,813 JavaScript tests in 212 files, matching version checks, build and
+bundle freshness. The frontend SHA-256 is
+`3a83174729d85f3c7920ef82defe650e35e4071e543491d10c1df36e4886cc92`.
+The independent manual ZIP has 20 byte-verified files, no enclosing folder, and
+SHA-256 `ec89a660826a3ec0a1d430c230a59381ff434bf7ee2e95824cc306aeb1abf4cb`.
+GitHub's release-creation endpoint repeatedly returned HTTP 500; the release
+workflow therefore failed only at publication. No beta release/assets are
+currently available in HACS. Taylor can test with the supplied verified manual
+ZIP while publication remains unavailable. Stable v0.1.0 remains unchanged.
+
 ## 7 October 2026: approved room overview, House menu and search
 
 Taylor asked to implement the three final-review recommendations, test them and

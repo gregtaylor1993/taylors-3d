@@ -8,10 +8,11 @@ For entity choices, missing floors and saved-link warnings, see the
 Original project by Ingus Stals / istals. This independent copy is maintained by Taylor.
 
 **Current testing package: v0.4.0-beta.1.** It contains the newest glass UI,
-room overview, menus and search. Choose that beta explicitly in HACS, or download
-its `taylors3d.zip` asset. The [testing release guide](docs/TESTING-RELEASE.md)
-gives installation steps and the outstanding browser-check limits. The stable
-v0.1.0 release remains a separate older checkpoint.
+room overview, menus and search. The verified manual ZIP is ready, but GitHub
+returned server errors while creating its release, so the beta is not yet
+available in HACS. Use the supplied testing ZIP and the manual steps in the
+[testing release guide](docs/TESTING-RELEASE.md). The stable v0.1.0 release
+remains a separate older checkpoint.
 
 The features below describe this source version. Use a matching verified release,
 or build the source yourself: an older HACS release can contain fewer features.
@@ -222,10 +223,11 @@ house model, Home Assistant and wall panel is tracked in [the feature log](REQUI
 
 ## Install
 
-The stable checkpoint is **v0.1.0**. To evaluate the newest UI, select the
-**v0.4.0-beta.1** testing release explicitly in HACS or use its `taylors3d.zip`
-asset. See the [testing release guide](docs/TESTING-RELEASE.md) for installation
-and known testing limits. A local build alone does not upload a release to HACS.
+The stable checkpoint is **v0.1.0**. To evaluate the newest UI, use the supplied
+**v0.4.0-beta.1** manual testing ZIP. Its GitHub asset publication is currently
+blocked by server errors. Once published, select that beta explicitly in HACS.
+See the [testing release guide](docs/TESTING-RELEASE.md) for installation and known
+testing limits. A local build alone does not upload a release to HACS.
 
 The repository is a Home Assistant integration that also serves the card, so one install
 covers both. The integration stores the layout and makes it available to all users.
