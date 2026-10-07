@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // F14 native source/bundle checks against an explicitly authored simulated GLB.
 // One existing renderer, actual GPU pixels and native wall selection. No fake
 // application clock, forced render, injected light or guessed wall-name mapping.
@@ -41,6 +42,7 @@ async function ready(page) {
   }
 }
 async function control(page, selector, run) {
+  await revealEditorTab(page, selector);
   context = 'native ' + selector;
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {

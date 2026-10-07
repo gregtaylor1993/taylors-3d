@@ -35,6 +35,7 @@ import { FurnitureEditor } from './furniture-editor.js';
 import { FurnitureDrag } from './furniture-drag.js';
 import { DashboardBackupEditor } from './dashboard-backup-editor.js';
 import { entityChoices, registryIssues } from './entity-metadata.js';
+import { EditorNavigation, editorTabs } from './editor-navigation.js';
 
 const DENSE_TRIS = 150000;
 
@@ -95,6 +96,7 @@ export class EditMode {
       onCancelPrepare: () => card.finishWallSelectionPreparation?.(),
     });
     this.tab = 'rooms';
+    this._navigation = new EditorNavigation(this);
     this.selectedRoom = null;
     this.selectedMarker = null;
     this.drawing = null; // { areaId, floorId, points, cursor }
@@ -114,18 +116,31 @@ export class EditMode {
     this.panel.addEventListener('click', (e) => this._onPanelClick(e));
     this.panel.addEventListener('change', (e) => this._onPanelChange(e));
     this.panel.addEventListener('input', (e) => this._onPanelInput(e));
+    this.panel.addEventListener('toggle', (event) => {
+      if (!event.target.matches?.('[data-editor-advanced]')) return;
+      const group = event.target.dataset.group;
+      if (event.target.open) this._navigation.advanced.add(group); else this._navigation.advanced.delete(group);
+    }, true);
     // rebuilding the panel under a dragged slider would drop the drag: hold renders until release
     this.panel.addEventListener('pointerdown', (e) => {
+      this._navigation.press(e.target.closest?.('[data-act]'));
       if (e.target.type === 'range') { this._sliderKeyboard = false; this._beginSlider(); }
     });
     this._onSliderRelease = () => this._endSlider();
     const sliderKey = (e) => e.target.type === 'range' && /^(Arrow(Left|Right|Up|Down)|Page(Up|Down)|Home|End)$/.test(e.key);
     this.panel.addEventListener('keydown', (e) => {
+      if (!e.repeat && (e.key === ' ' || e.key === 'Enter')) this._navigation.press(e.target.closest?.('[data-act]'));
+      if (e.key === 'Escape') this._navigation.cancelPress(e.target.closest?.('[data-act]'));
+      const upload = e.target.closest?.('[data-setup-upload]');
+      if (upload && !e.repeat && (e.key === ' ' || e.key === 'Enter') && upload.getAttribute('aria-disabled') !== 'true') {
+        e.preventDefault(); upload.querySelector('input[type="file"]')?.click();
+      }
       if (sliderKey(e) && !e.ctrlKey && !e.metaKey && !e.altKey) { this._sliderKeyboard = true; this._beginSlider(); }
     });
     this.panel.addEventListener('keyup', (e) => { if (sliderKey(e)) this._endSlider(); });
+    this.panel.addEventListener('pointercancel', (e) => this._navigation.cancelPress(e.target.closest?.('[data-act]')));
     this.panel.addEventListener('change', (e) => { if (e.target.type === 'range' && !this._sliderKeyboard) this._endSlider(); });
-    this.panel.addEventListener('focusout', (e) => { if (e.target.type === 'range') this._endSlider(); });
+    this.panel.addEventListener('focusout', (e) => { this._navigation.cancelPress(e.target.closest?.('[data-act]')); if (e.target.type === 'range') this._endSlider(); });
     this._onKey = (e) => this._onKeyDown(e);
     this._onWinMove = (e) => this._dragMove(e);
     this._onWinUp = (e) => this._dragEnd(e);
@@ -173,6 +188,7 @@ export class EditMode {
   enter() {
     this.attach();
     this.view.setStems(true);
+    this._navigation.enter();
     this.render();
     this.refreshOverlay();
     this._syncStageClasses();
@@ -180,6 +196,7 @@ export class EditMode {
 
   // card detached while editing / attached again: window listeners off / on (state kept)
   detach() {
+    this._navigation.cancel();
     this._backupDetached = true;
     this._dashboardBackupEditor.setActive(false);
     this._furnitureDrag.cancel();
@@ -255,6 +272,11 @@ export class EditMode {
 
   // called by the card after every rebuild
   afterUpdate() {
+    try { return this._afterUpdate(); } finally { this.card._syncFeedback?.(); }
+  }
+
+  _afterUpdate() {
+    this._navigation.update(this.panel);
     const positionCommit = this._modelPositionCommit;
     this._modelPositionCommit = null;
     this._syncOwnedLabels();
@@ -362,9 +384,12 @@ export class EditMode {
 
   setSaveState(s) {
     this.saveState = s;
+    this._navigation.update(this.panel);
     const el = this.panel.querySelector('.save-state');
     if (el) el.textContent = this._saveText();
     else this.render();
+    // Root owns the exact save token; this notification only refreshes drafts.
+    this.card._syncFeedback?.();
   }
 
   _beginSlider() {
@@ -389,6 +414,8 @@ export class EditMode {
 
   // Key changes/reloads discard transient tools before another layout can receive their results.
   cancelHistoryGestures() {
+    this._navigation.cancel();
+    this._assetRequest = null;
     this._dashboardBackupEditor.reset();
     this._roomActionsEditor.reset();
     this._customControlsEditor.reset();
@@ -930,6 +957,11 @@ export class EditMode {
 
   // live values in the Mower tab, without re-rendering the panel
   onStates() {
+    try { return this._onStates(); } finally { this.card._syncFeedback?.(); }
+  }
+
+  _onStates() {
+    this._navigation.update(this.panel);
     this._syncOwnedLabels();
     this._roomActionsEditor.observe();
     this._customControlsEditor.observe();
@@ -1340,6 +1372,7 @@ export class EditMode {
     for (const button of this.panel.querySelectorAll('.tabs [data-act="tab"]')) button.textContent = localize(this.hass, `edit.tabs.${button.dataset.id}`, {}, button.textContent);
     this.panel.querySelector('.history-controls')?.setAttribute('aria-label', localize(this.hass, 'history.aria'));
     this.updateHistoryState();
+    this._navigation.update(this.panel);
     const state = this.panel.querySelector('.save-state'), backend = this.panel.querySelector('.storage-backend');
     if (state) state.textContent = this._saveText();
     if (backend) backend.textContent = this._backendLabel();
@@ -1354,6 +1387,13 @@ export class EditMode {
   }
 
   render() {
+    // One feedback boundary also covers stable-subtree/slider early returns.
+    // It runs only after the constructed editor has finished its own update.
+    try { return this._render(); } finally { this.card._syncFeedback?.(); }
+  }
+
+  _render() {
+    this._navigation.observe();
     this._dashboardBackupEditor.setActive(!this._backupDetached && this.card._editing === true && this.tab === 'data');
     if (this.tab === 'house' && this.card._config?.layout_style !== 'house') {
       this._houseSummaryEditor.reset(); this.tab = 'rooms';
@@ -1392,6 +1432,8 @@ export class EditMode {
     const focusKey = active && active.dataset && active.dataset.field ? [active.dataset.field, active.dataset.id || ''] : null;
     const sceneFocus = active?.dataset?.field?.startsWith('scene-preview-') ? [active.dataset.binding || '', active.dataset.target || ''] : null;
     const historyFocus = active?.dataset?.act?.startsWith('history-') ? active.dataset.act : null;
+    const navigationFocus = active?.closest?.('[data-editor-navigation], [data-editor-advanced], [data-editor-setup]')
+      ? [active.dataset.act || '', active.dataset.id || '', active.matches?.('summary') === true] : null;
     const report = this.panel.querySelector('details.report');
     if (report) this._reportOpen = report.open;
     const adv = this.panel.querySelector('details.advanced');
@@ -1399,7 +1441,7 @@ export class EditMode {
     this._renderedTab = this.tab;
     const hasObjects = this._hasObjects();
     if (this.tab === 'objects' && !hasObjects) this.tab = 'devices';
-    const tabs = [['rooms', 'Rooms'], ['devices', 'Devices'], ...(hasObjects ? [['objects', 'Objects']] : []), ['overlays', 'Overlays'], ['cameras', 'Cameras'], ['tracking', 'Tracking'], ['security', 'Security'], ['environment', 'Environment'], ['scenes', 'Scenes'], ['idle', 'Idle'], ['mower', 'Mower'], ['views', 'Views'], ['controls', 'Buttons and bars'], ['model', 'Model'], ['furniture', 'Furniture'], ...(this.card._config?.layout_style === 'house' ? [['house', 'House']] : []), ['data', 'Data']];
+    const tabs = editorTabs({ hasObjects, houseStyle: this.card._config?.layout_style === 'house' });
     const body = {
       rooms: () => this._roomsTab(), devices: () => this._devicesTab(), objects: () => this._objectsTab(), mower: () => this._mowerTab(), views: () => this._viewsTab(),
       model: () => this._modelTab(), data: () => this._dataTab(),
@@ -1413,16 +1455,17 @@ export class EditMode {
       idle: () => this._ambientIdleEditor.render(),
       house: () => this._houseSummaryEditor.render(),
       furniture: () => `<p><button data-act="library-refresh">${this._coreCaption('libraryRefresh')}</button></p>${this._furnitureEditor.render()}${this._furnitureLibraryDetails()}`,
+      setup: () => '',
     }[this.tab]();
     const msg = this.message ? `<div class="msg ${this.message.error ? 'error' : this.message.warn ? 'warn' : ''}">${esc(this._messageText())}</div>` : '';
     this.panel.innerHTML = `
-      <div class="tabs">${tabs.map(([id, label]) => `<button data-act="tab" data-id="${id}" class="${this.tab === id ? 'on' : ''}">${esc(localize(this.hass, `edit.tabs.${id}`, {}, label))}</button>`).join('')}</div>
+      ${this._navigation.renderTabs(tabs)}
       <div class="row history-controls" role="group" aria-label="${esc(localize(this.hass, 'history.aria'))}" style="padding: 4px 12px">
         <button data-act="history-undo" style="min-height: 44px" disabled>${esc(localize(this.hass, 'history.undo'))}</button>
         <button data-act="history-redo" style="min-height: 44px" disabled>${esc(localize(this.hass, 'history.redo'))}</button>
         <span class="dim" style="font-size: 11px">Ctrl / ⌘ Z</span>
       </div>
-      <div class="tab-body">${msg}${body}</div>
+      <div class="tab-body">${msg}${this._navigation.renderGuide()}${this._navigation.renderAdvanced(tabs)}${body}</div>
       <div class="foot"><span class="save-state">${this._saveText()}</span><span class="storage-backend">${esc(this._backendLabel())}</span></div>`;
     markCoreCaptions(this.panel, this.tab);
     this._syncOwnedLabels(true);
@@ -1449,8 +1492,28 @@ export class EditMode {
       const button = this.panel.querySelector(`[data-act="${historyFocus}"]`);
       const target = button.disabled ? this.panel.querySelector('.history-controls button:not(:disabled)') : button;
       target?.focus({ preventScroll: true });
+    } else if (navigationFocus) {
+      const target = navigationFocus[2] ? this.panel.querySelector('[data-editor-advanced] summary')
+        : [...this.panel.querySelectorAll('[data-editor-navigation] [data-act], [data-editor-advanced] [data-act], [data-editor-setup] [data-act]')]
+          .find((node) => node.dataset.act === navigationFocus[0] && (node.dataset.id || '') === navigationFocus[1] && !node.hidden);
+      if (target && !target.disabled) target.focus({ preventScroll: true });
     }
   }
+
+  // Normal tab selection still runs all existing tool/draft cleanup. This also
+  // gives grouped navigation and browser regression helpers one stable entry.
+  revealTab(tab, { guided = false } = {}) {
+    if (!editorTabs({ hasObjects: this._hasObjects(), houseStyle: this.card._config?.layout_style === 'house' }).some(([id]) => id === tab)) return false;
+    if (!guided) this._navigation.wizard = false;
+    this._navigation.reveal(tab);
+    const target = this.panel.querySelector(`[data-act="tab"][data-id="${tab}"]`);
+    if (target) this._onPanelClick({ target });
+    return !!target;
+  }
+
+  setupSnapshot() { return this._navigation.snapshot(); }
+  setupSaveCurrent(token) { return this._navigation.current(token); }
+  observeSetupContext() { this._navigation.update(this.panel); }
 
   _backendLabel() {
     return localize(this.hass, `edit.storage.${this.card._store.backend}`);
@@ -2440,13 +2503,28 @@ export class EditMode {
     return `/api/taylors3d/model/${encodeURIComponent(this.card._config.layout_key)}`;
   }
 
+  _assetContext() {
+    this._navigation.observe();
+    const card = this.card, hass = this.hass, user = hass.user;
+    return [this._generation, this._navigation._epoch, card._config, card._config?.layout_key, card._config?.model, this.layout?.model?.version,
+      this.view?.model?.root, hass.connection, hass.connection?.connected, hass.auth, user?.id, user?.is_admin, user?.is_active,
+      card._editing, card.isConnected, card._loading];
+  }
+
+  _assetRequestCurrent(request) {
+    const current = this._assetContext();
+    return this._assetRequest === request && this._navigation.canEdit()
+      && request.context.every((value, index) => value === current[index]);
+  }
+
   async _uploadModel(file) {
-    const generation = this._generation, key = this.card._config.layout_key;
+    if (!this._navigation.canEdit() || this.uploading) return;
     if (!/\.glb$/i.test(file.name)) {
       this.message = this._coreNotice('glbNotice', {}, { error: true });
       this.render();
       return;
     }
+    const request = { context: this._assetContext() }; this._assetRequest = request;
     this.uploading = file.name;
     this.message = null;
     this.render();
@@ -2455,7 +2533,7 @@ export class EditMode {
       body.append('file', file, file.name);
       const r = await this.hass.fetchWithAuth(this._modelApi(), { method: 'POST', body });
       const j = await r.json().catch(() => ({}));
-      if (!this._sameContext(generation, key)) return;
+      if (!this._assetRequestCurrent(request)) return;
       if (!r.ok) throw new Error(j.message || 'Upload failed (HTTP ' + r.status + ')');
       const cur = this.layout.model || { position: [0, 0, 0], rotation: 0, scale: 1, opacity: 1 };
       this._freshModel = true;
@@ -2463,34 +2541,36 @@ export class EditMode {
       this.commit({ ...this.layout, model: { ...cur, version: j.version, name: j.name, size: j.size, uploaded: new Date().toISOString() } });
       this.card.resetHistory?.(); // replaced GLB bytes cannot be restored by a configuration snapshot
     } catch (err) {
-      if (!this._sameContext(generation, key)) return;
+      if (!this._assetRequestCurrent(request)) return;
       this._freshModel = false;
       this.message = { text: err.message, error: true };
     } finally {
-      if (this._sameContext(generation, key)) { this.uploading = null; this.render(); }
+      if (this._assetRequest === request) { this._assetRequest = null; this.uploading = null; this.render(); }
     }
   }
 
   async _removeModel() {
-    const generation = this._generation, key = this.card._config.layout_key;
+    if (!this._navigation.canEdit() || this.uploading) return;
+    const request = { context: this._assetContext() }; this._assetRequest = request;
     try {
       const r = await this.hass.fetchWithAuth(this._modelApi(), { method: 'DELETE' });
-      if (!this._sameContext(generation, key)) return;
+      if (!this._assetRequestCurrent(request)) return;
       if (!r.ok && r.status !== 404) throw new Error('Delete failed (HTTP ' + r.status + ')');
       this.confirmModelDelete = false;
       this.commit({ ...this.layout, model: null });
       this.card.resetHistory?.(); // deleting an asset is outside configuration undo
     } catch (err) {
-      if (!this._sameContext(generation, key)) return;
+      if (!this._assetRequestCurrent(request)) return;
       this.message = { text: err.message, error: true };
     }
-    this.render();
+    if (this._assetRequest === request) { this._assetRequest = null; this.render(); }
   }
 
   _modelTab() {
     const c = this.card._config;
     // Display settings work independently of the model upload/storage route.
-    const rendering = this._modelRenderingEditor.render() + this._wallPresentationEditor.render() + this._floorPresentationEditor.render();
+    const rendering = this._navigation.wizard && this._navigation.step < 2 ? ''
+      : this._modelRenderingEditor.render() + this._wallPresentationEditor.render() + this._floorPresentationEditor.render();
     if (c.model) {
       return rendering + `<p class="note warn">${this._coreCaption('urlModel')}<b>${esc(c.model)}</b>${this._coreCaption('urlModelHelp')}</p>`
         + this._modelBindingsHtml();
@@ -2503,7 +2583,7 @@ export class EditMode {
     }
     const m = this.layout.model;
     let out = rendering + `<p class="hint">${this._coreCaption('modelIntro')}<code>fp</code>${this._coreCaption('modelTagHelp')}<a href="https://github.com/gregtaylor1993/taylors-3d/blob/main/docs/model-builder-guide.md" target="_blank" rel="noopener">docs/model-builder-guide.md</a>${this._coreCaption('modelIntroEnd')}</p>
-      <div class="row"><label class="button ${this.uploading ? 'disabled' : 'primary'}">${this._coreCaption(this.uploading ? 'uploading' : m ? 'replaceModel' : 'uploadModel', { name: this.uploading })}
+      <div class="row"><label class="button ${this.uploading ? 'disabled' : 'primary'}" data-setup-upload tabindex="${this.uploading ? '-1' : '0'}" role="button" aria-disabled="${!!this.uploading}">${this._coreCaption(this.uploading ? 'uploading' : m ? 'replaceModel' : 'uploadModel', { name: this.uploading })}
       <input type="file" accept=".glb,model/gltf-binary" data-field="model-file" hidden ${this.uploading ? 'disabled' : ''}></label></div>`;
     if (!m) return out;
 
@@ -2641,8 +2721,13 @@ export class EditMode {
   }
 
   _onPanelClick(e) {
+    try { return this._applyPanelClick(e); } finally { this.card._syncFeedback?.(); }
+  }
+
+  _applyPanelClick(e) {
     const btn = e.target.closest('[data-act]');
     if (!btn || btn.disabled) return;
+    if (this._navigation.onClick(btn)) return;
     const id = btn.dataset.id;
     if (this._dashboardBackupEditor.onClick(btn.dataset.act, btn)) return;
     if (this._roomActionsEditor.onClick(btn.dataset.act, btn)) return;
@@ -2678,6 +2763,7 @@ export class EditMode {
       case 'history-undo': this._runHistory('undo'); return;
       case 'history-redo': this._runHistory('redo'); return;
       case 'tab':
+        this._navigation.reveal(id);
         if (this.tab === 'rooms' && id !== 'rooms') this._roomActionsEditor.reset();
         if (this.tab === 'controls' && id !== 'controls') this._customControlsEditor.reset();
         if (id === 'house' && this.card._config?.layout_style !== 'house') return;
@@ -2846,6 +2932,11 @@ export class EditMode {
   }
 
   _onPanelChange(e) {
+    try { return this._applyPanelChange(e); } finally { this.card._syncFeedback?.(); }
+  }
+
+  _applyPanelChange(e) {
+    if (this._navigation.onChange(e.target.dataset.field, e.target)) return;
     const el = e.target;
     const f = el.dataset.field;
     if (this._dashboardBackupEditor.onChange(f, el)) return;
@@ -3006,6 +3097,10 @@ export class EditMode {
 
   // sliders update the overlay live, without re-rendering the panel under the pointer
   _onPanelInput(e) {
+    try { return this._applyPanelInput(e); } finally { this.card._syncFeedback?.(); }
+  }
+
+  _applyPanelInput(e) {
     const el = e.target;
     if (el.type === 'range') this._beginSlider();
     const f = el.dataset.field;

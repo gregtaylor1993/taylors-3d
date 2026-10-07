@@ -48,7 +48,7 @@ export class ScenePreviewBar {
     this.status = node('p'); this.status.dataset.scenePreviewStatus = ''; this.status.setAttribute('role', 'status'); this.status.setAttribute('aria-live', 'polite');
     this.el.append(style, heading, this.note, this.items, this.status); host.append(this.el);
     this._handlers = new Map([
-      ['pointerenter', (event) => this._over(event)], ['pointerleave', (event) => this._out(event)],
+      ['pointermove', (event) => this._move(event)], ['pointerleave', (event) => this._out(event)],
       ['pointerdown', (event) => this._press(event)], ['pointerup', (event) => this._release(event)],
       ['pointercancel', (event) => this._cancel(event)], ['keydown', (event) => this._key(event)],
       ['keyup', (event) => this._release(event)], ['focusout', (event) => this._blur(event)],
@@ -194,8 +194,19 @@ export class ScenePreviewBar {
     else this._message = result?.diagnostics?.length ? { diagnostics: result.diagnostics } : { key: 'unavailable' };
     this.update();
   }
-  _over(event) {
-    const button = this._buttonFor(event); if (!button || button.dataset.sceneAction !== 'preview' || button.contains(event.relatedTarget) || event.pointerType !== 'mouse') return;
+  _move(event) {
+    const button = this._buttonFor(event);
+    // Chrome emits boundary entry when a rebuilt control moves underneath a
+    // stationary pointer. That is not a fresh request to preview a new model.
+    // Only actual unheld mouse motion may start hover; clicks still pin below.
+    if (!button || button.dataset.sceneAction !== 'preview' || event.pointerType !== 'mouse' || event.buttons !== 0
+      || !Number.isFinite(event.movementX) || !Number.isFinite(event.movementY)
+      || event.movementX === 0 && event.movementY === 0) return;
+    const token = this._hover.get(button);
+    if (token && token === this._ownedToken) {
+      this.controller?.revalidate();
+      if (this.controller?.active?.token === token) return;
+    }
     this._preview(button, false);
   }
   _out(event) {

@@ -130,9 +130,11 @@ describe('configuration history', () => {
 const editors = [];
 function makeEditor() {
   const card = {
+    isConnected: true, _editing: true, _loading: false,
     _config: { layout_key: 'default' },
     _layout: { version: 1, floors: [], rooms: [], pins: {}, hidden: [], mower: { overlay: { entity: 'image.map', x: 0, y: 0, opacity: 0.6 } } },
-    _hass: { states: {}, areas: {}, floors: {}, callService: vi.fn() },
+    _hass: { user: { id: 'current-admin', is_active: true, is_admin: true }, connection: { connected: true },
+      states: {}, areas: {}, floors: {}, callService: vi.fn() },
     _floors: [{ id: 'ground', name: 'Ground', elevation: 0, height: 2.7 }],
     _view: { model: null, setControlsEnabled: vi.fn(), highlightModelNode: vi.fn() },
     _store: { backend: 'browser' }, _history: new EditHistory(),

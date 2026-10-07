@@ -36,6 +36,49 @@ function press(target, values = {}) { pointer(target, 'pointerdown', values); po
 beforeEach(() => { visibility = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false); });
 afterEach(() => { for (const { view, host } of instances.splice(0)) { view.dispose(); host.remove(); } vi.restoreAllMocks(); });
 
+describe('compact favourites and honest visibility', () => {
+  const dock = () => barData('evening', Array.from({ length: 7 }, (_, index) => buttonData(`b${index}`, { pinned: index < 4 })), { dock: { limit: 4 } });
+  it('shows deliberate favourites and native More without automatically pinning or calling an action', () => {
+    const f = fixture([dock()]), more = f.view.el.querySelector('[data-custom-controls-more]');
+    expect([...f.view.el.querySelectorAll('[data-custom-controls-button-id]')].filter((node) => !node.parentElement.hidden).map((node) => node.dataset.customControlsButtonId)).toEqual(['b0', 'b1', 'b2', 'b3']);
+    expect(more.textContent).toBe('More (3)'); expect(more.getAttribute('aria-expanded')).toBe('false'); click(more);
+    expect([...f.view.el.querySelectorAll('[data-custom-controls-button-id]')].filter((node) => !node.parentElement.hidden)).toHaveLength(7);
+    expect(more.getAttribute('aria-expanded')).toBe('true'); expect(f.callback).not.toHaveBeenCalled(); click(more); expect(f.button('b4').parentElement.hidden).toBe(true);
+    expect(f.callback).not.toHaveBeenCalled();
+  });
+  it('allows an accessible hidden overflow action only after More and closes on Escape with focus returned', () => {
+    const f = fixture([dock()]), more = f.view.el.querySelector('[data-custom-controls-more]'); click(f.button('b4')); expect(f.callback).not.toHaveBeenCalled();
+    click(more); click(f.button('b4')); expect(f.callback).toHaveBeenCalledExactlyOnceWith('evening', 'b4');
+    key(f.button('b5'), 'keydown', 'Escape'); expect(more.getAttribute('aria-expanded')).toBe('false'); expect(document.activeElement).toBe(more);
+  });
+  it('retains stable nodes and open More through unrelated readings, but closes on source/session context change', () => {
+    const f = fixture([dock()]), more = f.view.el.querySelector('[data-custom-controls-more]'), row = f.button('b4'); click(more); f.view.update();
+    expect(f.button('b4')).toBe(row); expect(more.getAttribute('aria-expanded')).toBe('true');
+    pointer(row, 'pointerdown'); f.context.contextKey = 'new-session'; f.view.update(); pointer(row, 'pointerup'); click(row, 1);
+    expect(more.getAttribute('aria-expanded')).toBe('false'); expect(f.callback).not.toHaveBeenCalled();
+  });
+  it('omits all dock DOM for legacy bars and restores it when explicitly enabled', () => {
+    const f = fixture(); expect(f.view.el.querySelector('[data-custom-controls-more]')).toBeNull(); const native = f.button();
+    f.context.bars[0].dock = { limit: 5 }; f.view.update(); expect(f.view.el.querySelector('[data-custom-controls-more]')).not.toBeNull(); expect(f.button()).toBe(native);
+    delete f.context.bars[0].dock; f.view.update(); expect(f.view.el.querySelector('[data-custom-controls-more]')).toBeNull(); expect(f.button()).toBe(native);
+  });
+  it('hides false conditions while keeping unknown or missing sources visibly disabled', () => {
+    const f = fixture([barData('evening', [buttonData('false', { visible: false, conditionStatus: 'false', available: false, issueCode: 'condition_false' }),
+      buttonData('unknown', { visible: true, conditionStatus: 'unknown', available: false, issueCode: 'condition_unknown' }),
+      buttonData('missing', { visible: true, conditionStatus: 'missing', available: false, issueCode: 'condition_missing' })])]);
+    expect(f.button('false').parentElement.hidden).toBe(true); expect(f.button('unknown').parentElement.hidden).toBe(false); expect(f.button('unknown').disabled).toBe(true);
+    expect(f.status('unknown').textContent).toContain('known current state'); expect(f.status('missing').textContent).toContain('missing');
+    click(f.button('false')); click(f.button('unknown')); click(f.button('missing')); expect(f.callback).not.toHaveBeenCalled();
+  });
+  it('keeps zero-height hosts when every conditional action is false', () => {
+    const f = fixture([barData('only', [buttonData('one', { visible: false, available: false, issueCode: 'condition_false' })])]); expect(f.view.el.hidden).toBe(true);
+    f.context.bars[0].buttons[0].visible = true; f.view.update(); expect(f.view.el.hidden).toBe(false);
+  });
+  it.each([null, { limit: '4' }, { limit: 6 }])('rejects malformed resolved dock %j rather than inventing favourites', (dock) => {
+    const f = fixture([barData('bad', [buttonData()], { dock })]); expect(f.view.el.hidden).toBe(true); expect(f.callback).not.toHaveBeenCalled();
+  });
+});
+
 describe('safe resolved controls and native accessibility', () => {
   it('shows only supplied bars and safe text, with exact owner IDs and no action on render', () => {
     const label = '<img src=x onerror="alert(1)">';

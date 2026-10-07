@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // F17 native source/bundle regression. All registry names and readings here are
 // simulated; controls, GLB parsing, root action guards and rendering are real.
 import fs from 'node:fs';
@@ -24,6 +25,7 @@ async function ready(page) {
   await settle(page);
 }
 async function control(page, selector, callback) {
+  await revealEditorTab(page, selector);
   context = 'native control ' + selector;
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {

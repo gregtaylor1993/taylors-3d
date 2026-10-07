@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { openDemo, root } from './lib/demo-browser.mjs';
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 
 const { page, errors, close } = await openDemo({}, { width: 1280, height: 920 });
 const checks = [];
@@ -13,6 +14,7 @@ const check = (name, pass, detail) => {
 const settle = () => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 const ready = () => page.waitForFunction(() => document.querySelector('taylors3d-card')._devicePopup.cameraFeed.status === 'ready');
 async function click(selector) {
+  await revealEditorTab(page, selector);
   const button = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {
     const element = button.asElement();

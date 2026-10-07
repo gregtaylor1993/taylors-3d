@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // F13: simulated wall-panel idle mode on the actual card and its one renderer.
 // Browser time, native RAF and HA observations stay real. The isolated cadence
 // proof instantiates only the pure policy controller; it never alters app time.
@@ -68,6 +69,7 @@ async function ready(page) {
   }
 }
 async function control(page, selector, callback) {
+  await revealEditorTab(page, selector);
   context = 'UI ' + selector;
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {

@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // Real Chrome controls and pointer gestures against both unbundled source and the release bundle.
 // All robot observations are labelled fixtures; this never contacts HA or invents a route.
 // Run only after the current source has been built. CHROME_PATH may be required.
@@ -32,6 +33,7 @@ async function cameraSettled(page) {
   });
 }
 async function control(page, selector, action) {
+  await revealEditorTab(page, selector);
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {
     const element = handle.asElement();

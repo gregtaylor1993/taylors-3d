@@ -1,5 +1,6 @@
-import { entityMetadata } from './entity-metadata.js';
-import { localize } from './localization.js';
+import { entityMetadata, formatEntityValue } from './entity-metadata.js';
+import { localize, localeInfo } from './localization.js';
+import roomSheetCaptions from './translations/room-sheet.js';
 
 export const ROOM_SUMMARY_LIMITS = Object.freeze({ entities: 512 });
 const INVALID = Symbol('invalid field');
@@ -111,4 +112,50 @@ export function buildRoomSummary(options = {}) {
   if (out.media.unknown) text += ` · ${localize(hass, 'room.mediaUnknown', { count: out.media.unknown })}`;
   if (out.lights.groupsIncluded) text += ` · ${localize(hass, 'room.groupsIncluded')}`;
   return { available: true, text, ...out };
+}
+
+// Compact room readings keep each source and its unit separate. In particular,
+// two thermometers are never averaged and a climate target is never presented
+// as the measured room temperature. Names are source text, not inferred rooms.
+export function buildRoomOverview(options = {}) {
+  const empty = { available:false,temperatures:[],media:[] };
+  const summary = buildRoomSummary(options); if (!summary.available) return empty;
+  const hass = field(options,'hass'), ids = field(options,'entityIds'), states = field(hass,'states');
+  const entities = own(hass,'entities') ? field(hass,'entities') : {}, devices = own(hass,'devices') ? field(hass,'devices') : {};
+  const out = { available:true,temperatures:[],media:[] }, seen = new Set();
+  const sourceText = (value) => typeof value === 'string' && value.length <= 512 && value.trim() ? value : null;
+  const safeName = (id,registry,attr) => sourceText(registry && field(registry,'name')) || sourceText(field(attr,'friendly_name')) || id;
+  for (let index = 0; index < ids.length; index++) {
+    const id = field(ids,String(index)); if (seen.has(id)) continue; seen.add(id);
+    const current = currentEntity(states,entities,devices,id); if (!current) continue;
+    const source = field(states,id), attr = field(source,'attributes') || {}, registry = field(entities,id), domain = id.split('.')[0];
+    const name = safeName(id,registry,attr);
+    if (domain === 'media_player') {
+      const title = sourceText(field(attr,'media_title'));
+      const rawState = field(source,'state'), key = `roomSheet.state.${rawState}`;
+      const fallback = (roomSheetCaptions[localeInfo(hass).resolved] || roomSheetCaptions.en)[key] || roomSheetCaptions.en[key] || rawState;
+      out.media.push({ entityId:id,name,value:[localize(hass,key,{},fallback),title].filter(Boolean).join(' · ') });
+      continue;
+    }
+    const sensor = domain === 'sensor' && field(attr,'device_class') === 'temperature', climate = domain === 'climate';
+    if (!sensor && !climate) continue;
+    if (['unknown','unavailable'].includes(current.value)) continue;
+    const raw = sensor ? field(source,'state') : field(attr,'current_temperature');
+    const number = typeof raw === 'number' ? raw : typeof raw === 'string' && /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(raw) ? Number(raw) : NaN;
+    if (!Number.isFinite(number)) continue;
+    let unit = climate ? sourceText(field(attr,'temperature_unit')) || field(attr,'unit_of_measurement') : field(attr,'unit_of_measurement');
+    if (climate && !sourceText(unit)) {
+      const config = field(hass,'config'), system = plain(config) ? field(config,'unit_system') : undefined;
+      unit = plain(system) ? field(system,'temperature') : undefined;
+    }
+    if (!sourceText(unit)) continue;
+    // Restrict the shared formatter to owned scalar source data. Arbitrary
+    // source attributes/getters and HA action/formatter callbacks stay outside.
+    const precision = registry && field(registry,'display_precision');
+    const formatted = formatEntityValue({ locale:field(hass,'locale'),language:field(hass,'language'),
+      states:{[id]:{state:typeof raw === 'string' ? raw : String(number),attributes:{unit_of_measurement:unit}}},
+      entities:{[id]:Number.isInteger(precision) && precision >= 0 && precision <= 100 ? {display_precision:precision} : {}},devices:{} },id);
+    out.temperatures.push({ entityId:id,name,value:formatted });
+  }
+  return out;
 }

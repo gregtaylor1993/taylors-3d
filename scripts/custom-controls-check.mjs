@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // Native Chrome source/bundle proof. HA data, service replies and persistence are
 // explicit simulations; the real card, editor, popup, renderer and input run here.
 import fs from 'node:fs';
@@ -45,6 +46,7 @@ function fixtureData(fixture) {
 }
 
 async function control(page, selector, operation) {
+  await revealEditorTab(page, selector);
   context = `native control ${selector}`;
   const object = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {
@@ -65,10 +67,15 @@ const choose = (page, selector, value) => control(page, selector, async (node) =
   if (!await node.evaluate((select, value) => [...select.options].some((entry) => entry.value === value && !entry.disabled), value)) throw Error(`Unavailable exact option ${selector}: ${value}`);
   await node.focus(); await node.select(value);
 });
-const type = (page, selector, value, blur = true) => control(page, selector, async (node) => {
+const type = async (page, selector, value, blur = true) => {
+  const closed = await page.evaluate((selector) => { const node = document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), picker = node?.closest('.cc-icon-picker');
+    return picker && !picker.open ? `[data-cc-button-row="${picker.closest('[data-cc-button-row]').dataset.ccButtonRow}"] .cc-icon-picker>summary` : null; }, selector);
+  if (closed) await click(page, closed);
+  return control(page, selector, async (node) => {
   await node.focus(); await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
   await page.keyboard.press('Backspace'); await page.keyboard.type(value); if (blur) await page.keyboard.press('Tab');
-});
+  });
+};
 const snapshot = (page) => page.evaluate(() => {
   const card = document.querySelector('taylors3d-card'), fixture = window.roomActionsFixture, editor = card._edit?._customControlsEditor;
   return { calls: structuredClone(fixture.calls), infos: [...fixture.infos], commits: fixture.commits,

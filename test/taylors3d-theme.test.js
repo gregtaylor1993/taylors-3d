@@ -45,7 +45,7 @@ describe('opt-in theme stylesheet', () => {
   it('keeps Home Assistant variables intact, with no external resources or generated household text', () => {
     const tree = parse(TAYLORS3D_THEME_CSS), customProperties = [], resources = [], content = [];
     walk(tree, { enter(node) {
-      if (node.type === 'Declaration' && node.property.startsWith('--')) customProperties.push(node.property);
+      if (node.type === 'Declaration' && node.property.startsWith('--') && node.property !== '--mdc-icon-size') customProperties.push(node.property);
       if (node.type === 'Url') resources.push(node.value);
       if (node.type === 'Atrule' && ['import', 'font-face'].includes(node.name)) resources.push(node.name);
       if (node.type === 'Declaration' && node.property === 'content') content.push(generate(node.value));
@@ -53,6 +53,24 @@ describe('opt-in theme stylesheet', () => {
     expect(customProperties.length).toBeGreaterThan(20);
     expect(customProperties.every((property) => property.startsWith('--taylors3d-'))).toBe(true);
     expect(resources).toEqual([]); expect(content).toEqual([]);
+  });
+  it('sizes only the owned marker icon without overriding Home Assistant globally', () => {
+    const tree = parse(TAYLORS3D_THEME_CSS), native = [];
+    walk(tree, { visit: 'Rule', enter(node) {
+      for (const entry of node.block.children) if (entry.type === 'Declaration' && entry.property === '--mdc-icon-size') native.push({ selector: generate(node.prelude), value: generate(entry.value) });
+    } });
+    expect(native).toEqual([{ selector: ':host([data-taylors3d-theme="house"]) .fp-marker .fp-dot', value: '22px' }]);
+  });
+  it('keeps room labels backed and disabled controls readable without changing their native disabled state', () => {
+    const tree = parse(TAYLORS3D_THEME_CSS), properties = (selectorEnd) => {
+      const found = [];
+      walk(tree, { visit: 'Rule', enter(node) {
+        if (generate(node.prelude).endsWith(selectorEnd)) for (const entry of node.block.children) if (entry.type === 'Declaration') found.push([entry.property, generate(entry.value)]);
+      } }); return Object.fromEntries(found);
+    };
+    expect(properties('.fp-room-label')).toMatchObject({ background: 'var(--taylors3d-ui-surface)', opacity: '1' });
+    expect(properties(':disabled')).toMatchObject({ opacity: '1', color: 'var(--taylors3d-ui-muted)', 'border-style': 'dashed', cursor: 'default' });
+    expect(properties('.fp-marker .fp-dot')).toMatchObject({ width: '44px', height: '44px', 'box-sizing': 'border-box' });
   });
   it('leaves native hidden flags stronger than decorative flex/grid layout', () => {
     const tree = parse(TAYLORS3D_THEME_CSS), hidden = [];

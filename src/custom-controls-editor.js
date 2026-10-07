@@ -1,6 +1,7 @@
 // Visual draft builder. Only Save writes shared layout; previews never dispatch actions.
 import { CUSTOM_CONTROL_LIMITS, CUSTOM_CONTROL_COLORS, CUSTOM_CONTROL_ACTIONS, readCustomControls,
-  customControlAvailability, replaceCustomBars, moveCustomBar, moveCustomButton } from './custom-controls.js';
+  customControlAvailability, customControlVisibility, replaceCustomBars, moveCustomBar, moveCustomButton } from './custom-controls.js';
+import { CUSTOM_CONTROL_ICONS, searchCustomControlIcons } from './custom-controls-icons.js';
 import { CustomControlsDrag } from './custom-controls-drag.js';
 import { entityChoices } from './entity-metadata.js';
 import { inspectSourceValue } from './imported-source-controls.js';
@@ -49,7 +50,8 @@ export class CustomControlsEditor {
     this.dirty = false; this.stale = false; this._root = null; this._intents = new WeakMap(); this._pressed = new Map();
     this._handlers = new Map([['pointerdown', (event) => this._press(event)], ['pointerup', (event) => this._release(event)],
       ['pointercancel', (event) => this._release(event, true)], ['keydown', (event) => this._keyDown(event)],
-      ['keyup', (event) => this._release(event)], ['focusout', (event) => this._cancelFocus(event)]]);
+      ['keyup', (event) => this._release(event)], ['focusout', (event) => this._cancelFocus(event)],
+      ['toggle', (event) => { if (event.target.matches?.('.cc-icon-picker') && event.target.open) this.updatePreviews(this._root); }]]);
   }
   get hass() { return this.card._hass || {}; }
   get effective() { return Object.hasOwn(this.card._layout || {}, 'custom_controls') ? field(this.card._layout, 'custom_controls') : field(this.card._config, 'custom_controls'); }
@@ -86,10 +88,14 @@ export class CustomControlsEditor {
     const config = this.card._config || {}, layout = this.card._layout || {}, user = this.hass.user, actions = [];
     for (const settings of [this.effective, this.draft]) {
       // Core reads own values only; imported accessors are never evaluated here.
-      for (const bar of readCustomControls(settings).bars) for (const button of bar.buttons) actions.push(button.action);
+      for (const bar of readCustomControls(settings).bars) for (const button of bar.buttons) {
+        actions.push(button.action); if (button.visibility) actions.push({ type: 'more-info', entity: button.visibility.entity });
+      }
     }
     // Include a partial new source after editing, even while the draft is not yet valid.
-    if (this._editable) for (const bar of this._bars()) for (const button of bar.buttons) actions.push(button.action);
+    if (this._editable) for (const bar of this._bars()) for (const button of bar.buttons) {
+      actions.push(button.action); if (button.visibility) actions.push({ type: 'more-info', entity: button.visibility.entity });
+    }
     return { connection: this.hass.connection, auth: this.hass.auth, root: this.card._view?.model?.root,
       pending: this.card._customControlsModelLoad?.promise,
       key: JSON.stringify([config.layout_key, config.model, config.model_position, config.model_rotation, config.model_scale,
@@ -111,7 +117,7 @@ export class CustomControlsEditor {
     const readable = inspectSourceValue(this.effective).readable, parsed = readCustomControls(this.effective);
     this.draft = readable ? this.effective === undefined ? { version: 1, bars: [] } : parsed.valid ? clone(this.effective) : this.effective : null;
     this._editable = readable && parsed.valid; this.baseDraft = stamp(this.draft); this.dirty = false; this.stale = false;
-    this.message = null; this.moveTargets = new Map(); this._loaded = true; this._epoch++; this.base = this._context();
+    this.message = null; this.moveTargets = new Map(); this.searches = new Map(); this.duplicateOrigins = new Map(); this._loaded = true; this._epoch++; this.base = this._context();
   }
   _ensure() {
     if (!this._loaded) this._load();
@@ -128,7 +134,11 @@ export class CustomControlsEditor {
   _issues() {
     const issues = [];
     if (!this.canEdit) issues.push('session'); if (this.stale) issues.push('stale');
-    if (!this._editable) issues.push('unsupported'); else if (!readCustomControls(this.draft).valid) issues.push('invalid');
+    if (!this._editable) issues.push('unsupported'); else {
+      const parsed = readCustomControls(this.draft); if (!parsed.valid) issues.push('invalid');
+      if (parsed.diagnostics.some((entry) => entry.code === 'pinned')) issues.push('pinLimit');
+      if (parsed.diagnostics.some((entry) => entry.code === 'condition')) issues.push('conditionRule');
+    }
     if (this._editable) {
       const before = readCustomControls(this.effective).bars;
       for (const bar of this._bars()) {
@@ -136,8 +146,10 @@ export class CustomControlsEditor {
         if (bar.placement === 'room' && (!saved || saved.placement !== bar.placement || saved.room_id !== bar.room_id)
           && !this._rooms().some((room) => room.id === bar.room_id)) issues.push('sourceLost');
         for (const button of bar.buttons) {
-          const old = before.flatMap((row) => row.buttons).find((row) => row.id === button.id);
+          const old = before.flatMap((row) => row.buttons).find((row) => row.id === button.id || row.id === this.duplicateOrigins.get(button.id));
           if ((!old || stamp(old.action) !== stamp(button.action)) && !this._availability(button.action).available) issues.push('sourceLost');
+          if (button.visibility && (!old || stamp(old.visibility) !== stamp(button.visibility))
+            && ['invalid', 'missing', 'unknown'].includes(customControlVisibility({ hass: this.hass, visibility: button.visibility }).conditionStatus)) issues.push('conditionLost');
         }
       }
     }
@@ -167,11 +179,33 @@ export class CustomControlsEditor {
     return entityChoices(safeHass, { domains: domains[action?.type] || [], selected: typeof action?.entity === 'string' ? action.entity : undefined,
       capability: (entry) => this._availability({ ...action, entity: entry.entityId }).available });
   }
-  _sourceOptions(action) {
-    const selected = action?.type === 'view' ? action.view_id : action?.entity, rows = this._choices(action);
+  _sourceOptions(action, query = '') {
+    const selected = action?.type === 'view' ? action.view_id : action?.entity, words = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+    const rows = this._choices(action).filter((row) => row.value === selected || words.every((word) => `${row.label} ${row.value}`.toLocaleLowerCase().includes(word)));
     if (selected && !rows.some((entry) => entry.value === selected)) rows.push({ value: selected, label: selected, selectable: false });
     return option('', this._t('choose'), selected || '') + rows.map((row) => option(row.value,
-      row.selectable ? row.label : this._t('missing', { name: row.label, id: row.value }), selected, !row.selectable)).join('');
+      row.selectable ? `${row.label}${row.label.includes(row.value) ? '' : ` (${row.value})`}` : this._t('missing', { name: row.label, id: row.value }), selected, !row.selectable)).join('');
+  }
+  _visibilityChoices(selected) { return this._choices({ type: 'more-info', entity: selected }).filter((row) => row.selectable || row.value === selected); }
+  _visibilityOptions(selected, query = '') {
+    const words = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean), rows = this._visibilityChoices(selected)
+      .filter((row) => row.value === selected || words.every((word) => `${row.label} ${row.value}`.toLocaleLowerCase().includes(word)));
+    if (selected && !rows.some((entry) => entry.value === selected)) rows.push({ value: selected, label: selected, selectable: false });
+    return option('', this._t('choose'), selected || '') + rows.map((row) => option(row.value,
+      row.selectable ? `${row.label} (${row.value})` : this._t('missing', { name: row.label, id: row.value }), selected, !row.selectable)).join('');
+  }
+  _search(id, kind) { return this.searches?.get(`${id}:${kind}`) || ''; }
+  _iconsHtml(bar, button) {
+    const results = searchCustomControlIcons(this._search(button.id, 'icon'));
+    return results.map((entry) => `<button type="button" data-act="${prefix}choose-icon" data-cc-icon="${entry.icon}" ${this._attrs(bar.id, button.id)}
+      aria-label="${esc(entry.icon)}" title="${esc(entry.icon)}" aria-pressed="${button.icon === entry.icon}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="${entry.path}"></path></svg><span>${esc(entry.name)}</span></button>`).join('')
+      || this._caption('noIcons', 'p');
+  }
+  _iconPicker(bar, button) {
+    return `<details class="cc-picker cc-icon-picker"><summary>${this._caption('chooseIcon')} <ha-icon icon="${esc(button.icon)}" aria-hidden="true"></ha-icon><span data-cc-icon-name="${button.id}">${esc(button.icon)}</span></summary>
+      ${this._control('icon-search', 'searchIcons', this._search(button.id, 'icon'), { bar: bar.id, button: button.id, type: 'search' })}
+      <div class="cc-icon-grid" data-cc-icon-grid="${button.id}"></div>
+      ${this._control('icon', 'icon', button.icon, { bar: bar.id, button: button.id, maxlength: CUSTOM_CONTROL_LIMITS.icon })}${this._caption('iconHint', 'p')}</details>`;
   }
   _roomOptions(selected) {
     const rooms = this._rooms(); return option('', this._t('choose'), selected || '')
@@ -189,13 +223,20 @@ export class CustomControlsEditor {
     return `<div data-cc-button-row="${esc(button.id)}" class="cc-button-row">
       <div class="cc-row-heading">${this._handle('button', bar.id, button.id)}<span data-cc-preview-name="${esc(button.id)}">${esc(button.label)}</span></div>
       <div class="cc-fields">${this._control('button-label', 'buttonName', button.label, { ...opts, maxlength: CUSTOM_CONTROL_LIMITS.label })}
-      ${this._control('icon', 'icon', button.icon, { ...opts, maxlength: CUSTOM_CONTROL_LIMITS.icon })}
       ${this._control('color', 'color', button.color, { ...opts, select: this._namedOptions(CUSTOM_CONTROL_COLORS, button.color) })}
       ${this._control('action', 'action', action.type, { ...opts, select: this._namedOptions(CUSTOM_CONTROL_ACTIONS, action.type) })}
-      ${this._control('source', action.type === 'view' ? 'viewSource' : 'source', '', { ...opts, select: this._sourceOptions(action) })}</div>
-      ${this._caption('iconHint', 'p')}${action.type === 'automation' ? `<label class="cc-check"><input type="checkbox" data-field="${prefix}skip" ${this._attrs(bar.id, button.id)} ${action.skip_conditions === true ? 'checked' : ''}>${this._caption('skip')}</label>${this._caption('conditions', 'p')}` : ''}
+      ${this._control('source-search', 'searchSources', this._search(button.id, 'source'), { ...opts, type: 'search' })}
+      ${this._control('source', action.type === 'view' ? 'viewSource' : 'source', '', { ...opts, select: this._sourceOptions(action, this._search(button.id, 'source')) })}</div>
+      ${this._iconPicker(bar, button)}${action.type === 'automation' ? `<label class="cc-check"><input type="checkbox" data-field="${prefix}skip" ${this._attrs(bar.id, button.id)} ${action.skip_conditions === true ? 'checked' : ''}>${this._caption('skip')}</label>${this._caption('conditions', 'p')}` : ''}
+      ${bar.dock ? `<label class="cc-check"><input type="checkbox" data-field="${prefix}pinned" ${this._attrs(bar.id, button.id)} ${button.pinned === true ? 'checked' : ''}>${this._caption('pin')}</label>` : ''}
+      ${button.starter === 'return-vacuum' && action.type === 'script' ? this._caption('returnHint', 'p') : ''}
+      <details class="cc-picker"><summary>${this._caption('visibility')}</summary>
+      <label class="cc-check"><input type="checkbox" data-field="${prefix}conditional" ${this._attrs(bar.id, button.id)} ${button.visibility ? 'checked' : ''}>${this._caption('conditional')}</label>
+      ${button.visibility ? `<div class="cc-fields">${this._control('condition-search', 'searchSources', this._search(button.id, 'condition'), { ...opts, type: 'search' })}
+      ${this._control('condition-source', 'conditionSource', '', { ...opts, select: this._visibilityOptions(button.visibility.entity, this._search(button.id, 'condition')) })}
+      ${this._control('condition-state', 'conditionState', button.visibility.state, { ...opts, maxlength: 256 })}</div>${this._caption('conditionHint', 'p')}` : ''}</details>
       <p data-cc-source-status="${esc(button.id)}" role="status"></p>
-      <div class="cc-actions">${this._action('button-up', 'up', bar.id, button.id)}${this._action('button-down', 'down', bar.id, button.id)}${this._action('remove-button', 'removeButton', bar.id, button.id)}</div>
+      <div class="cc-actions">${this._action('button-up', 'up', bar.id, button.id)}${this._action('button-down', 'down', bar.id, button.id)}${this._action('duplicate', 'duplicate', bar.id, button.id)}${this._action('remove-button', 'removeButton', bar.id, button.id)}</div>
       <div class="cc-move">${this._control('move-to', 'moveTo', '', { ...opts, select: this._moveOptions(bar.id, button.id) })}${this._action('move', 'move', bar.id, button.id)}</div></div>`;
   }
   _barHtml(bar) {
@@ -205,10 +246,13 @@ export class CustomControlsEditor {
       ${this._control('placement', 'placement', bar.placement, { bar: bar.id, select: this._namedOptions(['bottom', 'room'], bar.placement) })}
       ${bar.placement === 'room' ? this._control('room', 'roomSource', bar.room_id, { bar: bar.id, select: this._roomOptions(bar.room_id) }) : ''}
       ${this._control('style', 'style', bar.style, { bar: bar.id, select: this._namedOptions(['pills', 'tiles'], bar.style) })}</div>
+      <label class="cc-check"><input type="checkbox" data-field="${prefix}compact" ${this._attrs(bar.id)} ${bar.dock ? 'checked' : ''}>${this._caption('compact')}</label>
+      ${bar.dock ? this._control('dock-limit', 'dockLimit', bar.dock.limit, { bar: bar.id, select: [4, 5].map((value) => option(value, value, bar.dock.limit)).join('') }) + this._caption('dockHint', 'p') : ''}
       ${this._caption('preview', 'p')}<div class="cc-preview" data-cc-preview="${esc(bar.id)}" data-cc-style="${bar.style}"></div>
       <div class="cc-actions">${this._action('bar-up', 'up', bar.id)}${this._action('bar-down', 'down', bar.id)}${this._action('remove-bar', 'removeBar', bar.id)}</div>
       <div data-cc-button-list>${bar.buttons.map((button) => this._buttonHtml(bar, button)).join('') || this._caption('emptyBar', 'p')}</div>
-      ${this._action('add-button', 'addButton', bar.id)}</article>`;
+      ${this._action('add-button', 'addButton', bar.id)}<details class="cc-picker"><summary>${this._caption('templates')}</summary>
+      <div class="cc-actions">${this._action('template-movie', 'movie', bar.id)}${this._action('template-bedtime', 'bedtime', bar.id)}${this._action('template-return-vacuum', 'returnVacuum', bar.id)}</div>${this._caption('templateHint', 'p')}</details></article>`;
   }
   _status() { return `${this._caption(this.dirty ? 'draft' : 'saved', 'p')}${this._issues().map((key) => `<p role="status">${esc(this._t(key))}</p>`).join('')}`; }
   render() {
@@ -229,6 +273,13 @@ export class CustomControlsEditor {
       [data-custom-controls-editor] .cc-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
       [data-custom-controls-editor] .cc-move{display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin:12px 0}[data-custom-controls-editor] .cc-move label{flex:1;min-width:min(100%,160px)}
       [data-custom-controls-editor] .cc-check{flex-direction:row;align-items:center;gap:10px}
+      [data-custom-controls-editor] .cc-picker{border:1px solid var(--cc-line);border-radius:12px;padding:0 12px;margin:12px 0;min-width:0}
+      [data-custom-controls-editor] .cc-picker>summary{min-height:44px;display:flex;align-items:center;gap:8px;cursor:pointer;overflow-wrap:anywhere}
+      [data-custom-controls-editor] .cc-picker[open]{padding-bottom:12px}[data-custom-controls-editor] .cc-picker>summary ha-icon{flex:0 0 24px}
+      [data-custom-controls-editor] .cc-icon-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(86px,100%),1fr));gap:8px;max-height:300px;overflow:auto;overscroll-behavior:contain;padding:6px 3px;margin:8px 0}
+      [data-custom-controls-editor] .cc-icon-grid>button{display:flex;flex-direction:column;align-items:center;gap:5px;min-height:72px;padding:8px 4px;font-size:11px;overflow-wrap:anywhere;line-height:1.25}
+      [data-custom-controls-editor] .cc-icon-grid>button[aria-pressed=true]{border-color:var(--taylors3d-ui-teal,#51d4c4);box-shadow:inset 0 0 0 1px currentColor}
+      [data-custom-controls-editor] .cc-icon-grid svg{width:24px;height:24px;fill:currentColor;flex:0 0 24px}
       [data-custom-controls-editor] .cc-preview{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
       [data-custom-controls-editor] .cc-preview>span{display:inline-flex;align-items:center;gap:8px;min-height:44px;box-sizing:border-box;padding:10px 14px;border:1px solid var(--cc-line);border-radius:999px;overflow-wrap:anywhere;max-width:100%;background:var(--cc-raised);color:var(--cc-text)}
       [data-custom-controls-editor] .cc-preview[data-cc-style=tiles]>span{border-radius:12px;flex:1 0 min(120px,100%)}
@@ -253,6 +304,9 @@ export class CustomControlsEditor {
     const bar = this._bar(node?.dataset.ccBar), button = this._button(bar?.id, node?.dataset.ccButton), bars = this._bars();
     if (kind === 'add-bar') return bars.length < CUSTOM_CONTROL_LIMITS.bars;
     if (kind === 'add-button') return !!bar && bar.buttons.length < CUSTOM_CONTROL_LIMITS.buttonsPerBar && bars.reduce((total, row) => total + row.buttons.length, 0) < CUSTOM_CONTROL_LIMITS.total;
+    if (kind.startsWith('template-')) return ['template-movie', 'template-bedtime', 'template-return-vacuum'].includes(kind) && this._allowed('add-button', node);
+    if (kind === 'duplicate') return !!button && readCustomControls(this.draft).valid && this._allowed('add-button', node);
+    if (kind === 'choose-icon') return !!button && CUSTOM_CONTROL_ICONS.some((entry) => entry.icon === node.dataset.ccIcon);
     if (kind === 'remove-bar') return !!bar;
     if (kind === 'remove-button') return !!button;
     if (kind === 'move') { const to = this._bar(this.moveTargets.get(button?.id)); return !!button && !!to && to !== bar && !!moveCustomButton(this.draft, bar.id, button.id, to.id); }
@@ -289,13 +343,29 @@ export class CustomControlsEditor {
       const kind = control.dataset.field.slice(prefix.length), bar = this._bar(control.dataset.ccBar), button = this._button(bar?.id, control.dataset.ccButton);
       control.disabled = this._blocked();
       if (control.tagName !== 'SELECT') continue;
-      const choices = kind === 'source' ? this._sourceOptions(button.action) : kind === 'room' ? this._roomOptions(bar.room_id)
+      const choices = kind === 'source' ? this._sourceOptions(button.action, this._search(button.id, 'source'))
+        : kind === 'condition-source' ? this._visibilityOptions(button.visibility?.entity, this._search(button.id, 'condition'))
+        : kind === 'dock-limit' ? [4, 5].map((value) => option(value, value, Number(control.value))).join('') : kind === 'room' ? this._roomOptions(bar.room_id)
         : kind === 'move-to' ? this._moveOptions(bar.id, button.id) : this._namedOptions(kind === 'action' ? CUSTOM_CONTROL_ACTIONS
           : kind === 'color' ? CUSTOM_CONTROL_COLORS : kind === 'placement' ? ['bottom', 'room'] : ['pills', 'tiles'], control.value);
       syncEditorOptions(control, choices, control.value);
     }
     for (const node of root.querySelectorAll('button[data-act]')) node.disabled = !this._allowed(node.dataset.act.slice(prefix.length), node);
     for (const handle of root.querySelectorAll('[data-cc-drag]')) handle.disabled = this._blocked() || !readCustomControls(this.draft).valid;
+    for (const bar of this._bars()) for (const button of bar.buttons) {
+      const grid = [...root.querySelectorAll('[data-cc-icon-grid]')].find((node) => node.dataset.ccIconGrid === button.id);
+      if (grid && grid.closest('details')?.open) {
+        const signature = JSON.stringify([this._search(button.id, 'icon'), button.icon, this._epoch, this._blocked(), localeInfo(this.hass).resolved]);
+        if (grid.dataset.ccSignature !== signature) {
+          const focus = grid.getRootNode().activeElement, selected = grid.contains(focus) ? focus.dataset.ccIcon : null;
+          grid.innerHTML = this._iconsHtml(bar, button); grid.dataset.ccSignature = signature;
+          for (const node of grid.querySelectorAll('button')) node.disabled = this._blocked();
+          if (selected) [...grid.querySelectorAll('button')].find((node) => node.dataset.ccIcon === selected)?.focus({ preventScroll: true });
+        }
+        const caption = grid.parentElement.querySelector('[data-cc-icon-name]'); if (caption) caption.textContent = button.icon;
+        grid.parentElement.querySelector('summary ha-icon')?.setAttribute('icon', /^mdi:[a-z0-9-]+$/.test(button.icon) ? button.icon : 'mdi:gesture-tap-button');
+      }
+    }
     for (const bar of this._bars()) {
       const name = [...root.querySelectorAll('[data-cc-bar-name]')].find((node) => node.dataset.ccBarName === bar.id); if (name) name.textContent = bar.label;
       const preview = [...root.querySelectorAll('[data-cc-preview]')].find((node) => node.dataset.ccPreview === bar.id);
@@ -322,22 +392,27 @@ export class CustomControlsEditor {
   _mutateBar(id, change) {
     this.draft = updated(this.draft, { bars: this._bars().map((bar) => bar.id === id ? change(bar) : bar) }); this._mark();
   }
-  onInput(name, element) { return [`${prefix}bar-label`, `${prefix}button-label`, `${prefix}icon`].includes(name) ? this.onChange(name, element) : false; }
+  onInput(name, element) { return ['bar-label', 'button-label', 'icon', 'icon-search', 'source-search', 'condition-search', 'condition-state'].some((kind) => name === `${prefix}${kind}`) ? this.onChange(name, element) : false; }
   onChange(name, element) {
     if (!name?.startsWith(prefix)) return false; this._ensure();
     if (!this._native(element) || this._blocked() || !this._validRow(element)) return true;
     const kind = name.slice(prefix.length), barId = element.dataset.ccBar, buttonId = element.dataset.ccButton;
     const bar = this._bar(barId), button = this._button(barId, buttonId); if (!bar) return true;
+    if (['icon-search', 'source-search', 'condition-search'].includes(kind) && button) {
+      this.searches.set(`${button.id}:${kind.split('-')[0]}`, element.value); this.updatePreviews(this._root); return true;
+    }
     if (kind === 'move-to') { if (element.value === '' || this._bars().some((row) => row.id === element.value && row.id !== barId && row.buttons.length < CUSTOM_CONTROL_LIMITS.buttonsPerBar)) this.moveTargets.set(buttonId, element.value); this.updatePreviews(this._root); return true; }
     let redraw = false;
-    if (['bar-label', 'placement', 'style', 'room'].includes(kind)) {
+    if (['bar-label', 'placement', 'style', 'room', 'compact', 'dock-limit'].includes(kind)) {
       if (kind === 'placement' && !['bottom', 'room'].includes(element.value) || kind === 'style' && !['pills', 'tiles'].includes(element.value)
         || kind === 'room' && !this._rooms().some((room) => room.id === element.value)) return true;
       this._mutateBar(barId, (row) => {
+        if (kind === 'compact') { const next = clone(row); if (element.checked) next.dock = { limit: 5 }; else delete next.dock; return next; }
+        if (kind === 'dock-limit') return [4, 5].includes(Number(element.value)) && row.dock ? updated(row, { dock: updated(row.dock, { limit: Number(element.value) }) }) : row;
         const next = updated(row, { [kind === 'bar-label' ? 'label' : kind === 'room' ? 'room_id' : kind]: element.value });
         if (kind === 'placement') { if (next.placement === 'room' && typeof next.room_id !== 'string') next.room_id = ''; else if (next.placement === 'bottom') delete next.room_id; }
         return next;
-      }); redraw = kind === 'placement';
+      }); redraw = ['placement', 'compact'].includes(kind);
     } else {
       if (!button) return true; let next = clone(button);
       if (kind === 'button-label') next.label = element.value;
@@ -349,6 +424,10 @@ export class CustomControlsEditor {
         if (element.value !== 'automation') delete next.action.skip_conditions; redraw = true;
       } else if (kind === 'source' && this._choices(button.action).some((row) => row.value === element.value && row.selectable)) next.action = updated(button.action, { [button.action.type === 'view' ? 'view_id' : 'entity']: element.value });
       else if (kind === 'skip' && button.action.type === 'automation') next.action = updated(button.action, { skip_conditions: element.checked === true });
+      else if (kind === 'pinned' && bar.dock) next.pinned = element.checked === true;
+      else if (kind === 'conditional') { if (element.checked) next.visibility = { type: 'state', entity: '', state: button.starter === 'return-vacuum' ? 'cleaning' : 'on' }; else delete next.visibility; redraw = true; }
+      else if (kind === 'condition-source' && button.visibility && this._visibilityChoices(button.visibility.entity).some((row) => row.value === element.value && row.selectable)) next.visibility = updated(button.visibility, { entity: element.value });
+      else if (kind === 'condition-state' && button.visibility) next.visibility = updated(button.visibility, { state: element.value });
       else return true;
       this._mutateBar(barId, (row) => updated(row, { buttons: row.buttons.map((entry) => entry.id === buttonId ? next : entry) }));
     }
@@ -370,11 +449,27 @@ export class CustomControlsEditor {
     if (kind === 'save') { const draft = clone(this.draft); this.card.commitFeatureLayout({ custom_controls: draft }); this.reset(); this.onRender(); return true; }
     if (kind === 'replace') { this.draft = { version: 1, bars: [] }; this._editable = true; this._mark(); this._epoch++; this._requestRender(); return true; }
     const barId = element.dataset.ccBar, buttonId = element.dataset.ccButton, bar = this._bar(barId), bars = this._bars(); let next;
+    if (kind === 'choose-icon') {
+      this._mutateBar(barId, (row) => updated(row, { buttons: row.buttons.map((button) => button.id === buttonId ? updated(button, { icon: element.dataset.ccIcon }) : button) }));
+      const input = this._root.querySelector(`[data-field="${prefix}icon"][data-cc-button="${buttonId}"]`); if (input) input.value = element.dataset.ccIcon;
+      this.updatePreviews(this._root); return true;
+    }
     if (kind === 'add-bar') {
       const id = this._newId('bar'); next = updated(this.draft, { bars: [...bars, { id, label: this._t('newBar', { number: id.slice(4) }), placement: 'bottom', style: 'pills', buttons: [] }] });
     } else if (kind === 'add-button') {
       const id = this._newId('button'); next = updated(this.draft, { bars: bars.map((row) => row.id === barId ? updated(row, { buttons: [...row.buttons,
         { id, label: this._t('newButton', { number: id.slice(7) }), icon: 'mdi:gesture-tap-button', color: 'theme', action: { type: 'more-info', entity: '' } }] }) : row) });
+    } else if (kind.startsWith('template-')) {
+      const starter = kind.slice(9), id = this._newId('button'), template = starter === 'movie' ? { label: this._t('movie'), icon: 'mdi:movie', color: 'amber', type: 'scene' }
+        : starter === 'bedtime' ? { label: this._t('bedtime'), icon: 'mdi:weather-night', color: 'purple', type: 'scene' }
+          : { label: this._t('returnVacuum'), icon: 'mdi:robot-vacuum', color: 'teal', type: 'script' };
+      next = updated(this.draft, { bars: bars.map((row) => row.id === barId ? updated(row, { buttons: [...row.buttons,
+        { id, label: template.label, icon: template.icon, color: template.color, starter, action: { type: template.type, entity: '' } }] }) : row) });
+    } else if (kind === 'duplicate') {
+      const id = this._newId('button'), duplicate = updated(this._button(barId, buttonId), { id, pinned: false });
+      this.duplicateOrigins.set(id, this.duplicateOrigins.get(buttonId) || buttonId);
+      const position = bar.buttons.findIndex((row) => row.id === buttonId) + 1, buttons = [...bar.buttons]; buttons.splice(position, 0, duplicate);
+      next = updated(this.draft, { bars: bars.map((row) => row.id === barId ? updated(row, { buttons }) : row) });
     } else if (kind === 'remove-bar') next = updated(this.draft, { bars: bars.filter((row) => row.id !== barId) });
     else if (kind === 'remove-button') next = updated(this.draft, { bars: bars.map((row) => row.id === barId ? updated(row, { buttons: row.buttons.filter((entry) => entry.id !== buttonId) }) : row) });
     else if (kind === 'move') next = moveCustomButton(this.draft, barId, buttonId, this.moveTargets.get(buttonId));
@@ -400,6 +495,6 @@ export class CustomControlsEditor {
     if (keyboard) { event.preventDefault(); if (intent.valid) intent.node.click(); }
   }
   _cancelFocus(event) { const intent = this._intents.get(event.target); if (intent && !intent.consumed) intent.valid = false; }
-  reset() { this._unbind(); this._loaded = false; this._editable = false; this.draft = null; this.dirty = false; this.stale = false; this._epoch++; this._intents = new WeakMap(); this.moveTargets = new Map(); }
+  reset() { this._unbind(); this._loaded = false; this._editable = false; this.draft = null; this.dirty = false; this.stale = false; this._epoch++; this._intents = new WeakMap(); this.moveTargets = new Map(); this.searches = new Map(); this.duplicateOrigins = new Map(); }
   dispose() { this.reset(); this.disposed = true; }
 }

@@ -44,6 +44,8 @@ export class ScenePreviewEditor {
     this.ownsController = !controller;
     this.controller = controller || new ScenePreviewController({
       getContext: () => ({ hass: this.hass, bindings: this.effective, contextKey: this._contextKey(), canEdit: this._canPreviewDraft() }),
+      requestService: typeof this.card._requestSceneService === 'function'
+        ? (...args) => this.card._requestSceneService(...args) : undefined,
       onPreview: (overrides, metadata) => this.card.previewSceneLights?.(overrides, metadata),
       onStatus: (status) => {
         this.previewStatus = status;

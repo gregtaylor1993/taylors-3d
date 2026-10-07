@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CUSTOM_CONTROL_ACTIONS, CUSTOM_CONTROL_COLORS, CUSTOM_CONTROL_LIMITS, readCustomControls,
-  customControlAvailability, resolveCustomControls, replaceCustomBars, moveCustomBar, moveCustomButton, customControlCommand } from '../src/custom-controls.js';
+  customControlAvailability, customControlVisibility, resolveCustomControls, replaceCustomBars, moveCustomBar, moveCustomButton, customControlCommand } from '../src/custom-controls.js';
 
 const room = { id: 'm:living-room', floor_id: 'ground', area_id: 'lounge', name: 'Lounge' };
 const views = [{ id: 'front-door', label: 'Front door', camera: { position: [1, 2, 3], target: [0, 0, 0] } }];
@@ -22,6 +22,65 @@ const options = (raw = settings(), h = hass()) => ({ hass: h, settings: raw, vie
 const command = (extra = {}, raw = settings(), h = hass()) => customControlCommand({ ...options(raw, h), barId: 'evening', buttonId: 'movie', ...extra });
 const actionSetting = (action) => ({ version: 1, bars: [bar('evening', [button('movie', action)])] });
 const defineGetter = (value, key, getter, enumerable = true) => Object.defineProperty(value, key, { get: getter, enumerable, configurable: true });
+
+describe('explicit compact docks and visibility', () => {
+  const condition = { type: 'state', entity: 'vacuum.house', state: 'cleaning' };
+  const conditional = () => { const raw = settings(); raw.bars[0].dock = { limit: 4, extra: 'kept' }; Object.assign(raw.bars[0].buttons[0], { pinned: true, visibility: { ...condition, extra: ['kept'] } }); return raw; };
+  const readings = () => { const h = hass(); h.states['vacuum.house'] = { entity_id: 'vacuum.house', state: 'cleaning', attributes: { friendly_name: 'Vacuum' } }; return h; };
+  it('retains future visibility data and refuses dispatch until its discriminator is deliberately repaired', () => {
+    const raw = conditional(), h = readings(); raw.bars[0].buttons[0].visibility.type = 'future-rule'; const before = structuredClone(raw);
+    expect(readCustomControls(raw).valid).toBe(false);
+    expect(customControlVisibility({ hass: h, visibility: raw.bars[0].buttons[0].visibility })).toMatchObject({ visible: true, available: false, conditionStatus: 'invalid' });
+    expect(command({}, raw, h).available).toBe(false); expect(replaceCustomBars(raw, raw.bars)).toBeNull(); expect(raw).toEqual(before);
+    const repaired = structuredClone(raw); repaired.bars[0].buttons[0].visibility.type = 'state';
+    expect(command({}, repaired, h).available).toBe(true); expect(raw).toEqual(before); expect(h.callService).not.toHaveBeenCalled();
+  });
+  it('keeps the old schema and all unknown extensions unchanged, with opt-in four or five places', () => {
+    const raw = conditional(), before = structuredClone(raw); expect(readCustomControls(raw).valid).toBe(true);
+    expect(replaceCustomBars(raw, raw.bars)).toEqual(before); expect(raw).toEqual(before);
+    raw.bars[0].dock.limit = 5; expect(readCustomControls(raw).valid).toBe(true); expect(readCustomControls(settings()).valid).toBe(true);
+  });
+  it.each([null, false, { limit: 0 }, { limit: 6 }, { limit: '5' }])('does not silently repair malformed dock %j', (dock) => {
+    const raw = settings(); raw.bars[0].dock = dock; expect(readCustomControls(raw).valid).toBe(false);
+  });
+  it('rejects too many deliberately pinned buttons rather than silently hiding a favourite', () => {
+    const raw = conditional(); raw.bars[0].buttons = Array.from({ length: 5 }, (_, index) => ({ ...button(`p${index}`), pinned: true }));
+    expect(readCustomControls(raw).diagnostics.some((entry) => entry.code === 'pinned')).toBe(true);
+  });
+  it.each([null, {}, { type: 'state', entity: '', state: 'cleaning' }, { type: 'state', entity: 'vacuum.house', state: 'unknown' },
+    { type: 'state', entity: 'vacuum.house', state: 'unavailable' }, { type: 'template', entity: 'vacuum.house', state: 'cleaning' }])('rejects malformed visibility %j', (visibility) => {
+    const raw = settings(); raw.bars[0].buttons[0].visibility = visibility; expect(readCustomControls(raw).valid).toBe(false);
+  });
+  it.each([['cleaning', true, 'matched'], ['docked', false, 'false'], ['unknown', true, 'unknown'], ['unavailable', true, 'missing']])('distinguishes the actual %s reading', (state, visible, conditionStatus) => {
+    const h = readings(); h.states['vacuum.house'].state = state;
+    expect(customControlVisibility({ hass: h, visibility: condition })).toMatchObject({ visible, conditionStatus });
+    const raw = conditional(), resolved = resolveCustomControls(options(raw, h)).bars[0].buttons[0];
+    expect(resolved.visible).toBe(visible); expect(resolved.available).toBe(state === 'cleaning');
+    expect(command({}, raw, h).available).toBe(state === 'cleaning'); expect(h.callService).not.toHaveBeenCalled();
+  });
+  it('keeps a missing source visible and unavailable; never infers it from a friendly name', () => {
+    const h = readings(); delete h.states['vacuum.house']; h.states['vacuum.other'] = { state: 'cleaning', attributes: { friendly_name: 'Vacuum' } };
+    expect(customControlVisibility({ hass: h, visibility: condition })).toMatchObject({ visible: true, available: false, conditionStatus: 'missing' });
+  });
+  it('never calls accessors on condition settings or readings', () => {
+    const getter = vi.fn(() => 'cleaning'), raw = conditional(), h = readings(); defineGetter(raw.bars[0].buttons[0].visibility, 'state', getter, false);
+    expect(readCustomControls(raw).valid).toBe(false); expect(customControlVisibility({ hass: h, visibility: raw.bars[0].buttons[0].visibility }).conditionStatus).toBe('invalid');
+    defineGetter(h.states['vacuum.house'], 'state', getter); expect(customControlVisibility({ hass: h, visibility: condition }).conditionStatus).toBe('missing');
+    expect(getter).not.toHaveBeenCalled();
+  });
+  it('changes the held-command context when condition evidence or exact source metadata changes', () => {
+    const raw = conditional(), h = readings(), initial = resolveCustomControls(options(raw, h));
+    h.states['vacuum.house'].state = 'docked'; expect(resolveCustomControls(options(raw, h)).contextKey).not.toBe(initial.contextKey);
+    h.states['vacuum.house'].state = 'cleaning'; h.entities['vacuum.house'] = { area_id: 'new-area' }; expect(resolveCustomControls(options(raw, h)).contextKey).not.toBe(initial.contextKey);
+  });
+  it('shows selected view or room only from exact current IDs and leaves unknown selection unclaimed', () => {
+    const raw = actionSetting({ type: 'view', view_id: views[0].id });
+    expect(resolveCustomControls({ ...options(raw), selectedViewId: views[0].id }).bars[0].buttons[0].active).toBe(true);
+    expect(resolveCustomControls(options(raw)).bars[0].buttons[0]).not.toHaveProperty('active');
+    expect(resolveCustomControls({ ...options(), placement: 'room', roomId: room.id, selectedRoomId: room.id }).bars[0].selected).toBe(true);
+    expect(resolveCustomControls({ ...options(), placement: 'room', roomId: room.id, rooms: [], selectedRoomId: room.id }).bars[0]).not.toHaveProperty('selected');
+  });
+});
 
 describe('custom controls raw schema and recovery', () => {
   it('exports one fixed shared set of limits, colours and actions', () => {

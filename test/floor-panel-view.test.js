@@ -486,6 +486,9 @@ describe('actual floor pane geometry and source invariants', () => {
 describe('actual card prototype routes room/device controls to the clicked floor', () => {
   function cardFor(f) {
     const card = Object.create(customElements.get('taylors3d-card').prototype);
+    // This focused prototype fixture deliberately represents a connected card.
+    // It has no native HTMLElement brand, so own the lifecycle reading explicitly.
+    Object.defineProperty(card, 'isConnected', { value: true, configurable: true });
     const rooms = f.floors.map((floor) => ({ floorId: floor.id, name: `${floor.name} room`,
       room: { id: `drawn-${floor.id}`, modelId: `room-${floor.id}`, floor_id: floor.id, polygon: [[-4, -3], [4, -3], [4, 3], [-4, 3]] } }));
     Object.assign(card, { _view: f.view, _floors: f.floors, _roomList: rooms, _layout: { rooms: [] }, _config: { group_by: 'device', room_labels: 'name' },
@@ -511,7 +514,7 @@ describe('actual card prototype routes room/device controls to the clicked floor
 
   function installActualRenderCallbacks(card, f) {
     const root = document.createElement('div'); f.host.append(root); Object.defineProperty(card, 'shadowRoot', { value: root });
-    Object.assign(card, { _view: null, _mode: f.view.mode, _miniMap: { updateCamera: vi.fn() },
+    Object.assign(card, { _view: null, _mode: f.view.mode, _fitted: true, _miniMap: { el: document.createElement('div'), updateCamera: vi.fn() },
       _config: { ...card._config, height: '600px', control_panel: 'popup' },
       finishWallSelectionPreparation: vi.fn(), _unwatchAmbientPreference: vi.fn(), _unbindAmbientInput: vi.fn(),
       _watchAmbientPreference: vi.fn(), _syncModelRendering: vi.fn(), _ensureWeatherLayer: vi.fn(),

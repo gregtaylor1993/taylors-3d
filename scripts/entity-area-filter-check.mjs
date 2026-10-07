@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // Actual source/bundle Root and four native editors; HA registries, readings,
 // permissions and persistence are explicit anonymous fixtures. --preflight does
 // not launch Chrome and cannot prove native geometry, GPU or Root history.
@@ -19,6 +20,7 @@ const action = (spec, name) => `[data-act="${spec.prefix}${name}"]`;
 const settle = (page) => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 
 async function control(page, selector, callback) {
+  await revealEditorTab(page, selector);
   context = 'actual native control ' + selector;
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {

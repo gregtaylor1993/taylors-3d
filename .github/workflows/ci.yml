@@ -81,6 +81,13 @@ jobs:
               node scripts/gps-calibration-check.mjs
               node scripts/entity-area-filter-check.mjs
               node scripts/runtime-localization-check.mjs
+          - group: ui-polish
+            commands: |
+              node scripts/room-sheet-check.mjs
+              node scripts/editor-navigation-check.mjs
+              node scripts/custom-controls-polish-check.mjs
+              node scripts/ui-feedback-check.mjs
+              node scripts/visual-polish-check.mjs
     env:
       CHROME_PATH: /usr/bin/google-chrome
     steps:

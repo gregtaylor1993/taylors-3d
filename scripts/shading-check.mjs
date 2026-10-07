@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // F16: real GLB AO/unlit/PBR textures, shadow policy and visual settings.
 // The fixture is simulated, reuses MIT demo geometry, and uses one existing
 // renderer/light pool. Run after building; supports --source-only/--bundle-only.
@@ -132,6 +133,7 @@ async function policy(page, value) {
   await settle(page); await ready(page);
 }
 async function control(page, selector, action) {
+  await revealEditorTab(page, selector);
   context = 'UI ' + selector;
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {

@@ -120,9 +120,9 @@ describe('measured scene, desktop rail, mobile sheet and editor', () => {
   it('uses actual narrow stage width inside a wide browser, reserves both bottom rows, and expands min-height to preserve 240px scene', () => {
     const { update, measure, popup, card, shell } = setup({ width: 320, height: 520, summaryHeight: 112, toolbarHeight: 120 });
     expect(window.innerWidth).toBeGreaterThan(320); update(); popup({ h: 450 }); const plan = measure();
-    expect(plan).toMatchObject({ mode: 'bottom', navigationReserve: 92, toolbarReserve: 136, sheetReserve: 336,
-      stageHeight: 916, scene: { x: 0, y: 112, width: 320, height: 240 } });
-    expect(card._stage.style.minHeight).toBe('916px'); expect(shell.navigation.element.dataset.houseNavigationLayout).toBe('bottom');
+    expect(plan).toMatchObject({ mode: 'bottom', navigationReserve: 92, toolbarReserve: 136, sheetReserve: 466,
+      stageHeight: 1046, scene: { x: 0, y: 112, width: 320, height: 240 } });
+    expect(card._stage.style.minHeight).toBe('1046px'); expect(shell.navigation.element.dataset.houseNavigationLayout).toBe('bottom');
     expect(card._devicePopup.el.dataset.houseControlsLayout).toBe('sheet'); expect(card._stage.style.getPropertyValue('--taylors3d-navigation-height')).toBe('92px');
   });
   it.each([739, 740, 959, 960])('uses exact stage breakpoint %i and actual selected controls dimensions', (width) => {
@@ -135,6 +135,28 @@ describe('measured scene, desktop rail, mobile sheet and editor', () => {
     const open = measure(600); sizes.height = open.stageHeight; controller.el.remove(); controller.el = null;
     const closed = measure(600); expect(open.stageHeight).toBeGreaterThan(600); expect(closed.stageHeight).toBe(600); expect(closed.sheetReserve).toBe(0);
     expect(card._stage.style.minHeight).toBe('600px');
+  });
+  it('updates a closed room controller with real header and bottom-dock reserves before reopening', () => {
+    const {update,measure,card,sizes}=setup({width:360,height:600,summaryHeight:80,toolbarHeight:80,navigationHeight:64});update();
+    const geometry=vi.fn();card._devicePopup={el:null,updateRoomSheetGeometry:geometry};
+    measure(600);expect(geometry).toHaveBeenLastCalledWith({width:360,baseHeight:600,availableHeight:344});
+    sizes.width=1200;measure(600);expect(geometry).toHaveBeenLastCalledWith({width:1200,baseHeight:600,availableHeight:424});
+    card._toolbar.hidden=true;measure(600);expect(geometry).toHaveBeenLastCalledWith({width:1200,baseHeight:600,availableHeight:520});
+    expect(card._hass.callService).not.toHaveBeenCalled();expect(card._view.resize).not.toHaveBeenCalled();
+  });
+  it('uses a real room sheet requested height once per snap and restores configured height on close', () => {
+    const {update,measure,card,sizes}=setup({width:360,height:600,summaryHeight:80,toolbarHeight:80,navigationHeight:64});update();
+    const controller=new DevicePopup(card._stage,{placement:'right'});disposables.push(controller);card._devicePopup=controller;
+    controller.update(card._hass);measure(600);
+    controller.showRoom({id:'room',area_id:'kitchen',floor_id:'ground'},[{entityId:'light.kitchen',areaId:'kitchen'}]);
+    controller.el.getBoundingClientRect=() => bounds(344,Number.parseFloat(controller.el.style.getPropertyValue('--taylors3d-room-sheet-height'))||300);
+    const controls=measure(600);expect(controller._roomSheet.heights).toEqual({summary:200,controls:240,details:360});
+    expect(controls.sheetReserve).toBe(256);expect(controls.scene.height).toBe(240);
+    controller._roomSheet.buttons.get('details').click();const details=measure(600);expect(details.sheetReserve).toBe(376);expect(details.stageHeight).toBe(872);
+    sizes.height=details.stageHeight;expect(measure(600)).toEqual(details);
+    controller._roomSheet.buttons.get('summary').click();const summary=measure(600);expect(summary.sheetReserve).toBe(216);expect(summary.stageHeight).toBe(712);
+    controller.close();expect(measure(600).stageHeight).toBe(600);expect(card._stage.style.minHeight).toBe('600px');
+    expect(card._hass.callService).not.toHaveBeenCalled();expect(card._view.setCamera).not.toHaveBeenCalled();
   });
   it('hides owned header/nav/sheet reserves in edit mode while retaining theme and existing editor controls', () => {
     const { update, measure, popup, card, shell } = setup({ width: 1200, height: 520, toolbarHeight: 80 }); update(); popup();

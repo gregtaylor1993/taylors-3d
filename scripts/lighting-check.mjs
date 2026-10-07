@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // F11: actual pixels on an authored GLB floor AND wall, plus intentional HA controls.
 // Each source/bundle scenario creates one card/renderer. No lights are injected into
 // the scene: every fixture is a tagged GLB object using the existing fixed light pool.
@@ -106,6 +107,7 @@ async function patch(page, states, extra = {}) {
 }
 async function lampState(page, state) { await patch(page, { [entity]: state }); }
 async function control(page, selector, action) {
+  await revealEditorTab(page, selector);
   activeContext = `control: ${selector}`;
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {

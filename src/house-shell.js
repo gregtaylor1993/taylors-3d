@@ -155,17 +155,26 @@ export class HouseShell {
     if (popup) { this._attribute(popup, 'data-taylors3d-controls', 'adaptive');
       this._attribute(popup, 'data-house-controls-layout', this.editing ? 'hidden' : width < HOUSE_SHELL_LIMITS.sheetBelow ? 'sheet' : 'right');
       this._property(popup, 'left', ''); this._property(popup, 'top', ''); }
-    const controlSize = this.editing ? { width: 0, height: 0 } : this._dimensions(popup);
-    const controlsOpen = controlSize.width > 0 && controlSize.height > 0;
+    let controlSize = this.editing ? { width: 0, height: 0 } : this._dimensions(popup);
+    let controlsOpen = controlSize.width > 0 && controlSize.height > 0;
     // Horizontal reserves alter wrapping. Apply these before measuring the real
     // toolbar/header, then finish the complete vertical plan in this same call.
     const horizontal = planHouseShell({ width, height: baseHeight, controlsWidth: controlSize.width, controlsHeight: controlSize.height, controlsOpen, editing: this.editing });
     if (!horizontal.valid) return horizontal;
     this._property(this._stage, '--taylors3d-rail-width', `${horizontal.railReserve}px`);
     this._property(this._stage, '--taylors3d-controls-width', `${horizontal.controlsReserve}px`);
-    const plan = planHouseShell({ width, height: baseHeight, summaryHeight: this._dimensions(this.header.element).height,
+    const readings = { width, height: baseHeight, summaryHeight: this._dimensions(this.header.element).height,
       toolbarHeight: this._dimensions(this.card._toolbar).height, navigationHeight: this._dimensions(this.navigation.element).height,
-      controlsWidth: controlSize.width, controlsHeight: controlSize.height, controlsOpen, editing: this.editing });
+      editing: this.editing };
+    const withoutControls = planHouseShell(readings); if (!withoutControls.valid) return withoutControls;
+    // Use configured stage space after actual header/dock wrapping, never the
+    // previously expanded stage height. Update a closed controller as well so
+    // reopening after a phone/desktop resize cannot reuse old wide geometry.
+    this.card._devicePopup?.updateRoomSheetGeometry?.({ width, baseHeight,
+      availableHeight:Math.max(0,baseHeight-withoutControls.summaryReserve-withoutControls.toolbarReserve-withoutControls.navigationReserve) });
+    controlSize = this.editing ? { width: 0, height: 0 } : this._dimensions(popup);
+    controlsOpen = controlSize.width > 0 && controlSize.height > 0;
+    const plan = planHouseShell({ ...readings,controlsWidth:controlSize.width,controlsHeight:controlSize.height,controlsOpen });
     if (!plan.valid) return plan;
     this._attribute(this._stage, 'data-taylors3d-shell-mode', plan.mode);
     for (const [property, field] of Object.entries({ 'summary-height': 'summaryReserve', 'navigation-height': 'navigationReserve', 'bar-height': 'toolbarReserve', 'sheet-height': 'sheetReserve' }))

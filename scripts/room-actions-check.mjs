@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // F18/F20: real source/bundle Root, room selection, DevicePopup/editor and native
 // Chrome input. HA readings/services/camera/player/storage are explicit fixtures.
 // Suggest package script: "test:room-actions": "node scripts/room-actions-check.mjs"
@@ -16,6 +17,7 @@ const inline=(entity,name)=>`[data-device-control="${name}"][data-entity="${enti
 const shortcut=(id)=>`[data-room-action="${id}"]`;
 const settle=(page)=>page.evaluate(()=>new Promise((resolve)=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
 async function control(page,selector,callback){
+  await revealEditorTab(page, selector);
   context='actual native control '+selector;
   const handle=await page.evaluateHandle((selector)=>document.querySelector('taylors3d-card').shadowRoot.querySelector(selector),selector);
   try{const element=handle.asElement();if(!element)throw new Error('Missing native control '+selector);
@@ -204,6 +206,15 @@ async function narrow(page){
     return !!previous?.fixture&&card===previous.card&&card._view.renderer===previous.renderer&&window.roomActionsFixture===previous.fixture;
   }));
   await openRoom(page);
+  // The compact Controls sheet intentionally keeps primary room controls only.
+  // This existing all-device/focus proof deliberately opens the real Details UI.
+  const beforeDetails=await snapshot(page);
+  await click(page,'[data-room-sheet-mode="details"]');await settle(page);
+  const afterDetails=await snapshot(page);
+  check('native Details reveals the same exact room without a service, layout, renderer or history change',await page.evaluate(()=>document.querySelector('taylors3d-card')._devicePopup.el.dataset.roomSheet==='details')
+    &&afterDetails.room===beforeDetails.room&&same(afterDetails.readings,beforeDetails.readings)&&same(afterDetails.layout,beforeDetails.layout)
+    &&afterDetails.calls.length===beforeDetails.calls.length&&afterDetails.commits===beforeDetails.commits&&afterDetails.writes===beforeDetails.writes
+    &&afterDetails.history===beforeDetails.history&&afterDetails.sameRenderer);
   await page.evaluate(()=>window.roomActionsFixture.locale('de'));await settle(page);await geometry(page,'320px phone');
   const before=await snapshot(page);
   for(const selector of [shortcut('scene-shortcut'),inline(entities.media,'volume'),inline(entities.climate,'temperature'),inline(entities.cover,'position'),inline(entities.vacuum,'fan-speed')]){

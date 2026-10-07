@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // Actual source/bundle card, EditMode, clients and native file/gesture controls.
 // Only official HA WS/HTTP replies are simulated. This does not prove Linux HA
 // authentication, ZIP inspection, asset publication, durability or saved config.
@@ -49,6 +50,7 @@ async function idle(page) {
   await settle(page);
 }
 async function control(page, selector, callback) {
+  await revealEditorTab(page, selector);
   context = `native ${selector}`;
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try { const node = handle.asElement(); if (!node) throw new Error('Missing native control ' + selector);

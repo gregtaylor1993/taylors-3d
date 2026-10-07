@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // F24 native source/bundle proof. Original simulated floor geometry, real GLB
 // loader, existing renderer/readback and native form/pointer actions. SOURCE
 // coordinates remain saved; the DISPLAY arrangement is independently measured.
@@ -39,6 +40,7 @@ async function ready(page, { model = true } = {}) {
   }
 }
 async function control(page, selector, callback) {
+  await revealEditorTab(page, selector);
   context = 'native control ' + selector;
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try { const element = handle.asElement(); if (!element) throw new Error('Missing floor control ' + selector);

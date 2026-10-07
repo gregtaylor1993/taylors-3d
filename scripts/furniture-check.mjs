@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // F15 native source/bundle proof: original licensed ZIP, actual embedded PNG
 // decoding/GLTFLoader, actual editor and canvas dragging in the existing renderer.
 // HTTP authentication/HA observations are simulated; no live HA claim is made.
@@ -34,6 +35,7 @@ async function ready(page, { furniture = false } = {}) {
   }
 }
 async function control(page, selector, callback) {
+  await revealEditorTab(page, selector);
   context = 'native furniture control ' + selector;
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try { const element = handle.asElement(); if (!element) throw new Error('Missing native furniture control ' + selector);

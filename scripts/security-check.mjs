@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // Real Security form + a deliberately authored rigid-door GLB fixture. Binary
 // contacts and angles are explicit; viewing/editing never calls a device service.
 import fs from 'node:fs';
@@ -48,6 +49,7 @@ function fixtureGlb() {
 
 async function settle(page) { await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))); }
 async function control(page, selector, action) {
+  await revealEditorTab(page, selector);
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {
     const element = handle.asElement(); if (!element) throw new Error('Missing Security control: ' + selector);
@@ -216,7 +218,7 @@ try {
     const c = document.querySelector('taylors3d-card'), form = c.shadowRoot.querySelector('[data-security-editor]');
     return { overflow: document.documentElement.scrollWidth > innerWidth,
       targets: [...form.querySelectorAll('button,input,select')].filter((el) => el.getClientRects().length).every((el) => el.getBoundingClientRect().height >= 44),
-      hinge: !!form.querySelector('[data-field="sec-target"]'), tabs: [...c._edit.panel.querySelectorAll('.tabs button')].every((el) => {
+      hinge: !!form.querySelector('[data-field="sec-target"]'), tabs: [...c._edit.panel.querySelectorAll('.tabs button')].filter((el) => el.getClientRects().length && !el.closest('[hidden],details:not([open])')).every((el) => {
         const r = el.getBoundingClientRect(), p = el.parentElement.getBoundingClientRect(); return r.height >= 44 && r.left >= p.left - 1 && r.right <= p.right + 1;
       }) };
   });

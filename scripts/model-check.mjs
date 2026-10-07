@@ -7,6 +7,7 @@ import path from 'node:path';
 import { openDemo, newPage, root } from './lib/demo-browser.mjs';
 import { inverseTransformPoint, transformPoint } from '../src/bindings.js';
 import { alignModelPoint } from '../src/views.js';
+import { clickEditorTab } from './lib/editor-tab-navigation.mjs';
 
 const failures = [];
 const check = (name, ok, detail = '') => {
@@ -17,6 +18,55 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // wait until the 400 ms camera tween has finished (fixed sleeps flake under load)
 const settle = async (page, card) => { await page.waitForFunction(`!${card}._view._tween`, { timeout: 5000 }).catch(() => {}); await sleep(100); };
 const card = 'document.querySelector("taylors3d-card")';
+const panelTabs = Object.freeze({ Rooms: 'rooms', Devices: 'devices', Objects: 'objects', Model: 'model', Views: 'views', Data: 'data' });
+async function finishLegacyRangeGesture(page, caption) {
+  if (!await page.evaluate(() => document.querySelector('taylors3d-card')._edit?._sliding === true)) return;
+  // Older alignment checks dispatch input while asserting the slider survives.
+  // Complete that gesture before the next native navigation click, so its
+  // pointerup cannot instead release the slider and rebuild the clicked button.
+  await page.evaluate(() => {
+    const c = document.querySelector('taylors3d-card');
+    const f = window.__modelRangeRelease = { layout: c._layout, states: JSON.stringify(c._hass.states),
+      calls: (window.__serviceCalls || []).length, mowerFlag: Object.getOwnPropertyDescriptor(window, '__demoMowerPaused'),
+      ranges: [...c.shadowRoot.querySelectorAll('.panel input[type="range"]')].map((input) => [input.dataset.field, input.value]) };
+    // The existing mock mower otherwise changes its GPS/live map every 500ms.
+    // Pause only this new exact-reading comparison, then restore its prior flag.
+    window.__demoMowerPaused = true;
+    f.captureRelease = (event) => { f.release = { trusted: event.isTrusted, pointerType: event.pointerType,
+      x: event.clientX, y: event.clientY, buttons: event.buttons, insideCard: event.composedPath().includes(c) }; };
+    window.addEventListener('pointerup', f.captureRelease, { capture: true, once: true });
+  });
+  try {
+    await page.mouse.move(1, 1); await page.mouse.down(); await page.mouse.up();
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const result = await page.evaluate(() => {
+      const c = document.querySelector('taylors3d-card'), f = window.__modelRangeRelease;
+      return { sliding: c._edit._sliding, renderHeld: c._edit._renderHeld, release: f.release,
+        sameLayout: c._layout === f.layout, sameStates: JSON.stringify(c._hass.states) === f.states,
+        sameCalls: (window.__serviceCalls || []).length === f.calls,
+        sameRanges: JSON.stringify([...c.shadowRoot.querySelectorAll('.panel input[type="range"]')].map((input) => [input.dataset.field, input.value])) === JSON.stringify(f.ranges) };
+    });
+    check(`native outside release completes the legacy range gesture before ${caption} without altering values, layout, HA readings or commands`,
+      !result.sliding && !result.renderHeld && result.release?.trusted && result.release.pointerType === 'mouse'
+        && result.release.x === 1 && result.release.y === 1 && result.release.buttons === 0 && !result.release.insideCard
+        && result.sameLayout && result.sameStates && result.sameCalls && result.sameRanges, JSON.stringify(result));
+  } finally {
+    await page.evaluate(() => {
+      const f = window.__modelRangeRelease;
+      window.removeEventListener('pointerup', f.captureRelease, true);
+      if (f.mowerFlag) Object.defineProperty(window, '__demoMowerPaused', f.mowerFlag);
+      else delete window.__demoMowerPaused;
+      delete window.__modelRangeRelease;
+    });
+  }
+}
+async function clickPanelText(page, caption) {
+  if (panelTabs[caption]) { await finishLegacyRangeGesture(page, caption); await clickEditorTab(page, panelTabs[caption]); return true; }
+  return page.evaluate((caption) => {
+    const button = [...document.querySelector('taylors3d-card').shadowRoot.querySelectorAll('.panel button')].find((entry) => entry.textContent.trim() === caption);
+    if (button) button.click(); return !!button;
+  }, caption);
+}
 // move the camera and wait for the occlusion pass that follows it to finish (no fixed sleeps)
 const camAndOcclusion = async (page, cam) => {
   const before = await page.evaluate(`${card}._view.stats.occDone`);
@@ -437,10 +487,7 @@ try {
   check('node index rebuilt over the merged tree', await page.evaluate(`(() => { const c = ${card}; return !!c._index && c._index.nodes.some((n) => /fp_merged_/.test(n.path)); })()`));
   await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
   await sleep(200);
-  await page.evaluate(() => {
-    const b = [...document.querySelector('taylors3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === 'Model');
-    if (b) b.click();
-  });
+  await clickEditorTab(page, 'model');
   await sleep(200);
   const tabText = await page.evaluate(`(${card}.shadowRoot.querySelector('.panel [data-info=merge-stats]') || {}).textContent || ''`);
   check('Model tab shows the draw calls before → after', tabText === `Draw calls: ${on.before.calls} → ${on.after.calls} (meshes ${on.before.meshes} → ${on.after.meshes})`, tabText);
@@ -592,8 +639,16 @@ try {
   const sr = `${card}.shadowRoot`;
   const tabBtn = () => page.evaluate(`!![...${sr}.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === 'Objects')`);
   check('Objects tab is shown (the model has objects)', await tabBtn());
-  check('Objects tab sits after Devices', await page.evaluate(`[...${sr}.querySelectorAll('.tabs button')].map((b) => b.textContent.trim()).slice(0, 3).join()`) === 'Rooms,Devices,Objects');
-  await page.evaluate(`[...${sr}.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === 'Objects').click()`);
+  await clickEditorTab(page, 'devices');
+  const groupedObjects = await page.evaluate(() => { const shadow = document.querySelector('taylors3d-card').shadowRoot;
+    return { groups: [...shadow.querySelectorAll('[data-act="editor-group"]')].map((button) => button.dataset.id),
+      selected: shadow.querySelector('[data-act="editor-group"][aria-pressed="true"]')?.dataset.id,
+      basic: [...shadow.querySelectorAll('.editor-basic-tabs [data-act="tab"]')].filter((button) => !button.hidden && button.getClientRects().length).map((button) => button.dataset.id),
+      advanced: [...shadow.querySelectorAll('[data-editor-advanced][data-group="devices"] [data-act="tab"]')].filter((button) => !button.hidden).map((button) => button.dataset.id) }; });
+  check('Objects remains available beside Devices in its visible group, with advanced device tools retained',
+    groupedObjects.selected === 'devices' && groupedObjects.groups.join(',') === 'house,devices,controls,appearance,data'
+      && groupedObjects.basic.join(',') === 'devices,objects' && groupedObjects.advanced.join(',') === 'cameras,tracking,security,mower', JSON.stringify(groupedObjects));
+  await clickEditorTab(page, 'objects');
   await sleep(200);
   check('rooms start collapsed (no object rows)', (await page.evaluate(`${sr}.querySelectorAll('li.obj').length`)) === 0);
   // click the lamp in 3D: selects (expands) its row, does not toggle
@@ -651,7 +706,7 @@ try {
   check('Test button back on the bound row', await hasTest());
   await page.screenshot({ path: path.join(root, 'screenshots', 'objects-tab.png') });
   // leaving the tab turns object taps off again
-  await page.evaluate(`[...${sr}.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === 'Devices').click()`);
+  await clickEditorTab(page, 'devices');
   await sleep(200);
   check('object taps are off again outside the Objects tab', await page.evaluate(`!${card}._objectTapsOn()`));
   }
@@ -861,7 +916,7 @@ try {
   const sr = `${card}.shadowRoot`;
   await page.evaluate(`${sr}.querySelector('button.edit').click()`);
   await sleep(300);
-  await page.evaluate(`[...${sr}.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === 'Objects').click()`);
+  await clickEditorTab(page, 'objects');
   await sleep(200);
   for (let i = 0; i < 20; i++) {
     const opened = await page.evaluate(`(() => { const b = [...${sr}.querySelectorAll('[data-act=obj-expand]')].find((x) => x.textContent.trim() === '▸'); if (b) b.click(); return !!b; })()`);
@@ -924,11 +979,7 @@ s = await openDemo({ view: '3d', height: '560px' }, { width: 1500, height: 680 }
 try {
   const { page } = s;
   const panel = (sel) => `${card}.shadowRoot.querySelector(".panel ${sel}")`;
-  const clickText = (t) => page.evaluate((t) => {
-    const b = [...document.querySelector('taylors3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === t);
-    if (b) b.click();
-    return !!b;
-  }, t);
+  const clickText = (t) => clickPanelText(page, t);
   await page.evaluate(`${card}.shadowRoot.querySelector("button.edit").click()`);
   await sleep(200);
   await clickText('Model');
@@ -1196,11 +1247,7 @@ try {
   const { page } = s;
   const sr = `${card}.shadowRoot`;
   const clickText = async (t) => {
-    const ok = await page.evaluate((t) => {
-      const b = [...document.querySelector('taylors3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === t);
-      if (b) b.click();
-      return !!b;
-    }, t);
+    const ok = await clickPanelText(page, t);
     await sleep(200);
     return ok;
   };
@@ -1595,11 +1642,7 @@ try {
   const { page } = s;
   const sr = `${card}.shadowRoot`;
   const clickText = async (t) => {
-    const ok = await page.evaluate((t) => {
-      const b = [...document.querySelector('taylors3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === t);
-      if (b) b.click();
-      return !!b;
-    }, t);
+    const ok = await clickPanelText(page, t);
     await sleep(200);
     return ok;
   };
@@ -1787,7 +1830,7 @@ try {
   const { page } = s;
   await page.evaluate(`${card}.shadowRoot.querySelector("button.edit").click()`);
   await sleep(300);
-  await page.evaluate(`[...${card}.shadowRoot.querySelectorAll(".panel button")].find((b) => b.textContent.trim() === "Model").click()`);
+  await clickEditorTab(page, 'model');
   const inp = await page.evaluateHandle(`${card}.shadowRoot.querySelector("[data-field=model-file]")`);
   await inp.uploadFile(path.join(root, 'demo/house.glb'));
   await page.waitForFunction(`!!${card}._view.model`, { timeout: 20000 });
@@ -1978,10 +2021,7 @@ if (process.env.REAL_MODEL) {
     const { page } = s;
     await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
     await sleep(200);
-    await page.evaluate(() => {
-      const b = [...document.querySelector('taylors3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === 'Model');
-      if (b) b.click();
-    });
+    await clickEditorTab(page, 'model');
     await sleep(150);
     const input = await page.evaluateHandle(`${card}.shadowRoot.querySelector('.panel [data-field=model-file]')`);
     await input.uploadFile(process.env.REAL_MODEL);
@@ -2015,10 +2055,7 @@ if (process.env.USER_MODEL) {
       const { page } = u;
       await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`);
       await sleep(200);
-      await page.evaluate(() => {
-        const b = [...document.querySelector('taylors3d-card').shadowRoot.querySelectorAll('.panel button')].find((x) => x.textContent.trim() === 'Model');
-        if (b) b.click();
-      });
+      await clickEditorTab(page, 'model');
       await sleep(150);
       const input = await page.evaluateHandle(`${card}.shadowRoot.querySelector('.panel [data-field=model-file]')`);
       const t0 = Date.now();

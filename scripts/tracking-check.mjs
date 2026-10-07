@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // Browser checks use explicit simulated observations, not household detections or routes.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,6 +11,7 @@ const check = (name, pass, details) => {
 };
 const settle = (page) => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 async function control(page, selector, action) {
+  await revealEditorTab(page, selector);
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {
     const element = handle.asElement();
@@ -183,7 +185,7 @@ try {
     return { overflow: document.documentElement.scrollWidth > innerWidth,
       targets: [...form.querySelectorAll('button,input,select')].filter((el) => el.getClientRects().length).every((el) => el.getBoundingClientRect().height >= 44),
       source: !!form.querySelector('[data-field="trk-entity"]'),
-      tabs: [...c._edit.panel.querySelectorAll('.tabs button')].every((button) => {
+      tabs: [...c._edit.panel.querySelectorAll('.tabs button')].filter((button) => button.getClientRects().length && !button.closest('[hidden],details:not([open])')).every((button) => {
         const rect = button.getBoundingClientRect(), parent = button.parentElement.getBoundingClientRect();
         return rect.height >= 44 && rect.left >= parent.left - 1 && rect.right <= parent.right + 1;
       }) }; });

@@ -110,7 +110,9 @@ export const TAYLORS3D_THEME_CSS = `
   transition:background-color 120ms ease,border-color 120ms ease;
 }
 :host([data-taylors3d-theme="house"]) :is(.toolbar,.taylors3d-device-popup,.fp-popup,.taylors3d-minimap,.panel,[data-scene-preview-bar],[data-taylors3d-nav-rail]) :disabled {
-  opacity:.6;
+  opacity:1;
+  color:var(--taylors3d-ui-muted);
+  border-style:dashed;
   cursor:default;
 }
 :host([data-taylors3d-theme="house"]) .toolbar :is(button.on,button[aria-pressed="true"]),
@@ -120,7 +122,7 @@ export const TAYLORS3D_THEME_CSS = `
   border-color:var(--taylors3d-ui-teal);
   font-weight:600;
 }
-:host([data-taylors3d-theme="house"]) .toolbar [data-taylors3d-tone="floor"],
+:host([data-taylors3d-theme="house"]) .toolbar button[data-taylors3d-tone="floor"],
 :host([data-taylors3d-theme="house"]) .taylors3d-device-popup button[data-action="toggle"][data-entity^="light."],
 :host([data-taylors3d-theme="house"]) [data-taylors3d-tone="light"] {
   color:var(--taylors3d-ui-amber-ink);
@@ -151,7 +153,7 @@ export const TAYLORS3D_THEME_CSS = `
 :host([data-taylors3d-theme="house"]) .t3d-room-summary { margin:6px 0 0; color:var(--taylors3d-ui-muted); font-size:13px; line-height:1.4; overflow-wrap:anywhere; }
 :host([data-taylors3d-theme="house"]) :is(.t3d-entity-name,.fp-pop-title) { font-weight:600; overflow-wrap:anywhere; }
 :host([data-taylors3d-theme="house"]) .t3d-entity { border-color:var(--taylors3d-ui-divider); padding:14px 0; }
-:host([data-taylors3d-theme="house"]) :is(.t3d-entity-value,.t3d-entity-status,.t3d-popup-kind,.t3d-camera-help,.panel .hint,.panel .dim,.panel label,.panel .foot,[data-taylors3d-summary-meta]) {
+:host([data-taylors3d-theme="house"]) :is(.t3d-entity-value,.t3d-entity-status,.t3d-popup-kind,.t3d-camera-help,.t3d-inline-reading,.t3d-inline-hint,.t3d-room-action-issue,.panel .hint,.panel .dim,.panel .sub,.panel label,.panel .foot,[data-taylors3d-summary-meta]) {
   color:var(--taylors3d-ui-muted);
   overflow-wrap:anywhere;
 }
@@ -175,10 +177,14 @@ export const TAYLORS3D_THEME_CSS = `
 :host([data-taylors3d-theme="house"]) .panel { font-size:14px; border-color:var(--taylors3d-ui-divider); }
 :host([data-taylors3d-theme="house"]) .panel :is(section,[data-trk-editor],[data-tracking-calibration],[data-env-weather-editor],[data-security-editor],.cov-editor) { color:var(--taylors3d-ui-text); }
 :host([data-taylors3d-theme="house"]) .panel p { color:var(--taylors3d-ui-text); }
+:host([data-taylors3d-theme="house"]) .panel :is(.val,a,a:visited) { color:var(--taylors3d-ui-text); }
 :host([data-taylors3d-theme="house"]) .panel :is(h3,h4) { color:var(--taylors3d-ui-text); line-height:1.35; }
 :host([data-taylors3d-theme="house"]) .panel .tabs button { padding:8px; flex:1 0 96px; min-width:96px; font-size:12px; white-space:normal; overflow-wrap:normal; border-radius:0; background:transparent; }
-:host([data-taylors3d-theme="house"]) .panel .tabs button.on { color:var(--taylors3d-ui-teal-ink); border-bottom:3px solid var(--taylors3d-ui-teal); }
-:host([data-taylors3d-theme="house"]) .panel button.primary { color:var(--taylors3d-ui-on-teal); background:var(--taylors3d-ui-teal); border-color:var(--taylors3d-ui-teal); }
+:host([data-taylors3d-theme="house"]) .panel .tabs button.on { color:var(--taylors3d-ui-teal-ink); background:var(--taylors3d-ui-teal-soft); border-bottom:3px solid var(--taylors3d-ui-teal); }
+:host([data-taylors3d-theme="house"]) .panel .sub { text-transform:none; letter-spacing:0; font-size:12px; font-weight:600; }
+:host([data-taylors3d-theme="house"]) .panel .pill.ok { color:var(--taylors3d-ui-teal-ink); background:var(--taylors3d-ui-teal-soft); }
+:host([data-taylors3d-theme="house"]) .panel :is(.pill.missing,.badge.warn) { color:var(--taylors3d-ui-amber-ink); background:var(--taylors3d-ui-amber-soft); }
+:host([data-taylors3d-theme="house"]) .panel :is(button,label.button).primary { color:var(--taylors3d-ui-on-teal); background:var(--taylors3d-ui-teal); border-color:var(--taylors3d-ui-teal); }
 :host([data-taylors3d-theme="house"]) [data-scene-preview-bar] { border-radius:16px; padding:12px; font-size:14px; }
 :host([data-taylors3d-theme="house"]) [data-scene-preview-bar] :is(.scene-preview-note,.scene-preview-reason,[data-scene-preview-status]) { color:var(--taylors3d-ui-muted); font-size:13px; }
 :host([data-taylors3d-theme="house"]) [data-scene-preview-bar] .scene-preview-row { border-radius:14px; padding:6px; border-color:var(--taylors3d-ui-divider); }
@@ -194,7 +200,10 @@ export const TAYLORS3D_THEME_CSS = `
 :host([data-taylors3d-theme="house"]) .taylors3d-minimap .map-close { min-width:44px; width:44px; height:44px; padding:4px; }
 :host([data-taylors3d-theme="house"]) .taylors3d-minimap .map-floor { min-width:0; padding-inline:4px; }
 :host([data-taylors3d-theme="house"]) .status-legend { background:var(--taylors3d-ui-surface); color:var(--taylors3d-ui-text); border-color:var(--taylors3d-ui-divider); border-radius:12px; }
-:host([data-taylors3d-theme="house"]) .fp-room-label { color:var(--taylors3d-ui-muted); }
+:host([data-taylors3d-theme="house"]) .fp-room-label { color:var(--taylors3d-ui-text); background:var(--taylors3d-ui-surface); opacity:1;
+  padding:3px 8px; border:1px solid var(--taylors3d-ui-divider); border-radius:8px; max-width:160px; white-space:normal;
+  overflow-wrap:anywhere; text-align:center; line-height:1.35; font-size:12px; }
+:host([data-taylors3d-theme="house"]) .fp-marker .fp-dot { box-sizing:border-box; width:44px; height:44px; --mdc-icon-size:22px; }
 :host([data-taylors3d-theme="house"]) .fp-val { color:var(--taylors3d-ui-text); background:var(--taylors3d-ui-surface); }
 
 /* Measured shell hooks. Root must reserve the actual scene rectangle. */
@@ -220,7 +229,7 @@ export const TAYLORS3D_THEME_CSS = `
 :host([data-taylors3d-theme="house"]) .stage[data-taylors3d-shell-mode="rail"] [data-house-navigation] { top:calc(var(--taylors3d-summary-height,0px) + 8px); right:auto; width:calc(var(--taylors3d-rail-width,88px) - 16px); max-height:calc(100% - var(--taylors3d-summary-height,0px) - 16px); overflow-y:auto; padding:4px; }
 :host([data-taylors3d-theme="house"]) .stage[data-taylors3d-shell-mode="rail"] [data-house-navigation] button { padding:8px 3px; min-height:64px; font-size:12px; line-height:1.3; }
 :host([data-taylors3d-theme="house"]) .stage[data-taylors3d-shell="adaptive"] .taylors3d-device-popup[data-taylors3d-controls="adaptive"][data-house-controls-layout="right"] { left:auto; right:8px; top:calc(var(--taylors3d-summary-height,0px) + 8px); bottom:calc(var(--taylors3d-bar-height,0px) + var(--taylors3d-navigation-height,0px) + 8px); width:min(316px,40%); max-width:none; max-height:none; }
-:host([data-taylors3d-theme="house"]) .stage[data-taylors3d-shell="adaptive"] .taylors3d-device-popup[data-taylors3d-controls="adaptive"][data-house-controls-layout="sheet"] { left:8px; right:8px; top:auto; bottom:calc(var(--taylors3d-bar-height,0px) + var(--taylors3d-navigation-height,0px) + 8px); width:auto; max-width:none; max-height:320px; border-radius:22px 22px 16px 16px; }
+:host([data-taylors3d-theme="house"]) .stage[data-taylors3d-shell="adaptive"] .taylors3d-device-popup[data-taylors3d-controls="adaptive"][data-house-controls-layout="sheet"] { left:8px; right:8px; top:auto; bottom:calc(var(--taylors3d-bar-height,0px) + var(--taylors3d-navigation-height,0px) + 8px); width:auto; max-width:none; max-height:var(--taylors3d-room-sheet-height,320px); border-radius:22px 22px 16px 16px; }
 :host([data-taylors3d-theme="house"]) .stage[data-taylors3d-shell-mode="editor"] .taylors3d-device-popup[data-taylors3d-controls="adaptive"],
 :host([data-taylors3d-theme="house"]) .stage[data-taylors3d-shell-mode="hidden"] :is([data-house-navigation],[data-taylors3d-summary]) { display:none; }
 :host([data-taylors3d-theme="house"]) .stage[data-taylors3d-shell-size="compact"] :is(.toolbar,.panel) { border-radius:18px; }
@@ -241,6 +250,20 @@ export const TAYLORS3D_THEME_CSS = `
     --taylors3d-ui-focus:Highlight; --taylors3d-ui-danger:CanvasText;
     forced-color-adjust:auto;
   }
+}
+:host([data-taylors3d-theme="house"]) .panel .editor-nav { border-color:var(--taylors3d-ui-divider); padding:12px; }
+:host([data-taylors3d-theme="house"]) .panel .editor-groups button { border-radius:12px; color:var(--taylors3d-ui-muted); background:var(--taylors3d-ui-surface); border-color:var(--taylors3d-ui-divider); }
+:host([data-taylors3d-theme="house"]) .panel .editor-groups button[aria-pressed="true"] { color:var(--taylors3d-ui-on-teal); background:var(--taylors3d-ui-teal); border-color:var(--taylors3d-ui-teal); }
+:host([data-taylors3d-theme="house"]) .panel .editor-nav :is(h3,summary),
+:host([data-taylors3d-theme="house"]) .panel .editor-setup :is(h3,a) { color:var(--taylors3d-ui-text); }
+:host([data-taylors3d-theme="house"]) .panel .editor-setup-steps button { border-radius:12px; background:var(--taylors3d-ui-raised); color:var(--taylors3d-ui-muted); border-color:var(--taylors3d-ui-divider); }
+:host([data-taylors3d-theme="house"]) .panel .editor-setup-steps button[aria-current="step"] { color:var(--taylors3d-ui-teal-ink); border-color:var(--taylors3d-ui-teal); background:var(--taylors3d-ui-teal-soft); }
+:host([data-taylors3d-theme="house"]) .panel .editor-setup .step-number { background:var(--taylors3d-ui-surface); color:var(--taylors3d-ui-text); }
+:host([data-taylors3d-theme="house"]) :is(.panel,.taylors3d-device-popup) :is(input,select,button,a,summary):focus-visible { outline:3px solid var(--taylors3d-ui-focus); outline-offset:2px; }
+:host([data-taylors3d-theme="house"]) :is(.toolbar,.panel,.taylors3d-device-popup) button { transition:background-color 140ms ease,border-color 140ms ease,color 140ms ease; }
+:host([data-taylors3d-theme="house"]) .taylors3d-device-popup { box-shadow:0 12px 32px rgb(0 0 0 / 20%); }
+@media (prefers-reduced-motion:reduce) {
+  :host([data-taylors3d-theme="house"]) :is(.toolbar,.panel,.taylors3d-device-popup) button { transition:none; }
 }
 :host([data-taylors3d-theme="house"]) [hidden] { display:none !important; }
 `;

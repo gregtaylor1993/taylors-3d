@@ -218,7 +218,9 @@ function boundObject(card, f, floorId = 'upper') {
 
 function installActualRenderCallbacks(card, f) {
   const root = document.createElement('div'); f.host.append(root); Object.defineProperty(card, 'shadowRoot', { value: root });
-  Object.assign(card, { _view: null, _mode: f.view.mode, _miniMap: { updateCamera: vi.fn() },
+  // The real floor fixture already owns fitted cameras and a native mini-map
+  // node; a queued status resize must not initialize unrelated camera state.
+  Object.assign(card, { _view: null, _mode: f.view.mode, _fitted: true, _miniMap: { el: document.createElement('div'), updateCamera: vi.fn() },
     _config: { ...card._config, height: '600px', control_panel: 'popup' },
     finishWallSelectionPreparation: vi.fn(), _unwatchAmbientPreference: vi.fn(), _unbindAmbientInput: vi.fn(),
     _watchAmbientPreference: vi.fn(), _syncModelRendering: vi.fn(), _ensureWeatherLayer: vi.fn(),

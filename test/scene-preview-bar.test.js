@@ -21,16 +21,28 @@ function fixture({ settings, hass: patch } = {}) {
   bar = new ScenePreviewBar(host, { controller, getContext: () => context }); instances.push({ bar, controller, host });
   const button = (action, id = 'movie') => action === 'stop' ? bar.stopButton : [...host.querySelectorAll(`[data-scene-action="${action}"]`)].find((node) => node.dataset.sceneId === id);
   const pointer = (action, type, pointerType = 'mouse', detail = {}) => {
-    const event = Object.assign(new Event(type, { bubbles: !['pointerenter', 'pointerleave'].includes(type) }), { pointerType, button: 0, ...detail });
+    const event = Object.assign(new Event(type, { bubbles: !['pointerenter', 'pointerleave'].includes(type) }), { pointerType, button: 0, buttons: 0, ...detail });
     (typeof action === 'string' ? button(action) : action).dispatchEvent(event);
   };
   const key = (action, type, value = 'Enter', repeat = false) => button(action).dispatchEvent(new KeyboardEvent(type, { key: value, repeat, bubbles: true }));
-  return { context, hass, host, bar, controller, preview, button, pointer, key };
+  const hover = (action = 'preview') => { pointer(action, 'pointerenter'); pointer(action, 'pointermove', 'mouse', { movementX: 1, movementY: 0 }); };
+  return { context, hass, host, bar, controller, preview, button, pointer, key, hover };
 }
 const tick = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
 afterEach(() => { for (const { bar, controller, host } of instances.splice(0)) { bar.dispose(); controller.dispose(); host.remove(); } });
 
 describe('saved visual previews are separate from real scene actions', () => {
+  it.each([
+    ['en', 'Request for Movie accepted. Check the current readings.'],
+    ['de', 'Anfrage für Movie angenommen. Prüfe die aktuellen Werte.'],
+    ['fr', 'Demande pour Movie acceptée. Vérifiez les valeurs actuelles.'],
+    ['es', 'Solicitud para Movie aceptada. Comprueba las lecturas actuales.'],
+  ])('reports an accepted request in %s without claiming a scene result', async (language, message) => {
+    const f = fixture({ hass: { language } }); f.button('activate').click(); await tick();
+    expect(f.bar.status.textContent).toBe(message);
+    expect(f.hass.states['scene.movie'].state).toBe('unknown');
+    expect(f.hass.states['light.main'].attributes.rgb_color).toEqual([255, 0, 0]);
+  });
   it('shows exact saved labels and accessible distinct actions without any command or state mutation', () => {
     const f = fixture(), state = f.hass.states['light.main'];
     expect(f.host.querySelector('[data-scene-preview-bar]')).toBe(f.bar.el);
@@ -60,7 +72,7 @@ describe('saved visual previews are separate from real scene actions', () => {
     }
   });
   it('mouse entry/exit previews and clears only renderer light targets, keeping the latest real HA state intact', () => {
-    const f = fixture(), original = f.hass.states['light.main']; f.pointer('preview', 'pointerenter');
+    const f = fixture(), original = f.hass.states['light.main']; f.hover();
     expect(f.controller.active.itemId).toBe('movie'); expect(f.preview.mock.calls[0][0].get('light.main').appearance.color).toEqual([0, 0, 255]);
     const latest = rgb({ attributes: { color_mode: 'rgb', supported_color_modes: ['rgb'], brightness: 40, rgb_color: [0, 255, 0] } });
     f.hass.states = { ...f.hass.states, 'light.main': latest }; f.bar.update(); f.pointer('preview', 'pointerleave');
@@ -69,6 +81,7 @@ describe('saved visual previews are separate from real scene actions', () => {
   });
   it('focus and touch entry never activate or silently preview; explicit touch click pins until Stop', () => {
     const f = fixture(); f.button('preview').focus(); f.pointer('preview', 'pointerenter', 'touch');
+    f.pointer('preview', 'pointermove', 'touch', { movementX: 1, movementY: 0 });
     expect(f.preview).not.toHaveBeenCalled(); expect(f.hass.callService).not.toHaveBeenCalled();
     f.pointer('preview', 'pointerdown', 'touch'); f.button('preview').click(); f.pointer('preview', 'pointerleave', 'touch');
     expect(f.controller.active.itemId).toBe('movie'); expect(f.bar.stopButton.disabled).toBe(false); expect(f.bar.status.textContent).toContain('Press Stop preview');
@@ -76,15 +89,15 @@ describe('saved visual previews are separate from real scene actions', () => {
   });
   it('old mouseleave cannot cancel a newer preview token', () => {
     const f = fixture(), first = f.button('preview'), second = f.button('preview', 'reading');
-    f.pointer(first, 'pointerenter'); const old = f.controller.active.token;
-    f.pointer(second, 'pointerenter'); const current = f.controller.active.token;
+    f.hover(first); const old = f.controller.active.token;
+    f.hover(second); const current = f.controller.active.token;
     expect(current).not.toBe(old); f.pointer(first, 'pointerleave');
     expect(f.controller.active.token).toBe(current); expect(f.preview.mock.calls.map(([map]) => map === null)).toEqual([false, false]);
     f.pointer(second, 'pointerleave'); expect(f.controller.active).toBeNull(); expect(f.hass.callService).not.toHaveBeenCalled();
   });
   it('a pinned preview survives other hover until an explicit new preview or Stop', () => {
     const f = fixture(); f.button('preview').click(); const current = f.controller.active.token;
-    f.pointer(f.button('preview', 'reading'), 'pointerenter'); f.pointer('preview', 'pointerleave');
+    f.hover(f.button('preview', 'reading')); f.pointer('preview', 'pointerleave');
     expect(f.controller.active.token).toBe(current);
     f.button('preview', 'reading').click(); expect(f.controller.active.itemId).toBe('reading'); f.bar.stopButton.click();
     expect(f.controller.active).toBeNull(); expect(f.hass.callService).not.toHaveBeenCalled();
@@ -94,13 +107,55 @@ describe('saved visual previews are separate from real scene actions', () => {
     expect(f.controller.active.itemId).toBe('movie'); f.key('preview', 'keydown', 'Escape'); expect(f.controller.active).toBeNull();
     expect(f.hass.callService).not.toHaveBeenCalled();
   });
+  it('requires real unheld mouse movement rather than stationary boundary entry or malformed motion', () => {
+    const f = fixture(); f.pointer('preview', 'pointerenter');
+    for (const detail of [
+      { movementX: 0, movementY: 0 }, { movementX: NaN, movementY: 1 },
+      { movementX: 1, movementY: Infinity }, { movementX: '1', movementY: 0 },
+      { movementX: 1, movementY: 0, buttons: 1 }, {},
+    ]) f.pointer('preview', 'pointermove', 'mouse', detail);
+    expect(f.controller.active).toBeNull(); expect(f.preview).not.toHaveBeenCalled();
+    f.pointer('preview', 'pointermove', 'mouse', { movementX: 0, movementY: -1 });
+    expect(f.controller.active.itemId).toBe('movie'); expect(f.hass.callService).not.toHaveBeenCalled();
+  });
+  it('keeps a stationary recovered context clear until a new genuine mouse move', () => {
+    const f = fixture(); f.hover(); const token = f.controller.active.token;
+    f.context.contextKey = 'house:new-model:3d'; f.bar.update();
+    expect(f.controller.active).toBeNull();
+    f.pointer('preview', 'pointerenter'); f.pointer('preview', 'pointermove', 'mouse', { movementX: 0, movementY: 0 });
+    expect(f.controller.active).toBeNull();
+    f.pointer('preview', 'pointermove', 'mouse', { movementX: 1, movementY: 0 });
+    expect(f.controller.active.itemId).toBe('movie'); expect(f.controller.active.token).not.toBe(token);
+    expect(f.hass.callService).not.toHaveBeenCalled();
+  });
+  it('does not revive a disposed preview when replacement DOM enters under the stationary mouse', () => {
+    const f = fixture(); f.hover(); const old = f.controller.active.token;
+    f.bar.dispose(); f.context.contextKey = 'house:replacement:3d';
+    const bar = new ScenePreviewBar(f.host, { controller: f.controller, getContext: () => f.context });
+    instances.push({ bar, controller: f.controller, host: f.host });
+    const button = bar.el.querySelector('[data-scene-action="preview"][data-scene-id="movie"]');
+    f.pointer(button, 'pointerenter'); f.pointer(button, 'pointermove', 'mouse', { movementX: 0, movementY: 0 });
+    expect(f.controller.active).toBeNull();
+    f.pointer(button, 'pointermove', 'mouse', { movementX: -1, movementY: 0 });
+    expect(f.controller.active.itemId).toBe('movie'); expect(f.controller.active.token).not.toBe(old);
+    expect(f.hass.callService).not.toHaveBeenCalled();
+    f.pointer(button, 'pointerleave'); expect(f.controller.active).toBeNull();
+  });
+  it('retains one current hover token and override across repeated genuine movement and unrelated readings', () => {
+    const f = fixture(); f.hover(); const token = f.controller.active.token;
+    for (let index = 0; index < 4; index++) f.pointer('preview', 'pointermove', 'mouse', { movementX: 1, movementY: 0 });
+    f.hass.states['sensor.unrelated'] = { state: '7', attributes: {} }; f.bar.update();
+    f.pointer('preview', 'pointermove', 'mouse', { movementX: 0, movementY: 1 });
+    expect(f.controller.active.token).toBe(token); expect(f.preview).toHaveBeenCalledOnce();
+    expect(f.hass.callService).not.toHaveBeenCalled();
+  });
   it('regular users can activate an unknown scene even when its visual light preview is incomplete', async () => {
     const f = fixture({ settings: { enabled: true, items: [item('movie', { lights: [] })] }, hass: { user: { id: 'ordinary-user', is_admin: false } } });
     expect(f.button('preview').disabled).toBe(true); expect(f.button('activate').disabled).toBe(false);
     f.button('activate').click(); await tick();
     expect(f.hass.callService).toHaveBeenCalledOnce(); expect(f.hass.callService).toHaveBeenCalledWith('scene', 'turn_on', { entity_id: 'scene.movie' });
     expect(f.hass.states['scene.movie'].state).toBe('unknown'); expect(f.hass.states['light.main'].attributes.rgb_color).toEqual([255, 0, 0]);
-    expect(f.bar.status.textContent).toContain('Activated Movie');
+    expect(f.bar.status.textContent).toContain('Request for Movie accepted. Check the current readings.');
   });
   it.each(['unavailable', 'restored', 'removed', 'hidden', 'device-disabled'])('disables a %s scene from actual evidence without guessing another source', (kind) => {
     const f = fixture();
@@ -163,9 +218,9 @@ describe('deliberate actions remain tied to the pressed current scene', () => {
   });
   it('shows pending action feedback and sends exactly once until acknowledgement', async () => {
     const f = fixture(); let finish; f.hass.callService.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
-    f.button('activate').click(); expect(f.bar.status.textContent).toContain('Activating Movie'); expect(f.button('activate').disabled).toBe(true);
+    f.button('activate').click(); expect(f.bar.status.textContent).toContain('Requesting Movie'); expect(f.button('activate').disabled).toBe(true);
     f.button('activate').click(); expect(f.hass.callService).toHaveBeenCalledOnce(); finish(); await tick();
-    expect(f.button('activate').disabled).toBe(false); expect(f.bar.status.textContent).toContain('Activated Movie');
+    expect(f.button('activate').disabled).toBe(false); expect(f.bar.status.textContent).toContain('Request for Movie accepted. Check the current readings.');
   });
   it('shows actual service failures as text and never fabricates a light or scene state', async () => {
     const f = fixture(), original = f.hass.states; f.hass.callService.mockRejectedValue(new Error('<img src=x onerror=alert(1)> denied'));

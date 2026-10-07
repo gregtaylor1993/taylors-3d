@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // F12: saved visual light targets, real GLB pixels, separate deliberate HA actions.
 // The house/light observations are simulated. All GPU samples come from the card's
 // existing renderer and fixed lamp pool, with no injected lights or fake app clock.
@@ -103,6 +104,7 @@ async function patch(page, states = {}, extra = {}) {
   await ready(page);
 }
 async function control(page, selector, callback) {
+  await revealEditorTab(page, selector);
   context = 'UI ' + selector;
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {
@@ -121,7 +123,15 @@ const type = (page, selector, value) => control(page, selector, async (el) => {
   const actual = await el.evaluate((input) => input.value);
   if (actual !== value) throw new Error(`Native scene field edit ${selector} produced ${JSON.stringify(actual)}, expected ${JSON.stringify(value)}`);
 });
-async function hover(page, id) { await control(page, action('preview', id), (el) => el.hover()); await ready(page); }
+async function hover(page, id) {
+  await control(page, action('preview', id), async (el) => {
+    // Chrome's first CDP mouse sample can have zero movement. Two real native
+    // positions inside the control provide the deliberate movement cue.
+    await el.hover(); const rect = await el.boundingBox();
+    await page.mouse.move(rect.x + rect.width / 2 + 2, rect.y + rect.height / 2);
+  });
+  await ready(page);
+}
 async function screenshot(page, name, fullPage = false) { fs.mkdirSync(path.join(root, 'screenshots'), { recursive: true }); await page.screenshot({ path: path.join(root, 'screenshots', name), fullPage }); }
 async function calls(page) { return page.evaluate(() => window.scenesFixture.services); }
 async function snapshot(page) {
@@ -345,14 +355,14 @@ async function actionScenario(page) {
   await page.evaluate(() => { window.scenesFixture.nextResult = 'pending'; }); await click(page, action('activate', 'incomplete'));
   let sent = await calls(page);
   check('native Activate sends exactly one actual scene.turn_on and advertises pending', equal(sent, [['scene', 'turn_on', { entity_id: 'scene.scenes_incomplete' }]])
-    && await page.evaluate(() => document.querySelector('taylors3d-card').shadowRoot.querySelector('[data-scene-preview-bar] [data-scene-preview-status]').textContent.includes('Activating')),
+    && await page.evaluate(() => document.querySelector('taylors3d-card').shadowRoot.querySelector('[data-scene-preview-bar] [data-scene-preview-status]').textContent === 'Requesting Other devices…'),
   sent);
   await click(page, action('activate', 'incomplete'));
   check('pending repeated click cannot send a second command or alter real HA states', (await calls(page)).length === 1
     && await page.evaluate((initial) => JSON.stringify(document.querySelector('taylors3d-card')._hass.states) === JSON.stringify(initial), initial));
   await page.evaluate(() => { window.scenesFixture.pending.resolve(); window.scenesFixture.nextResult = 'success'; });
   await page.waitForFunction(() => !document.querySelector('taylors3d-card')._scenePreviewBar._pending, { timeout: 5000 });
-  check('acknowledgement shows accepted action without optimistic light readings', (await snapshot(page)).status.includes('Activated')
+  check('acknowledgement shows accepted action without optimistic light readings', (await snapshot(page)).status === 'Request for Other devices accepted. Check the current readings.'
     && await page.evaluate((initial) => JSON.stringify(document.querySelector('taylors3d-card')._hass.states) === JSON.stringify(initial), initial));
   // Press/revoke/recover/release uses real browser mouse events. The source is
   // restored before release, so a stale click must remain poisoned through recovery.
@@ -413,9 +423,9 @@ async function lifecycleScenario(page) {
       && c.shadowRoot.querySelector('[data-scene-action="preview"][data-scene-id="movie"]') === window.scenesFixture.focused;
   }));
   await click(page, action('preview', 'movie')); await page.mouse.move(1, 1); await ready(page); const before = await snapshot(page);
-  // Leave the pinned preview active, but move away before detaching. Re-inserting
-  // a Preview button under the stationary mouse creates a new native hover; that
-  // is a new user cue, not automatic recovery of the disconnected old token.
+  // Keep the pinned preview active while isolating disconnect cleanup from
+  // boundary events. The replacement case below retains the stationary pointer
+  // and independently proves that replacing the model is not a fresh preview request.
   check('pinned preview remains active with pointer outside before disconnect', before.active?.itemId === 'movie' && before.map.includes(entity));
   await page.evaluate(() => { const c = document.querySelector('taylors3d-card'); window.scenesFixture.detached = c; c.remove(); });
   check('real card disconnect clears preview and stops its rendering loop', await page.evaluate(() => {
@@ -425,12 +435,45 @@ async function lifecycleScenario(page) {
   check('reconnect follows real state with same renderer/pool and no automatic preview or shadow maps', !after.map.length && !after.active && after.sameRenderer
     && equal(after.pool, before.pool) && !after.shadowEnabled && !after.pending.length && after.services === commands,
   { before: { active: before.active, pool: before.pool, services: before.services }, after: { active: after.active, map: after.map, sameRenderer: after.sameRenderer, pool: after.pool, services: after.services, shadowEnabled: after.shadowEnabled, pending: after.pending } });
-  await click(page, action('preview', 'movie')); await ready(page);
   await page.evaluate(() => {
     const c = document.querySelector('taylors3d-card'), f = window.scenesFixture;
-    f.oldModel = c._view.model; f.glowDisposed = 0;
+    f.replacementEvents = []; f.replacementPoint = null;
+    f.captureReplacementPointer = (event) => {
+      const button = event.target?.closest?.('[data-scene-action="preview"][data-scene-id="movie"]');
+      if (!button) return;
+      if (event.type === 'pointerdown') f.replacementPoint = { x: event.clientX, y: event.clientY };
+      f.replacementEvents.push({ type: event.type, trusted: event.isTrusted, pointerType: event.pointerType,
+        x: event.clientX, y: event.clientY, movementX: event.movementX, movementY: event.movementY, buttons: event.buttons,
+        modelRoot: c._view.model?.root?.uuid, at: performance.now(), generation: c._scenePreviewController.active?.token?.generation });
+    };
+    for (const type of ['pointerdown', 'pointerover', 'pointerenter', 'pointermove', 'pointerleave']) c.shadowRoot.addEventListener(type, f.captureReplacementPointer, true);
+    // Chromium may omit pointerenter when the rebuilt control has no entry
+    // listener. Attach an inert observer before it becomes visible so the trace
+    // records the real boundary event without making a preview request.
+    f.nativeEntryControls = new Set(); f.nativeEntryObserver = () => {};
+    const observeEntry = () => {
+      for (const button of c.shadowRoot.querySelectorAll('[data-scene-action="preview"][data-scene-id="movie"]')) {
+        if (f.nativeEntryControls.has(button)) continue;
+        f.nativeEntryControls.add(button); button.addEventListener('pointerenter', f.nativeEntryObserver);
+      }
+    };
+    observeEntry(); f.nativeEntryMutation = new MutationObserver(observeEntry);
+    f.nativeEntryMutation.observe(c.shadowRoot, { childList: true, subtree: true });
+  });
+  await click(page, action('preview', 'movie')); await ready(page);
+  const replacementBefore = await snapshot(page);
+  check('replacement begins with a genuinely pinned current preview and no extra command', replacementBefore.active?.itemId === 'movie'
+    && replacementBefore.map.includes(entity) && replacementBefore.services === commands
+    && await page.evaluate(() => { const c = document.querySelector('taylors3d-card'); return c._scenePreviewBar._pinnedToken === c._scenePreviewController.active?.token; }));
+  await page.evaluate(() => {
+    const c = document.querySelector('taylors3d-card'), f = window.scenesFixture;
+    f.oldModel = c._view.model; f.glowDisposed = 0; f.oldPreviewToken = c._scenePreviewController.active?.token;
+    f.oldPreviewButton = c.shadowRoot.querySelector('[data-scene-action="preview"][data-scene-id="movie"]');
+    f.oldPreviewClearAtDispose = false; f.replacementEvents = []; f.replacementReadings = structuredClone(c._hass.states);
     const material = c._objects.objectAt('scenes_probe').part.glow.material;
-    (Array.isArray(material) ? material[0] : material).addEventListener('dispose', () => f.glowDisposed++);
+    (Array.isArray(material) ? material[0] : material).addEventListener('dispose', () => {
+      f.glowDisposed++; f.oldPreviewClearAtDispose = !c._scenePreviewController.active && !c._lightPreview;
+    });
     c.setConfig({ ...c._config, model: '/demo/scenes-fixture.glb?replacement=1' });
   });
   await page.waitForFunction(() => {
@@ -442,6 +485,87 @@ async function lifecycleScenario(page) {
   check('actual GLB replacement cancels preview and disposes old owned glow exactly once', !replaced.map.length && !replaced.active && replaced.sameRenderer
     && equal(replaced.pool, before.pool) && !replaced.shadowEnabled && !replaced.pending.length && replaced.services === commands
     && await page.evaluate(() => window.scenesFixture.glowDisposed === 1));
+  const stationary = await page.evaluate(() => {
+    const c = document.querySelector('taylors3d-card'), f = window.scenesFixture, point = f.replacementPoint;
+    const button = c.shadowRoot.querySelector('[data-scene-action="preview"][data-scene-id="movie"]'), rect = button.getBoundingClientRect();
+    return { point, modelRoot: c._view.model.root.uuid, oldModelRoot: f.oldModel.root.uuid, events: f.replacementEvents,
+      stoppedBeforeDispose: f.oldPreviewClearAtDispose, disposed: f.glowDisposed,
+      readingsUnchanged: JSON.stringify(c._hass.states) === JSON.stringify(f.replacementReadings),
+      pointInside: point && point.x > rect.left && point.x < rect.right && point.y > rect.top && point.y < rect.bottom,
+      retainedButton: button === f.oldPreviewButton && button.isConnected && c.shadowRoot.contains(button),
+      exactHit: point && c.shadowRoot.elementFromPoint(point.x, point.y)?.closest('[data-scene-action="preview"][data-scene-id="movie"]') === button };
+  });
+  // The keyed button can remain under the same cursor without any native entry
+  // notification. Require exact real hit ownership and validate any boundary
+  // events that Chrome does emit, without fabricating an entry or moving away.
+  check('stationary pointer over the exact retained Preview cannot revive the old preview on a new model', stationary.stoppedBeforeDispose && stationary.disposed === 1
+    && stationary.pointInside && stationary.retainedButton && stationary.exactHit && stationary.modelRoot !== stationary.oldModelRoot && stationary.readingsUnchanged
+    && stationary.events.filter((event) => event.type === 'pointerenter' || event.type === 'pointerover').every((event) => event.trusted && event.pointerType === 'mouse'
+      && event.modelRoot === stationary.modelRoot && event.x === stationary.point.x && event.y === stationary.point.y
+      && event.movementX === 0 && event.movementY === 0)
+    && !stationary.events.some((event) => event.type === 'pointermove' && (event.movementX !== 0 || event.movementY !== 0))
+    && !replaced.active && !replaced.map.length, stationary);
+  await page.evaluate(() => { window.scenesFixture.replacementEvents = []; });
+  await page.mouse.move(stationary.point.x, stationary.point.y); await ready(page);
+  const zeroMove = await snapshot(page);
+  const zeroMoveTrace = await page.evaluate(() => { const c = document.querySelector('taylors3d-card'), f = window.scenesFixture;
+    return { events: f.replacementEvents, modelRoot: c._view.model.root.uuid, disposed: f.glowDisposed,
+      readingsUnchanged: JSON.stringify(c._hass.states) === JSON.stringify(f.replacementReadings) }; });
+  check('a real trusted zero-motion pointer sample stays inactive without changing HA readings, commands or GPU resources', !zeroMove.active && !zeroMove.map.length
+    && zeroMove.sameRenderer && equal(zeroMove.pool, before.pool) && !zeroMove.shadowEnabled && !zeroMove.pending.length && zeroMove.services === commands
+    && equal(zeroMove.stats, replaced.stats) && equal(zeroMove.memory, replaced.memory) && equal(zeroMove.programs, replaced.programs)
+    && zeroMoveTrace.disposed === 1 && zeroMoveTrace.readingsUnchanged && zeroMoveTrace.modelRoot === stationary.modelRoot
+    && zeroMoveTrace.events.some((event) => event.type === 'pointermove' && event.trusted && event.pointerType === 'mouse' && event.buttons === 0
+      && event.modelRoot === stationary.modelRoot && event.x === stationary.point.x && event.y === stationary.point.y
+      && event.movementX === 0 && event.movementY === 0)
+    && !zeroMoveTrace.events.some((event) => event.type === 'pointermove' && (event.movementX !== 0 || event.movementY !== 0)), zeroMoveTrace);
+  // Keep the pointer inside that same control. Actual native movement, rather
+  // than the model replacement or a zero-motion sample, is the new preview cue.
+  await page.mouse.move(stationary.point.x + 2, stationary.point.y); await ready(page);
+  const freshHover = await snapshot(page);
+  check('fresh deliberate native movement owns a new model preview without changing HA readings or sending a command', freshHover.active?.itemId === 'movie'
+    && freshHover.map.includes(entity) && freshHover.sameRenderer && equal(freshHover.pool, before.pool) && !freshHover.shadowEnabled
+    && !freshHover.pending.length && freshHover.services === commands && await page.evaluate(() => {
+      const c = document.querySelector('taylors3d-card'), f = window.scenesFixture;
+      return c._view.model !== f.oldModel && c._scenePreviewController.active?.token !== f.oldPreviewToken
+        && c._scenePreviewBar._ownedToken === c._scenePreviewController.active?.token && !c._scenePreviewBar._pinnedToken
+        && f.replacementEvents.some((event) => event.type === 'pointermove' && event.trusted && event.pointerType === 'mouse'
+          && event.modelRoot === c._view.model.root.uuid && (event.movementX !== 0 || event.movementY !== 0))
+        && f.glowDisposed === 1 && JSON.stringify(c._hass.states) === JSON.stringify(f.replacementReadings);
+    }));
+  await page.mouse.move(1, 1); await ready(page); const left = await snapshot(page);
+  check('leaving the fresh hover clears only that preview with no extra command or old resource disposal', !left.active && !left.map.length
+    && left.services === commands && await page.evaluate(() => window.scenesFixture.glowDisposed === 1));
+  let heldPoint;
+  await control(page, action('preview', 'movie'), async (button) => {
+    const rect = await button.boundingBox(); heldPoint = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  });
+  await page.mouse.down(); await page.mouse.move(heldPoint.x, heldPoint.y); await ready(page);
+  const heldHover = await snapshot(page);
+  check('actual held-button movement over the rebuilt Preview cannot start a preview or command', !heldHover.active && !heldHover.map.length
+    && heldHover.sameRenderer && equal(heldHover.pool, before.pool) && !heldHover.shadowEnabled && !heldHover.pending.length
+    && heldHover.services === commands && await page.evaluate(() => { const c = document.querySelector('taylors3d-card'), f = window.scenesFixture;
+      return f.replacementEvents.some((event) => event.type === 'pointermove' && event.trusted && event.pointerType === 'mouse'
+        && event.buttons === 1 && (event.movementX !== 0 || event.movementY !== 0) && event.modelRoot === c._view.model.root.uuid)
+        && f.glowDisposed === 1 && JSON.stringify(c._hass.states) === JSON.stringify(f.replacementReadings); }));
+  // Release outside so no intentional Preview click is fabricated by this test.
+  await page.mouse.move(1, 1); await page.mouse.up(); await ready(page); const releasedHover = await snapshot(page);
+  check('outside release after rejected held movement stays inactive without a command', !releasedHover.active && !releasedHover.map.length
+    && releasedHover.services === commands && await page.evaluate(() => window.scenesFixture.glowDisposed === 1));
+  await page.mouse.move(heldPoint.x, heldPoint.y); await ready(page); const reenteredHover = await snapshot(page);
+  check('the next genuine unheld hover works on the current model after held movement was rejected', reenteredHover.active?.itemId === 'movie'
+    && reenteredHover.map.includes(entity) && reenteredHover.services === commands && await page.evaluate(() => {
+      const c = document.querySelector('taylors3d-card'), f = window.scenesFixture;
+      return c._view.model !== f.oldModel && c._scenePreviewController.active?.token !== f.oldPreviewToken
+        && c._scenePreviewBar._ownedToken === c._scenePreviewController.active?.token && !c._scenePreviewBar._pinnedToken
+        && f.glowDisposed === 1 && JSON.stringify(c._hass.states) === JSON.stringify(f.replacementReadings); }));
+  await page.mouse.move(1, 1); await ready(page); const finalHover = await snapshot(page);
+  check('leaving the recovered genuine hover releases it without an action', !finalHover.active && !finalHover.map.length && finalHover.services === commands);
+  await page.evaluate(() => { const c = document.querySelector('taylors3d-card'), f = window.scenesFixture;
+    for (const type of ['pointerdown', 'pointerover', 'pointerenter', 'pointermove', 'pointerleave']) c.shadowRoot.removeEventListener(type, f.captureReplacementPointer, true);
+    f.nativeEntryMutation.disconnect();
+    for (const button of f.nativeEntryControls) button.removeEventListener('pointerenter', f.nativeEntryObserver);
+    f.nativeEntryControls.clear(); });
 }
 
 async function editorState(page) {

@@ -3,7 +3,7 @@ import captions from './translations/custom-controls.js';
 
 const COLORS = new Set(['theme', 'amber', 'teal', 'blue', 'purple', 'red']);
 const ACTIONS = new Set(['view', 'scene', 'script', 'automation', 'toggle', 'more-info']);
-const ISSUES = new Set(['settings', 'version', 'limit', 'bar', 'button', 'action', 'duplicate_bar', 'duplicate_button', 'context', 'session', 'room', 'view', 'source', 'service']);
+const ISSUES = new Set(['settings', 'version', 'limit', 'bar', 'button', 'action', 'duplicate_bar', 'duplicate_button', 'context', 'session', 'room', 'view', 'source', 'service', 'condition', 'condition_missing', 'condition_unknown', 'condition_false', 'pinned']);
 const INVALID = Symbol('unreadable');
 let nextView = 0;
 const field = (value, key) => {
@@ -39,15 +39,19 @@ function snapshot(raw) {
     const rawBar = field(rawBars, String(index));
     const bar = Object.fromEntries(['id', 'label', 'style', 'placement', 'room_id'].map((key) => [key, field(rawBar, key)]));
     const buttons = field(rawBar, 'buttons');
+    const dock = field(rawBar, 'dock'), selected = field(rawBar, 'selected');
     if (!plain(rawBar) || !id(bar.id) || barIds.has(bar.id) || !labelText(bar.label)
       || !['pills', 'tiles'].includes(bar.style) || !['bottom', 'room'].includes(bar.placement)
       || bar.placement === 'room' && !reference(bar.room_id)
-      || !Array.isArray(buttons) || field(buttons, 'length') > 12) return null;
+      || !Array.isArray(buttons) || field(buttons, 'length') > 12
+      || dock !== undefined && (!plain(dock) || ![4, 5].includes(field(dock, 'limit')))
+      || selected !== undefined && typeof selected !== 'boolean') return null;
+    bar.limit = dock === undefined ? null : field(dock, 'limit'); bar.selected = selected;
     barIds.add(bar.id);
     bar.buttons = [];
     for (let buttonIndex = 0; buttonIndex < field(buttons, 'length'); buttonIndex++) {
       const rawButton = field(buttons, String(buttonIndex));
-      const button = Object.fromEntries(['id', 'label', 'icon', 'color', 'available', 'issue', 'issueCode', 'active'].map((key) => [key, field(rawButton, key)]));
+      const button = Object.fromEntries(['id', 'label', 'icon', 'color', 'available', 'issue', 'issueCode', 'active', 'pinned', 'visible', 'conditionStatus'].map((key) => [key, field(rawButton, key)]));
       const action = field(rawButton, 'action');
       const type = field(action, 'type'), entity = field(action, 'entity'), view = field(action, 'view_id'), skip = field(action, 'skip_conditions');
       if (!plain(rawButton) || !id(button.id) || buttonIds.has(button.id) || !labelText(button.label)
@@ -55,6 +59,9 @@ function snapshot(raw) {
         || !COLORS.has(button.color) || typeof button.available !== 'boolean' || !text(button.issue, 2048)
         || button.issueCode !== undefined && !ISSUES.has(button.issueCode)
         || button.active !== undefined && typeof button.active !== 'boolean'
+        || button.pinned !== undefined && typeof button.pinned !== 'boolean'
+        || button.visible !== undefined && typeof button.visible !== 'boolean'
+        || button.conditionStatus !== undefined && !['none', 'matched', 'false', 'missing', 'unknown', 'invalid'].includes(button.conditionStatus)
         || !plain(action) || !ACTIONS.has(type)
         || type === 'view' && !reference(view)
         || type !== 'view' && (typeof entity !== 'string' || !/^[a-z][a-z0-9_]*\.[a-z0-9_]+$/.test(entity))
@@ -75,6 +82,10 @@ export const CUSTOM_CONTROLS_VIEW_CSS = `
 [data-custom-controls-view] .custom-controls-bar { min-width: 0; }
 [data-custom-controls-view] .custom-controls-heading { margin: 0 0 6px; font-size: 12px; font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; text-align: start; }
 [data-custom-controls-view] .custom-controls-buttons { display: flex; flex-wrap: wrap; align-items: start; gap: 8px; min-width: 0; }
+[data-custom-controls-view] .custom-controls-more { min-width:44px; min-height:44px; padding:10px 14px; border:1px solid var(--taylors3d-ui-divider,var(--divider-color,#35424e)); border-radius:24px; background:var(--taylors3d-ui-raised,var(--secondary-background-color,#253340)); color:inherit; font:inherit; font-size:13px; cursor:pointer; margin-top:8px; }
+[data-custom-controls-view] .custom-controls-more:focus-visible { outline:3px solid var(--primary-color,#51d4c4); outline-offset:3px; }
+[data-custom-controls-view] [data-compact=true] .custom-controls-buttons { display:flex; flex-wrap:wrap; }
+[data-custom-controls-view] [data-selected=true] .custom-controls-heading { color:var(--taylors3d-ui-teal,var(--primary-color,#51d4c4)); }
 [data-custom-controls-view] [data-style="tiles"] .custom-controls-buttons { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(112px, 100%), 1fr)); }
 [data-custom-controls-view] .custom-controls-item { min-width: 0; max-width: 100%; }
 [data-custom-controls-view][data-taylors3d-ui] .custom-controls-item > button[data-custom-controls-button-id][data-color] { box-sizing: border-box; display: flex; align-items: center; justify-content: start; gap: 8px; min-height: 44px; min-width: 44px; max-width: 100%; padding: 10px 14px; border: 1px solid var(--taylors3d-ui-divider, var(--divider-color, #35424e)); border-radius: 24px; background: var(--taylors3d-ui-raised, var(--secondary-background-color, #253340)); color: var(--taylors3d-ui-text, var(--primary-text-color, #f2f5f7)); font: inherit; font-size: 13px; line-height: 1.4; text-align: start; cursor: pointer; touch-action: manipulation; }
@@ -167,12 +178,27 @@ export class CustomControlsView {
         const body = this._document.createElement('div');
         body.className = 'custom-controls-buttons';
         el.setAttribute('aria-labelledby', heading.id);
-        el.append(heading, body);
-        section = { el, heading, body };
+        body.id = `custom-controls-${this._viewId}-body-${bar.id}`; el.append(heading, body);
+        section = { el, heading, body, more: null, open: false, dockStamp: null };
         this._bars.set(bar.id, section);
       }
       setText(section.heading, bar.label || bar.id);
       setAttribute(section.el, 'data-style', bar.style);
+      setAttribute(section.el, 'data-compact', bar.limit !== null ? 'true' : null);
+      setAttribute(section.el, 'data-selected', typeof bar.selected === 'boolean' ? bar.selected : null);
+      const dockStamp = JSON.stringify([context.contextKey, bar.limit, bar.buttons.map((button) => [button.id, button.pinned, button.visible])]);
+      if (section.dockStamp !== dockStamp) { section.open = false; section.dockStamp = dockStamp; }
+      const visible = bar.buttons.filter((button) => button.visible !== false), pinned = visible.filter((button) => button.pinned === true).slice(0, bar.limit ?? visible.length);
+      const overflow = bar.limit === null ? [] : visible.filter((button) => !pinned.includes(button));
+      if (bar.limit !== null && !section.more) {
+        const more = this._document.createElement('button'); more.type = 'button'; more.className = 'custom-controls-more';
+        more.dataset.customControlsMore = bar.id; more.setAttribute('aria-controls', section.body.id); section.el.append(more); section.more = more;
+      } else if (bar.limit === null && section.more) { section.more.remove(); section.more = null; }
+      if (section.more) {
+        setText(section.more, section.open ? this._caption('controls.runtime.less', {}, 'Less') : this._caption('controls.runtime.more', { number: overflow.length }, 'More ({number})'));
+        setAttribute(section.more, 'aria-expanded', section.open); setHidden(section.more, !overflow.length);
+        section.more.disabled = !!context.suspended;
+      }
       for (const [buttonIndex, button] of bar.buttons.entries()) {
         keepRows.add(button.id);
         let row = this._rows.get(button.id);
@@ -196,7 +222,8 @@ export class CustomControlsView {
           row = { el, button: native, icon, label, status, intent: 0, pending: null, message: null };
           this._rows.set(button.id, row);
         }
-        const stamp = JSON.stringify([context.contextKey, context.suspended, barIndex, buttonIndex, bar.id, bar.style, bar.placement, bar.room_id, button.actionKey, button.available, button.issueCode ?? button.issue]);
+        const shown = button.visible !== false && (bar.limit === null || pinned.includes(button) || section.open);
+        const stamp = JSON.stringify([context.contextKey, context.suspended, barIndex, buttonIndex, bar.id, bar.style, bar.placement, bar.room_id, button.actionKey, button.available, button.issueCode ?? button.issue, shown]);
         if (row.stamp !== stamp) {
           row.stamp = stamp;
           row.intent = ++this._sequence;
@@ -207,9 +234,11 @@ export class CustomControlsView {
         row.data = button;
         row.barId = bar.id;
         row.section = section;
+        setHidden(row.el, !shown);
         this._renderRow(row);
       }
       this._order(section.body, bar.buttons.map((button) => this._rows.get(button.id).el));
+      setHidden(section.el, !visible.length);
     }
     for (const [key, row] of this._rows) if (!keepRows.has(key)) {
       this._cancel(row);
@@ -220,7 +249,7 @@ export class CustomControlsView {
     for (const [key, section] of this._bars) if (!keepBars.has(key)) { section.el.remove(); this._bars.delete(key); }
     this._order(this._list, bars.map((bar) => this._bars.get(bar.id).el));
     setAttribute(this.el, 'aria-label', this._caption('controls.runtime.aria', {}, 'Custom controls'));
-    setHidden(this.el, bars.length === 0 || !!context?.suspended);
+    setHidden(this.el, bars.every((bar) => bar.buttons.every((button) => button.visible === false)) || !!context?.suspended);
     if (focused && this.el.contains(focused) && !focused.disabled && focused !== this.el.getRootNode().activeElement) focused.focus({ preventScroll: true });
   }
 
@@ -261,7 +290,7 @@ export class CustomControlsView {
 
   _current(row) {
     if (this._disposed || !this._context || this._context.suspended || !this.el.isConnected || this.el.parentNode !== this._parent
-      || this.el.hidden || this._document.hidden || row.button.disabled || !row.data.available || row.pending) return false;
+      || this.el.hidden || row.el.hidden || row.section.el.hidden || this._document.hidden || row.button.disabled || !row.data.available || row.pending) return false;
     let ancestor = this.el;
     while (ancestor) {
       if (ancestor.hidden) return false;
@@ -289,7 +318,7 @@ export class CustomControlsView {
   }
 
   _key(event) {
-    if (event.key === 'Escape') { this._cancelAll(); return; }
+    if (event.key === 'Escape') { this._cancelAll(); for (const section of this._bars.values()) if (section.open) { section.open = false; section.more?.focus({ preventScroll: true }); } this.update(); return; }
     event.stopPropagation();
     this.update();
     const row = this._eventRow(event);
@@ -326,6 +355,10 @@ export class CustomControlsView {
   _click(event) {
     event.stopPropagation();
     this.update();
+    const nativeMore = event.target.closest?.('button[data-custom-controls-more]'), section = nativeMore && this._bars.get(nativeMore.dataset.customControlsMore);
+    if (section?.more === nativeMore && !nativeMore.disabled && this.el.isConnected && !this.el.hidden && !section.el.hidden && !nativeMore.hidden) {
+      section.open = !section.open; this._cancelAll(); this.update(); return;
+    }
     const row = this._eventRow(event);
     if (!row || !this._current(row)) return;
     const gesture = this._gestures.get(row);

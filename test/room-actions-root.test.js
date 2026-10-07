@@ -5,6 +5,9 @@ import '../src/taylors3d-card.js';
 const cards = [];
 function fixture() {
   const card = document.createElement('taylors3d-card'); cards.push(card);
+  // The command boundary represents a currently mounted panel; rendering the
+  // unrelated WebGL scene is outside this exact scene-service fixture.
+  Object.defineProperty(card, 'isConnected', { value: true, configurable: true });
   const room = { id: 'm:office', area_id: 'office', floor_id: 'ground' };
   card._config = {}; card._loading = false; card._editing = false;
   card._roomList = [{ room }];
@@ -14,7 +17,7 @@ function fixture() {
   card._devicePopup = { isOpen: true, _selection: { kind: 'room', room } };
   return { card, room };
 }
-afterEach(() => { cards.length = 0; });
+afterEach(() => { for (const card of cards.splice(0)) card._feedback?.dispose(); });
 
 describe('root room shortcut command boundary', () => {
   it('submits one deliberately addressed current shortcut using the official scene service', async () => {

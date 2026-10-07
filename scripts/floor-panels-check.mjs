@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // Native source/bundle floor-pane proof using the original simulated GLB and HA
 // entities. Read pixels after the real render; never move a product camera from
 // evaluate(), manufacture input events, widen a phone or force a dirty frame.
@@ -69,6 +70,7 @@ async function ready(page) {
 }
 
 async function control(page, selector, callback) {
+  await revealEditorTab(page, selector);
   context = 'native ' + selector;
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {
@@ -561,7 +563,9 @@ async function roomPoint(page, floorId) {
     const c = document.querySelector('taylors3d-card'), v = c._view, rejected = [];
     window.floorPanelBench.roomPointDiagnostics = null;
     const nodeInfo = (node) => node && { tag: node.tagName, id: node.id, classes: String(node.className || ''), dataset: { ...node.dataset } };
-    const candidates = floorId === 'upper' ? [[1.2, -1.1], [-1.6, -1.1], [1.6, 1.1], [-1.6, 1.1], [0, 1.1]]
+    // The sixth authored interior point remains exposed beside the real 44px
+    // device labels in the drawn 320px matrix. Every original hit guard remains.
+    const candidates = floorId === 'upper' ? [[1.2, -1.1], [-1.6, -1.1], [1.6, 1.1], [-1.6, 1.1], [0, 1.1], [-1.9, -1.4]]
       : [[2.7, -1.3], [-2.7, -1.3], [2.7, 1.3], [-2.7, 1.3], [0, 1.6]];
     for (const source of candidates) {
       const mapped = v.sourceWorldToDisplay([source[0], v.floorElevation(floorId), -source[1]], floorId);

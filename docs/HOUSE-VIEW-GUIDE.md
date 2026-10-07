@@ -5,6 +5,12 @@ browser checks pass with both drawn rooms and a loaded 3D model. The project gui
 identifies which installation package has completed the wider regression checks;
 use that package until a newer checkpoint is listed there.
 
+The current local 0.4 test package is
+`taylors3d-phase22-ui-polish-local-candidate.zip`. Use the [manual test-package
+steps](../README.md#local-04-testing-package), then the [UI polish checklist](UI-POLISH.md)
+to try the newer room-sheet sizes, favourites and setup. Published HACS 0.1 remains
+a separate checkpoint; this local package has not been installed in your house.
+
 ## Choose the layout
 
 1. Edit your Home Assistant dashboard and open this card's visual settings.
@@ -25,7 +31,8 @@ card sits inside a wide browser window.
 ## Use your real sources
 
 As an administrator, choose **Settings** in the House menu. The card opens
-**Edit → House**. Set an optional house title, choose a weather entity, add the
+**Edit → Appearance → House** (house settings). The separate **House** editing
+section contains Rooms and Model. Set an optional house title, choose a weather entity, add the
 people you want counted, and choose an alarm entity. Save once when ready;
 Cancel, Undo and Redo let you recover your earlier choices.
 
@@ -39,7 +46,7 @@ The **Lights**, **Security**, **Media** and **Climate** menus show eligible curr
 Home Assistant entities. Hidden, disabled and diagnostic entities stay out of
 everyday controls. Unavailable entities remain readable with their commands
 disabled. **Cars** uses the vehicle sources you explicitly set in **Edit →
-Tracking**; a car-like entity name or ordinary motion sensor is not evidence of a
+Devices → Advanced tools → Tracking**; a car-like entity name or ordinary motion sensor is not evidence of a
 parked vehicle. An empty category explains that no source is configured.
 
 ## Room and device controls

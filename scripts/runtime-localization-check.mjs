@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // Real Root legacy-object popup and nested TrackingCalibration, source/bundle.
 // --preflight checks fixture bytes/routes/production readers without Chrome.
 // A default native run requires freshly built distributed copies before launch.
@@ -41,6 +42,7 @@ const field = (name, index) => `[data-field="trk-cal-${name}"]${index === undefi
 const action = (name) => `[data-act="trk-cal-${name}"]`;
 const frames = (page) => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 async function control(page, selector, callback) {
+  await revealEditorTab(page, selector);
   context = 'native control ' + selector;
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try { const element = handle.asElement(); if (!element) throw new Error('Missing actual Root control ' + selector);

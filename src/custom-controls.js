@@ -63,6 +63,11 @@ const captions = {
   view: 'The exact saved view is missing, hidden or ambiguous. Review this button’s view link.',
   source: 'The selected entity has no usable current reading or is hidden, disabled or diagnostic.',
   service: 'Home Assistant does not currently advertise this action for the selected entity.',
+  condition: 'Choose an exact entity and state for this button’s visibility rule.',
+  condition_missing: 'The visibility source is missing or unavailable. Review this button’s rule.',
+  condition_unknown: 'The visibility source has no known current state. This button stays unavailable.',
+  condition_false: 'The selected visibility state does not currently match.',
+  pinned: 'Choose no more favourites than this bar’s four or five visible places.',
 };
 const message = (hass, code) => localize(hass, `controls.issue.${code}`, {}, captions[code]);
 const diagnostic = (hass, code, detail = {}) => ({ code, message: message(hass, code), ...detail });
@@ -79,6 +84,21 @@ function validAction(action) {
   const domain = entity.split('.')[0];
   return type === 'more-info' || type === 'toggle' && TOGGLE_DOMAINS.includes(domain)
     || ['scene', 'script', 'automation'].includes(type) && domain === type;
+}
+
+const validVisibility = (value) => plain(value) && readable(value) && field(value, 'type') === 'state'
+  && entityIdentifier(field(value, 'entity')) && reference(field(value, 'state'))
+  && !['unknown', 'unavailable'].includes(field(value, 'state'));
+
+/** Explicit state comparisons only. Missing evidence is never treated as false. */
+export function customControlVisibility({ hass, visibility } = {}) {
+  if (visibility === undefined) return { visible: true, conditionStatus: 'none' };
+  if (!validVisibility(visibility)) return { visible: true, conditionStatus: 'invalid', ...unavailable(hass, 'condition') };
+  const source = currentSource(hass, field(visibility, 'entity'));
+  if (!source) return { visible: true, conditionStatus: 'missing', ...unavailable(hass, 'condition_missing') };
+  if (source.state === 'unknown') return { visible: true, conditionStatus: 'unknown', ...unavailable(hass, 'condition_unknown') };
+  return source.state === field(visibility, 'state') ? { visible: true, conditionStatus: 'matched' }
+    : { visible: false, conditionStatus: 'false', ...unavailable(hass, 'condition_false') };
 }
 
 /** Validate the whole known envelope, retaining the original raw rows and extras. */
@@ -100,6 +120,9 @@ export function readCustomControls(settings, hass) {
     }
     if (barIds.has(barId)) diagnostics.push(diagnostic(hass, 'duplicate_bar', detail));
     barIds.add(barId);
+    const dock = field(bar, 'dock');
+    if (own(bar, 'dock') && (!plain(dock) || ![4, 5].includes(field(dock, 'limit')))) diagnostics.push(diagnostic(hass, 'bar', detail));
+    if (plain(dock) && buttons.filter((button) => field(button, 'pinned') === true).length > field(dock, 'limit')) diagnostics.push(diagnostic(hass, 'pinned', detail));
     total += buttons.length;
     if (buttons.length > CUSTOM_CONTROL_LIMITS.buttonsPerBar) diagnostics.push(diagnostic(hass, 'limit', detail));
     for (const button of buttons) {
@@ -110,6 +133,8 @@ export function readCustomControls(settings, hass) {
       if (buttonIds.has(buttonId)) diagnostics.push(diagnostic(hass, 'duplicate_button', buttonDetail));
       buttonIds.add(buttonId);
       if (!validAction(field(button, 'action'))) diagnostics.push(diagnostic(hass, 'action', buttonDetail));
+      if (own(button, 'pinned') && typeof field(button, 'pinned') !== 'boolean') diagnostics.push(diagnostic(hass, 'button', buttonDetail));
+      if (own(button, 'visibility') && !validVisibility(field(button, 'visibility'))) diagnostics.push(diagnostic(hass, 'condition', buttonDetail));
     }
   }
   if (total > CUSTOM_CONTROL_LIMITS.total) diagnostics.push(diagnostic(hass, 'limit'));
@@ -216,7 +241,7 @@ const sourceIdentity = (hass, entity) => {
 
 /** Resolve one placement while keeping unusable saved buttons visible. */
 export function resolveCustomControls({ hass, settings, views = [], rooms = [], placement = 'bottom', roomId = null,
-  editing = false, loading = false, contextKey = '' } = {}) {
+  editing = false, loading = false, contextKey = '', selectedViewId, selectedRoomId } = {}) {
   const parsed = readCustomControls(settings, hass), diagnostics = [...parsed.diagnostics], current = session(hass);
   const validContext = ['bottom', 'room'].includes(placement) && (roomId === null || reference(roomId)) && (placement !== 'room' || reference(roomId))
     && typeof editing === 'boolean' && typeof loading === 'boolean' && typeof contextKey === 'string';
@@ -225,16 +250,22 @@ export function resolveCustomControls({ hass, settings, views = [], rooms = [], 
   const bars = !validContext ? [] : parsed.bars.filter((bar) => bar.placement === placement && (placement !== 'room' || bar.room_id === roomId)).map((bar) => {
     const missingRoom = placement === 'room' && !selectedRoom;
     if (missingRoom) diagnostics.push(diagnostic(hass, 'room', { barId: bar.id }));
-    return { ...bar, buttons: bar.buttons.map((button) => {
+    return { ...bar, ...(reference(selectedRoomId) && exactEntry(rooms, selectedRoomId) ? { selected: bar.placement === 'room' && bar.room_id === selectedRoomId } : {}), buttons: bar.buttons.map((button) => {
       const status = editing || loading ? unavailable(hass, 'context') : missingRoom ? unavailable(hass, 'room')
         : customControlAvailability({ hass, action: button.action, views, rooms });
-      return { ...button, ...status };
+      const visibility = customControlVisibility({ hass, visibility: field(button, 'visibility') });
+      const active = button.action.type === 'view' && reference(selectedViewId) && exactEntry(views, selectedViewId)
+        ? { active: selectedViewId === button.action.view_id } : {};
+      return { ...button, ...status, ...active, visible: visibility.visible, conditionStatus: visibility.conditionStatus,
+        ...(visibility.available === false && !editing && !loading && !missingRoom ? visibility : {}) };
     }) };
   });
   const linkedViews = bars.flatMap((bar) => bar.buttons.filter((button) => button.action.type === 'view')
     .map((button) => [button.id, viewIdentity(exactEntry(views, button.action.view_id))]));
   const linkedSources = bars.flatMap((bar) => bar.buttons.filter((button) => button.action.type !== 'view')
     .map((button) => [button.id, sourceIdentity(hass, button.action.entity)]));
+  const linkedConditions = bars.flatMap((bar) => bar.buttons.filter((button) => own(button, 'visibility'))
+    .map((button) => [button.id, sourceIdentity(hass, button.visibility.entity), button.conditionStatus]));
   const safeSettings = parsed.valid ? inspectSourceValue(settings).signature : null;
   const key = JSON.stringify([typeof contextKey === 'string' ? contextKey : null, validContext, safeSettings,
     typeof placement === 'string' ? placement : null, typeof roomId === 'string' ? roomId : null,
@@ -242,7 +273,8 @@ export function resolveCustomControls({ hass, settings, views = [], rooms = [], 
     current.valid, current.connected, identity(current.connection), identity(current.auth), identity(current.callService),
     typeof current.user.id === 'string' ? current.user.id : null, typeof current.user.is_active === 'boolean' ? current.user.is_active : null,
     typeof current.user.is_admin === 'boolean' ? current.user.is_admin : null, readable(current.user.permissions) ? inspectSourceValue(current.user.permissions).signature : null,
-    selectedRoom ? [selectedRoom.id, field(selectedRoom, 'floor_id'), field(selectedRoom, 'area_id')] : null, linkedViews, linkedSources,
+    selectedRoom ? [selectedRoom.id, field(selectedRoom, 'floor_id'), field(selectedRoom, 'area_id')] : null, linkedViews, linkedSources, linkedConditions,
+    reference(selectedViewId) ? selectedViewId : null, reference(selectedRoomId) ? selectedRoomId : null,
     bars.map((bar) => [bar.id, bar.buttons.map((button) => [button.id, button.available, button.issueCode || null])])]);
   return { bars, diagnostics, contextKey: key };
 }

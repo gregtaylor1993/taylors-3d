@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // F02 native advanced options proof: actual source/bundle editors and renderer.
 // HA source/storage/form replies are explicitly simulated; no HA durability proof.
 import fs from 'node:fs';
@@ -28,6 +29,7 @@ async function ready(page) {
   await settle(page);
 }
 async function control(page, selector, callback, form = false) {
+  await revealEditorTab(page, selector);
   context = (form ? 'simulated HA host: ' : 'actual card native control: ') + selector;
   const handle = await page.evaluateHandle((selector, form) => (form ? document.querySelector('#form-host') : document.querySelector('taylors3d-card').shadowRoot).querySelector(selector), selector, form);
   try { const element = handle.asElement(); if (!element) throw new Error('Missing native control ' + selector);

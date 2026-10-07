@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // Photo-inspired layout proof against the selected real source or built card.
 // Synthetic HA observations and native camera-card stand-in are clearly labelled;
 // actual card geometry, WebGL sizing, focus and service intent are exercised.
@@ -45,6 +46,7 @@ async function ready(page) {
   }
 }
 async function control(page, selector, callback) {
+  await revealEditorTab(page, selector);
   context = `native control ${selector}`;
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try { const element = handle.asElement(); if (!element) throw new Error(`Missing house control ${selector}`);
@@ -252,7 +254,7 @@ async function editorVisuals(page, name, narrow = false) {
     const visible = (node) => !node.hidden && !node.closest('[hidden]') && node.getBoundingClientRect().width > 0 && getComputedStyle(node).display !== 'none';
     return { rect: bounds(root), card: bounds(c), paragraphs: [...root.querySelectorAll('p')].filter(visible).length,
       labels: [...root.querySelectorAll('label')].filter(visible).length, horizontalOverflow: root.scrollWidth > root.clientWidth,
-      tabs: [...root.querySelectorAll('.tabs button')].map((node) => { const range = document.createRange(); range.selectNodeContents(node); const text = range.getBoundingClientRect(), box = node.getBoundingClientRect();
+      tabs: [...root.querySelectorAll('.tabs button')].filter((node) => node.getClientRects().length && !node.closest('[hidden],details:not([open])')).map((node) => { const range = document.createRange(); range.selectNodeContents(node); const text = range.getBoundingClientRect(), box = node.getBoundingClientRect();
         return { name: node.textContent, box: bounds(node), text: { x: text.x, r: text.right, h: text.height }, fits: node.scrollWidth <= node.clientWidth && text.x >= box.left && text.right <= box.right }; }),
       fields: [...root.querySelectorAll('input,select,button')].filter(visible).map((node) => ({ name: node.getAttribute('aria-label') || node.textContent || node.dataset.field, disabled: node.disabled, ...bounds(node) })),
       currentHA: { text: getComputedStyle(c).getPropertyValue('--primary-text-color').trim(), surface: getComputedStyle(c).getPropertyValue('--card-background-color').trim() },

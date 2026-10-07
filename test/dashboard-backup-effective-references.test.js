@@ -14,6 +14,31 @@ const shortcuts = (entity) => ({ version: 1, rooms: [{ room_id: 'exact-room', ac
 const entityIds = (graph) => graph.references.filter((reference) => reference.kind === 'entity').map((reference) => reference.id);
 
 describe('effective Taylor references in a full dashboard backup', () => {
+  it('keeps a future visibility rule raw and marks its reference inspection partial instead of interpreting its entity', () => {
+    const raw = archive({ custom_controls: { version: 1, bars: [{ id: 'daily', label: 'Daily', placement: 'bottom', style: 'pills', dock: { limit: 4 },
+      buttons: [{ id: 'return', label: 'Return', icon: 'mdi:robot-vacuum', color: 'teal', pinned: true, action: { type: 'script', entity: 'script.actual' },
+        visibility: { type: 'future-rule', entity: 'vacuum.future_literal', state: 'cleaning', opaque: { preserve: true } } }] }] } });
+    const before = structuredClone(raw), restored = JSON.parse(JSON.stringify(raw)), graph = collectDashboardReferences(restored);
+    expect(entityIds(graph)).toEqual(['script.actual']);
+    expect(graph.uninspected).toContainEqual(expect.objectContaining({ path: '/preview/layouts/home/layout/custom_controls/bars/0/buttons/0/visibility/type' }));
+    expect(resolveDashboardReferences(graph, environment(['script.actual'])).coverage).toBe('partial');
+    expect(restored).toEqual(before); expect(raw).toEqual(before);
+  });
+  it('round-trips compact docks and explicit condition sources in full raw archives with exact repair paths', () => {
+    const controls = (entity) => ({ version: 1, bars: [{ id: 'daily', label: 'scene.literal_label', placement: 'bottom', style: 'pills', dock: { limit: 5 },
+      buttons: [{ id: 'return', label: 'Return vacuum', icon: 'mdi:robot-vacuum', color: 'teal', pinned: true,
+        action: { type: 'script', entity: 'script.return_robot' }, visibility: { type: 'state', entity, state: 'cleaning' } }] }] });
+    const raw = archive({ custom_controls: controls('vacuum.exact') }, [card({ custom_controls: controls('vacuum.inactive') })]);
+    const before = structuredClone(raw), restored = JSON.parse(JSON.stringify(raw)), graph = collectDashboardReferences(restored), hass = environment(['script.return_robot']);
+    expect(entityIds(graph).sort()).toEqual(['script.return_robot', 'vacuum.exact']); expect(graph.uninspected).toEqual([]);
+    expect(graph.references.find((row) => row.id === 'vacuum.exact').path).toBe('/preview/layouts/home/layout/custom_controls/bars/0/buttons/0/visibility/entity');
+    expect(resolveDashboardReferences(graph, hass).references.find((row) => row.id === 'vacuum.exact').status).toBe('missing');
+    hass.states['vacuum.exact'] = { state: 'cleaning', attributes: {} };
+    expect(resolveDashboardReferences(graph, hass).references.find((row) => row.id === 'vacuum.exact').status).toBe('present');
+    expect(restored).toEqual(before); expect(raw).toEqual(before); expect(hass.callService).not.toHaveBeenCalled(); expect(hass.callWS).not.toHaveBeenCalled();
+    // Backups preserve outside HA identifiers; the normal editor performs any deliberate repair.
+    expect(restored.dashboard.views[0].cards[0].custom_controls.bars[0].buttons[0].visibility.entity).toBe('vacuum.inactive');
+  });
   it('checks saved custom buttons, preserves their raw archive, and never revives an inactive fallback', () => {
     const controls = (entity) => ({ version: 1, bars: [{ id: 'evening', label: 'sensor.literal', placement: 'bottom', style: 'pills',
       buttons: [{ id: 'movie', label: 'Movie', icon: 'mdi:movie', color: 'amber', action: { type: 'scene', entity } },

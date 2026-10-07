@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // Real source/bundle controls and browser keyboard/pointer intent. The fixture
 // supplies explicitly simulated HA readings/formatters, not a live HA language
 // installation. Native OS colour-dialog automation is deliberately not claimed.
@@ -103,7 +104,7 @@ const liveWords = Object.freeze({
     stream: 'Camera stream · muted', opening: 'Opening camera…', unknown: 'Camera state is unknown.',
     cameraHelp: 'This view is muted.', scenes: 'Scenes', sceneAria: 'Saved scene light previews', activate: 'Activate', stop: 'Stop preview',
     preview: `Preview ${names.scene}`, pinned: `Previewing ${names.scene} in the model only. Press Stop preview to finish.`,
-    activating: `Activating ${names.scene}…`, activated: `Activated ${names.scene}.`, chooseScene: 'Choose a preview, or activate a saved scene.' },
+    activating: `Requesting ${names.scene}…`, activated: `Request for ${names.scene} accepted. Check the current readings.`, chooseScene: 'Choose a preview, or activate a saved scene.' },
   de: { weather: 'Wetter und Sonne', intensity: 'Dekorative Intensität, 0 bis 1', quality: 'Niedrig — Wandpanel',
     weatherHelp: 'Es ist keine gemessene Regen- oder Schneemenge.', weatherError: 'Wählen Sie vor dem Speichern gültige Einstellungen; es wurde nichts gespeichert.',
     house: 'Hausübersicht', houseName: 'Titel', people: 'Ausgewählte Personen', houseSave: 'Hausübersicht speichern',
@@ -111,7 +112,7 @@ const liveWords = Object.freeze({
     stream: 'Kamerastream · stummgeschaltet', opening: 'Kamera wird geöffnet…', unknown: 'Der Kamerazustand ist unbekannt.',
     cameraHelp: 'Diese Ansicht ist stummgeschaltet.', scenes: 'Szenen', sceneAria: 'Gespeicherte Lichtvorschauen für Szenen', activate: 'Aktivieren', stop: 'Vorschau beenden',
     preview: `Vorschau: ${names.scene}`, pinned: `Vorschau von ${names.scene} nur im Modell. Wähle Vorschau beenden, um sie zu beenden.`,
-    activating: `${names.scene} wird aktiviert…`, activated: `${names.scene} aktiviert.`, chooseScene: 'Wähle eine Vorschau oder aktiviere eine gespeicherte Szene.' },
+    activating: `${names.scene} wird angefordert…`, activated: `Anfrage für ${names.scene} angenommen. Prüfe die aktuellen Werte.`, chooseScene: 'Wähle eine Vorschau oder aktiviere eine gespeicherte Szene.' },
   fr: { weather: 'Météo et soleil', intensity: 'Intensité décorative, de 0 à 1', quality: 'Faible — panneau mural',
     weatherHelp: 'Ce n’est pas une mesure de pluie ou de neige.', weatherError: 'Choisissez des paramètres valides avant d’enregistrer ; rien n’a été enregistré.',
     house: 'Résumé de la maison', houseName: 'Titre', people: 'Personnes sélectionnées', houseSave: 'Enregistrer le résumé de la maison',
@@ -119,7 +120,7 @@ const liveWords = Object.freeze({
     stream: 'Flux de caméra · muet', opening: 'Ouverture de la caméra…', unknown: 'L’état de la caméra est inconnu.',
     cameraHelp: 'Cette vue est muette.', scenes: 'Scènes', sceneAria: 'Aperçus lumineux de scènes enregistrés', activate: 'Activer', stop: 'Arrêter l’aperçu',
     preview: `Aperçu : ${names.scene}`, pinned: `Aperçu de ${names.scene} uniquement dans le modèle. Appuyez sur Arrêter l’aperçu pour terminer.`,
-    activating: `Activation de ${names.scene}…`, activated: `${names.scene} activée.`, chooseScene: 'Choisissez un aperçu ou activez une scène enregistrée.' },
+    activating: `Demande de ${names.scene}…`, activated: `Demande pour ${names.scene} acceptée. Vérifiez les valeurs actuelles.`, chooseScene: 'Choisissez un aperçu ou activez une scène enregistrée.' },
   es: { weather: 'Tiempo y sol', intensity: 'Intensidad decorativa, de 0 a 1', quality: 'Baja — panel de pared',
     weatherHelp: 'No es una tasa medida de lluvia o nieve.', weatherError: 'Elija ajustes válidos antes de guardar; no se ha guardado nada.',
     house: 'Resumen de la casa', houseName: 'Título', people: 'Personas seleccionadas', houseSave: 'Guardar el resumen de la casa',
@@ -127,7 +128,7 @@ const liveWords = Object.freeze({
     stream: 'Transmisión de cámara · silenciada', opening: 'Abriendo cámara…', unknown: 'Se desconoce el estado de la cámara.',
     cameraHelp: 'Esta vista está silenciada.', scenes: 'Escenas', sceneAria: 'Previsualizaciones de luces de escenas guardadas', activate: 'Activar', stop: 'Detener previsualización',
     preview: `Previsualizar ${names.scene}`, pinned: `Previsualizando ${names.scene} solo en el modelo. Pulsa Detener previsualización para terminar.`,
-    activating: `Activando ${names.scene}…`, activated: `${names.scene} activada.`, chooseScene: 'Elige una previsualización o activa una escena guardada.' },
+    activating: `Solicitando ${names.scene}…`, activated: `Solicitud para ${names.scene} aceptada. Comprueba las lecturas actuales.`, chooseScene: 'Elige una previsualización o activa una escena guardada.' },
 });
 // Fixed examples for the five additional editors, deliberately separate from
 // advancedEditors and independent of source/bundle translation imports.
@@ -191,6 +192,7 @@ async function ready(page) {
   }
 }
 async function control(page, selector, callback) {
+  await revealEditorTab(page, selector);
   context = `native control ${selector}`;
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {

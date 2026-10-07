@@ -54,9 +54,16 @@ describe('area-filter native proof prerequisites', () => {
     for (const file of fixture.files) await expect(fs.readFile(file)).resolves.toEqual(fixture.expected);
   });
   it('prepares all four actual editor DOMs without attempting Chrome or claiming bundle execution', async () => {
-    const run = await promisify(execFile)(process.execPath, ['scripts/entity-area-filter-check.mjs', '--preflight'], {
-      cwd: root, env: { ...process.env, CHROME_PATH: path.join(root, 'nonexistent-preflight-chrome.exe') }, maxBuffer: 1024 * 1024, timeout: 15000,
-    });
+    let run;
+    try {
+      run = await promisify(execFile)(process.execPath, ['scripts/entity-area-filter-check.mjs', '--preflight'], {
+        cwd: root, env: { ...process.env, CHROME_PATH: path.join(root, 'nonexistent-preflight-chrome.exe') }, maxBuffer: 1024 * 1024, timeout: 15000,
+      });
+    } catch (error) {
+      // Keep the child's actual anonymous diagnostics in the failed test trace.
+      // The preparation assertions, timeout and real editor boundaries stay intact.
+      throw new Error(`Area preflight exited ${error.code ?? 'unknown'} (signal ${error.signal ?? 'none'}).\nstdout:\n${error.stdout || ''}\nstderr:\n${error.stderr || ''}`, { cause: error });
+    }
     for (const spec of entityAreaSpecifications) expect(run.stdout).toContain(`${spec.name} actual editor delegates exactly one deliberate bounded configuration proposal`);
     expect(run.stdout).toMatch(/\d+\/\d+ entity-area-filter checks passed; no browser launched\./);
     expect(run.stdout).not.toContain('FAIL');

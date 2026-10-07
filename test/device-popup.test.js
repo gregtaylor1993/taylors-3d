@@ -314,6 +314,31 @@ describe('DevicePopup', () => {
     expect(popup.el.style.top).toBe('8px');
   });
 
+  it('keeps an owned outside control in place until its native click closes the panel', () => {
+    popup.dispose();
+    const edit = document.createElement('button'); stage.append(edit);
+    popup = new DevicePopup(stage, { keepOpenForPointerDown: (event) => event.composedPath().includes(edit) });
+    popup.update(hass()); popup.showRoom({ id: 'office', area_id: 'office' }, [light]);
+    const clicked = vi.fn(() => popup.close()); edit.addEventListener('click', clicked);
+    edit.dispatchEvent(new Event('pointerdown', { bubbles: true, composed: true }));
+    expect(popup.isOpen).toBe(true); expect(popup.closedBy).toBeNull(); expect(clicked).not.toHaveBeenCalled();
+    edit.dispatchEvent(new Event('pointerup', { bubbles: true, composed: true }));
+    edit.click(); expect(clicked).toHaveBeenCalledOnce(); expect(popup.isOpen).toBe(false);
+  });
+
+  it('does not close or activate anything for a cancelled owned press, and still dismisses on a foreign control', () => {
+    popup.dispose();
+    const edit = document.createElement('button'), foreign = document.createElement('button'); stage.append(edit, foreign);
+    popup = new DevicePopup(stage, { keepOpenForPointerDown: (event) => event.composedPath().includes(edit), onAction });
+    popup.update(hass()); popup.showRoom({ id: 'office', area_id: 'office' }, [light]);
+    const clicked = vi.fn(); edit.addEventListener('click', clicked);
+    edit.dispatchEvent(new Event('pointerdown', { bubbles: true, composed: true }));
+    edit.dispatchEvent(new Event('pointercancel', { bubbles: true, composed: true }));
+    expect(popup.isOpen).toBe(true); expect(clicked).not.toHaveBeenCalled(); expect(onAction).not.toHaveBeenCalled();
+    const outside = new Event('pointerdown', { bubbles: true, composed: true }); foreign.dispatchEvent(outside);
+    expect(popup.isOpen).toBe(false); expect(popup.closedBy).toBe(outside); expect(clicked).not.toHaveBeenCalled();
+  });
+
   it('can dock on the right, change placement while open and release reserved space on close', () => {
     const changed = vi.fn();
     popup.onVisibilityChange = changed;

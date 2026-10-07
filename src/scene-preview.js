@@ -185,11 +185,14 @@ export function captureLightSnapshot(hass, entityIds, { now = Date.now(), canEdi
  * stop/dispose clears overrides so its renderer reapplies LATEST real HA states.
  * No original real-state snapshot is retained or restored. HA enforces service
  * permissions on the one deliberate scene.turn_on call. No automatic retry.
+ * A mounted card supplies requestService(hass, domain, service, data, options)
+ * for shared request feedback; options.isCurrent retains this exact activation.
  */
 export class ScenePreviewController {
-  constructor({ getContext, onPreview = () => {}, onStatus = () => {} } = {}) {
+  constructor({ getContext, onPreview = () => {}, onStatus = () => {}, requestService } = {}) {
     this.getContext = typeof getContext === 'function' ? getContext : () => ({});
     this.onPreview = onPreview; this.onStatus = onStatus;
+    this.requestService = typeof requestService === 'function' ? requestService : null;
     this._generation = 0; this._active = null; this._pending = null; this._disposed = false;
     this._onDisconnected = () => this.stop(undefined, 'disconnected');
     this._onPendingDisconnected = () => { if (this._pending) this._pending.stale = true; };
@@ -197,12 +200,12 @@ export class ScenePreviewController {
   get active() { return this._active ? { token: this._active.token, itemId: this._active.binding.id, sceneEntity: this._active.binding.scene_entity, draft: this._active.draft } : null; }
   _context() { const value = this.getContext(); return plain(value) ? value : {}; }
   _stamp(context) { return { key: context.contextKey, connection: context.hass?.connection, user: context.hass?.user?.id,
-    auth: context.hass?.auth, callService: context.hass?.callService,
+    auth: context.hass?.auth, callService: context.hass?.callService, requestService: this.requestService,
     access: signature([context.hass?.user?.is_active, context.hass?.user?.is_admin, context.hass?.user?.permissions]),
     bindings: signature(context.bindings) }; }
   _same(stamp, context) {
     return stamp.key === context.contextKey && stamp.connection === context.hass?.connection && stamp.user === context.hass?.user?.id
-      && stamp.auth === context.hass?.auth && stamp.callService === context.hass?.callService
+      && stamp.auth === context.hass?.auth && stamp.callService === context.hass?.callService && stamp.requestService === this.requestService
       && stamp.access === signature([context.hass?.user?.is_active, context.hass?.user?.is_admin, context.hass?.user?.permissions])
       && stamp.bindings === signature(context.bindings) && context.hass?.connection?.connected === true;
   }
@@ -302,7 +305,11 @@ export class ScenePreviewController {
       diagnostics = resolved.diagnostics.concat(sceneActivationAvailability(context.hass, entity).diagnostics);
       if (!this._same(stamp, context) || resolved.binding?.scene_entity !== entity) diagnostics.push(issue('context', 'The scene action context changed before sending.'));
       if (this._disposed || diagnostics.length) return { ok: false, status: 'invalid', diagnostics };
-      await context.hass.callService('scene', 'turn_on', { entity_id: entity });
+      const result = await (this.requestService
+        ? this.requestService(context.hass, 'scene', 'turn_on', { entity_id: entity }, {
+          label: binding.label, isCurrent: () => this._activationCurrent(pending),
+        }) : context.hass.callService('scene', 'turn_on', { entity_id: entity }));
+      if (result === false || result?.ok === false) throw new Error('Home Assistant did not accept the scene request.');
       const current = this._activationCurrent(pending);
       if (current) this.onStatus({ status: 'activated', itemId: id, sceneEntity: entity, diagnostics: [] });
       return { ok: true, status: 'activated', current, diagnostics: [] };

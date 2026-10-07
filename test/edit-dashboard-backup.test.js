@@ -225,6 +225,10 @@ describe('full dashboard backup in actual EditMode Data', () => {
     for (const name of ['_syncFurniture', '_suspendAmbient', 'finishWallSelectionPreparation', '_syncWallPresentation',
       '_unwatchAmbientPreference', '_stopScenePreview', '_clearTrackingTimer', '_refreshSecurityMotion', '_endGesture', '_setCameraTimer', '_setImageTimer']) h.card[name] = vi.fn();
     h.card._ambientPointers = new Set(); h.card._ambientKeys = new Set(); h.card._presetEvents = { disconnect: vi.fn() }; h.card._view.stop = vi.fn();
+    // Borrow the complete current lifecycle helpers while keeping this backup
+    // boundary independent from mounting a WebGL card or a feedback strip.
+    for (const name of ['_restoreStandardSheetMinimum', '_unbindFeedbackEditor'])
+      h.card[name] = customElements.get('taylors3d-card').prototype[name];
     customElements.get('taylors3d-card').prototype.disconnectedCallback.call(h.card);
     expect(h.edit._dashboardBackupEditor.active).toBe(false); expect(h.edit._dashboardBackupEditor.stageToken).toBeNull();
     h.card.isConnected = true; h.edit.attach(); h.edit.render(); expect(h.button('dashboard-backup-create').disabled).toBe(true);

@@ -1,5 +1,112 @@
 # Taylor's 3D — requirements and features
 
+## Phase 22: 0.4.0 UI polish
+
+**F27 — Testing.** This development version brings the six agreed polish
+improvements together. It builds on the tested `0.3.0` custom-controls source.
+Earlier packages and results below remain historical checkpoints. This work
+has not committed, pushed, published, installed or tested a new version on
+Taylor's actual Home Assistant.
+
+| Change | What Taylor can do |
+|---|---|
+| Room panels | Choose Summary, Controls or Details on a phone; drag the handle between sizes or use keyboard controls; keep the house visible |
+| Visual button builder | Search pictured icons and friendly names, duplicate a button, and choose an existing scene/script for Movie, Bedtime or Return vacuum starters |
+| Easier editing and setup | Use five sections with Advanced tools; Continue setup uses real house upload, explicit floor/room links, controls and a final Save |
+| Favourites | Deliberately pin up to four or five buttons per optional dock; use More for other buttons and an exact entity-state condition when wanted |
+| Consistent appearance | Use charcoal/amber/teal, paired light colours or HA colours; readable captions, visible keyboard focus and 44px controls |
+| Clear feedback | See unsaved, saving, saved, failure and connection messages; an action request stays separate from the device's reported response |
+
+Save/Cancel and Undo/Redo keep their existing layout meaning. Templates link
+Taylor's deliberately selected existing routines; they do not create automation
+rules. Setup reads current real room/floor links. Missing or unknown sources
+remain explained, and an interrupted old interaction cannot apply to a newly
+selected house, room, device, account or connection.
+
+See [UI polish: use and test](docs/UI-POLISH.md) for simple steps and the exact
+limits. A prior built-card visual checkpoint passed **5,282/5,282** checks across **864 views**:
+four languages, dark/light/representative HA colours, 1400px/320px and ordinary/
+reduced motion. It includes the actual compact More control and 480 feedback
+states. Minimum measured caption contrast was **5.23:1**; phone scene height was
+at least **240px** and editing body at least **291px**. Theme unit tests passed
+**38/38**, with targeted lint passing. The visual audit used simulated HA data,
+zero device calls and zero layout writes. The earlier source visual run passed
+the same matrix; the final editor and room-sheet checks below cover source and bundle.
+
+| Historical targeted check (`bd92b166` build) | Recorded result |
+|---|---|
+| Built-card visual matrix | 5282/5282; 864 views; terminal exit 0; no browser errors |
+| Guided/grouped editor | 96/96 source/bundle; terminal exit 0; real native uploader/link/save/retry workflows with simulated transport |
+| Room sheets | 80/80 source/bundle; terminal exit 0; native mouse/touch/keyboard sizing and current room controls |
+| Built frontend and integration copy | Byte-identical SHA-256 `bd92b16683b0538a80091ca692f2aa3055f3aa0d9d17d243756e012a5586835c` |
+
+The standard room-sheet contrast repair and consistent scene-request feedback
+follow this targeted checkpoint. Runtime checkpoint `823dab50` passed **6,595/6,595**
+unit tests in **207 files**, with zero unhandled errors, full lint and bundle
+freshness passing. Its frontend/integration checksum is
+`823dab50f5c6920f7ba00a9a0603ee067921301ab985292b0b1f9704ec4cb7d0`.
+On that same recorded runtime, the visual source/bundle matrix passed
+**10,564/10,564** across **1,728 views**, the guided/grouped editor passed
+**96/96**, room sheets passed **84/84**, and save/action/scene feedback passed
+**78/78**. Every one of the 218 recorded runtime/fixture inputs and both frontend
+copies matched before and after the three owned UI checks. Standard selected
+room controls measured **16.10:1** in light and **13.83:1** in dark; the House
+palette remains unchanged. These are completed terminal results using simulated HA.
+
+The stationary Scene-hover lifecycle repair follows this checkpoint. The later
+`93e66660` app build passed **6,599/6,599** unit tests in **207 files**, zero
+unhandled errors, full lint, build and bundle freshness. Its two frontend copies
+match SHA-256
+`93e66660cf57cd6617775f91a95fab11246e24837fcf6818c90b5679aebb0de4`.
+Its visual source/bundle matrix passed **10,564/10,564** across **1,728
+views**, Scene checks **159/159**, and feedback **78/78**. The visual run
+retained the same measured 5.23:1 minimum caption contrast, 240px phone scene and
+291px editing body; all 218 current inputs and both frontends matched before
+and after it. One browser-test setup was corrected after the complete unit run;
+the production app and unit-test code stayed unchanged.
+
+Room **84/84** and editor **96/96** receipts remain explicitly tied to the prior
+`823dab50` checkpoint. Their relevant implementations are unchanged by the
+independent Scene-hover repair; those results were retained rather than repeated
+only to acquire the new bundle checksum. Wider browser checks subsequently found
+feedback/gesture compatibility repairs. The replacement `787c366e` build now
+passes **6,610/6,610** unit tests in **207 files**, zero unhandled errors, full
+lint, build and bundle freshness. The two frontend copies match SHA-256
+`787c366e017a567a5c158b56755bfbcfe35f259ca4336b5166f841a97a2e17d8`.
+Feedback now follows the body so a first Unsaved message keeps the scene steady
+during furniture dragging. Invisible/internal feedback changes no longer request
+a pointless resize. Pressing the current native Edit button from an open room
+preserves it through the click; ordinary outside dismissal remains.
+
+The current source/bundle UI rechecks pass room sheets **84/84**, grouped/guided
+editor **96/96**, visual **10,564/10,564** across **1,728 views**, and feedback
+**88/88**. The three owned UI runs preserved all 218 recorded inputs and both
+frontends before/after, with no unexpected browser errors/routes. Visual checks
+retain 5.23:1 minimum caption contrast, 44px targets, a 240px phone scene and at
+least 291px of editing body, one original renderer and zero device/layout writes.
+The earlier `823dab50`/`93e66660` receipts remain preserved checkpoints.
+The complete qualified local browser ledger now passes **36/36 programs**:
+**16** ran on the final `787c366e` runtime and **20** are retained prior successful
+checkpoints with independently verified unchanged relevant app code. The ledger
+contains **15,994 recorded passing assertion lines**, including the final
+**313 built-card model checks** and **161 Scene checks**. This records each
+program's actual test epoch; it does not claim every program was rerun on the
+final bundle. Browser-fixture-only corrections received independent syntax/lint
+checks; production and unit-test bytes remained unchanged after the full unit run.
+
+**Exact local installation package:**
+`taylors3d-phase22-ui-polish-local-candidate.zip`, **854,183 bytes**, **20 members**.
+ZIP SHA-256: `f410405cb403c1e51074874d749a7c3a29d60679b3a8d31f984ce11f614c603b`.
+The independent audit passes CRC, every tested-source installation byte, version
+and MIT checks. Its frontend matches both tested copies of `787c366e` above.
+Against the previous 0.3 package, only the manifest version and built frontend
+change; the Python backend remains unchanged. See the [manual test-package
+instructions](README.md#local-04-testing-package) before installing it.
+
+Actual HA
+installation, the real GLB, device commands, backups and wall-panel acceptance
+remain **UNRUN**. A local build does not create a HACS update.
+
 ## Phase 21: custom buttons and bars
 
 **F26 — Testing.** Taylor chose a builder inside Taylor's 3D, covering custom
@@ -51,7 +158,8 @@ Created: 4 October 2026. Starting point: version `0.1.0`, base commit `055e30f2e
 
 **First installable release:** [v0.1.0](https://github.com/gregtaylor1993/taylors-3d/releases/tag/v0.1.0) contains verified checkpoint `93ab558`, including the chosen navigation group and later verified features through ambient idle mode. The published HACS zip's frontend matches the tested build byte for byte. Wall, furniture and separated-floor work is recorded separately below. Later historical notes describe their checkpoint dates; this release is now available.
 
-**Current work:** the `0.3.0` local source adds the custom builder described above.
+**Current work:** the `0.4.0` source adds the six UI-polish improvements above.
+The previous `0.3.0` local candidate added the custom builder.
 The combined `0.2.0` candidate and its previous verified packages remain recorded
 below as the Phase 20 checkpoint. Published HACS releases and local candidates
 remain separate.
@@ -191,7 +299,7 @@ For each implementation, update its status, record the changed behavior, link it
 | ID | Feature | Existing foundation | Status |
 |---|---|---|---|
 | F01 | Named camera presets and automation-triggered flights | Named saved 3D/top views and smooth camera moves | Testing |
-| F02 | Complete visual configuration | Supported advanced controls, imported-setting recovery and exact placement pass combined local checks; actual HA persistence remains | Testing |
+| F02 | Complete visual configuration | Five grouped sections and guided upload/link/control/Save setup retain supported advanced tools and imported settings; current local checks pass, actual HA persistence remains | Testing |
 | F03 | General undo and redo | General session history and grouped gestures | Testing |
 | F04 | Full dashboard backup and restore | Whole-dashboard ZIP workflow passes simulated-HA browser checks; Linux HA compatibility and actual restore remain | Testing |
 | F05 | Temperature, power and energy views | Sensor readings, conversion, floor overlays and visual bindings | Testing |
@@ -207,7 +315,7 @@ For each implementation, update its status, record the changed behavior, link it
 | F15 | Furniture packs and drag-and-drop placement | Furniture placement and the full-dashboard workflow pass local checks; Linux HA, actual restore and household checks remain | Testing |
 | F16 | Baked shadows for wall panels | Saved shadow/lighting policy, authored texture diagnostics and external AO guide | Testing |
 | F17 | Deeper HA floors/areas/entity integration | Shared metadata, precision, filtered choices and exact missing-link diagnostics pass local checks; current household HA remains | Testing |
-| F18 | Room selection and room control panels | Room taps open responsive controls and readings; the local candidate adds explicit saved scene/script shortcuts | Testing |
+| F18 | Room selection and room control panels | Room taps open current controls/readings; phone Summary/Controls/Details and drag/keyboard sizing retain saved shortcuts and device options | Testing |
 | F19 | Bottom bubble navigation bar | Saved view buttons, camera controls, map and editing with visual ordering and visibility settings | Testing |
 | F20 | Rich device control popups | Supported current light/media/climate/cover/lock/vacuum controls plus Home Assistant's All controls | Testing |
 | F21 | Persistent 2D mini-map | North-up floor map, current device/tracked symbols, camera focus and located alerts | Testing |
@@ -215,7 +323,8 @@ For each implementation, update its status, record the changed behavior, link it
 | F23 | Robot vacuums moving while running | Measured/status actors with visual calibration and separate source-age forms | Testing |
 | F24 | Horizontal split floors and vertical layers | Optional responsive floor panels with linked controls pass Phase 20 local checks; side-by-side geometry and stacked layers remain available; real model/panel remains | Testing |
 | F25 | Translations, preview, screenshots and bundle checks | Four-language controls, simulated preview/screenshots and bundle matching pass local checks; documented English prose, current CI/release and household gates remain | Testing |
-| F26 | Custom buttons, bars and drag-and-drop builder | Inside-card bottom/room bars, drafts, mouse/touch/keyboard ordering, six action types, backups and translated controls; local checks recorded above, actual HA pending | Testing |
+| F26 | Custom buttons, bars and drag-and-drop builder | Inside-card bottom/room bars, pictured icons/friendly source search, duplication/starters, optional explicit favourites/conditions, drafts, ordering and backups; actual HA pending | Testing |
+| F27 | UI polish across the card | Six connected changes: room sheets, visual builder, grouped/guided editing, favourites, appearance and truthful feedback; local unit/qualified browser/package checks pass, actual HA/panel and current CI acceptance remain | Testing |
 
 ## Proposed build order
 
@@ -839,6 +948,7 @@ A feature is Done only after its agreed behavior works, it persists where approp
 
 | Date | Item | Progress / evidence | Commit or PR |
 |---|---|---|---|
+| 2026-10-06 | Phase 22 UI polish local candidate | Current 787c366e passes 6610/6610 unit tests in 207 files, lint/build/freshness, visual 10564/10564 source/bundle across 1728 views, editor 96/96, room 84/84 and feedback 88/88. Complete qualified coverage passes 36 programs (16 final runtime +20 verified earlier checkpoints), 15994 recorded passing lines; independently audited 20-member local ZIP matches tested bytes. Historical proof epochs stay preserved; actual HA/current CI remain UNRUN. | Local candidate; no new commit, push, tag or release |
 | 2026-10-06 | Phase 20 local checkpoint | Optional linked floor panels, responsive pictures, exact picking/menus/map, label spacing, authored lights and idle sky refresh pass 6054/6054 unit tests in 196/196 files, lint/build/bundle matching and all 30/30 native scripts with unchanged runtime. Exact 20-member local ZIP matches the tested frontend. Actual HA/model/panel, Linux/current CI and public release remain separate; Phase 19 history is preserved. | Local candidate; no public commit or release assigned |
 | 2026-10-04 | Base | Independent renamed base uploaded to `main`; local build/lint/514 JS tests passed; online checks need B02 | `055e30f` |
 | 2026-10-04 | Requirements | Taylor's complete initial feature list recorded; foundations and pending inputs checked against the code | `a2c49d0` |

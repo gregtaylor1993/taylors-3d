@@ -15,10 +15,28 @@ installation ZIP. Its checks and remaining Home Assistant tests are in the
 [feature log](REQUIREMENTS_AND_FEATURES.md#phase-20-020-local-checkpoint).
 Local checks alone do not publish a HACS update.
 
-This `0.3.0` development source adds the inside-card **Buttons and bars** builder.
-The [custom controls guide](docs/CUSTOM-BUTTONS-AND-BARS.md) explains draft editing,
-drag-and-drop, saved action links and what still needs testing on real devices.
-It is separate from the frozen `0.2.0` candidate and is not a published HACS release.
+This `0.4.0` development source adds six improvements to the inside-card builder
+and House layout: room sheets with Summary/Controls/Details, pictured icon and
+friendly-name pickers, five simpler editing sections and guided setup, optional
+four/five-button favourites with More, readable themes and clearer save/action
+messages. The [UI polish guide](docs/UI-POLISH.md) explains each change and gives
+a practical Home Assistant test. The earlier `0.2.0` and `0.3.0` packages remain
+separate checkpoints; this work does not publish a HACS update.
+
+The tested local package is **`taylors3d-phase22-ui-polish-local-candidate.zip`**.
+Its complete unit checks, qualified 36-program browser coverage and independent
+installation-ZIP audit pass. The [feature log](REQUIREMENTS_AND_FEATURES.md#phase-22-040-ui-polish)
+records the exact build/package checksums and the household checks still to do.
+
+To try the photo-style interface in Home Assistant, open this card's visual settings and choose
+**House appearance → House with navigation and room panels**, then **Dark
+graphite**, **Light** or **Home Assistant colours**. New HA cards start in House;
+existing cards keep the standard layout until you select it. The standalone
+browser demo starts in the standard layout and does not include HA's visual-settings editor.
+The [House layout guide](docs/HOUSE-VIEW-GUIDE.md#choose-the-layout) shows the steps.
+
+The [custom controls guide](docs/CUSTOM-BUTTONS-AND-BARS.md) covers the original
+builder, saved action links, dragging and the real-device checks that still apply.
 
 See [Requirements and features](REQUIREMENTS_AND_FEATURES.md) for Taylor's development ideas, proposed build order and progress log.
 See the [plain-language controls guide](docs/FEATURES-GUIDE.md) for camera automations, Undo/Redo and room overlays.
@@ -49,9 +67,11 @@ position over its map.
 - Bottom bubble bar for saved views, 3D/Top, reset, section, day/night, mini-map and Edit.
   Choose the buttons and their order in the visual card editor
 - Custom named button bars below the house or in one exact room panel. Use Edit →
-  Buttons and bars to choose labels, icons, colours and actions, drag them into
+  Controls → Buttons and bars to choose labels, pictured icons, colours and actions, drag them into
   order, and save one layout change with Undo/Redo. Link existing scenes, scripts,
-  automations, camera views, supported device toggles and Home Assistant controls
+  automations, camera views, supported device toggles and Home Assistant controls.
+  Optional four/five-button favourites keep other actions under More. Search by
+  friendly name, duplicate a button, or start from a template and select your own routine
 - Tap a room to open its devices and readings; tap a device for quick controls. **All controls**
   opens Home Assistant's full options for that entity. Long-press opens more-info; the original
   single-tap toggle behavior is still available as a visual setting
@@ -62,41 +82,45 @@ position over its map.
 - Valid on lights cast a floor glow and illuminate model surfaces in their reported colour/brightness.
   Unavailable, restored, invalid and zero-output readings remain dark
 - Markers show a value next to the icon (temperature, power, …)
-- Camera controls use Home Assistant's native muted camera viewer. Edit → Cameras saves
+- Camera controls use Home Assistant's native muted camera viewer. Edit → Devices → Advanced tools → Cameras saves
   approximate coverage with an explicit heading, viewing angle and range
 - Device names, hidden/disabled choices, areas and sensor precision follow Home Assistant's
   metadata. Edit → Data reports missing saved links; model links keep their IDs for deliberate repair
-- Edit → Tracking connects explicit room observations, driveway vehicle sources and vacuum
+- Edit → Devices → Advanced tools → Tracking connects explicit room observations, driveway vehicle sources and vacuum
   status/coordinates to their locations. Tracked symbols appear in 3D and on the mini-map;
   tapping opens their actual controls. Motion stays anonymous, recent sightings expire,
   and a cleaning state alone does not invent a vacuum route
 - Measured vacuum sources can be calibrated visually with real source/plan point pairs.
   Status and position can have separate explicit timestamp/maximum-age rules
-- Edit → Security links real contacts to exact model objects, with optional owned outlines
+- Edit → Devices → Advanced tools → Security links real contacts to exact model objects, with optional owned outlines
   and explicitly configured rigid door motion. Unknown readings remain uncertain
-- Edit → Environment chooses current HA weather for bounded outdoor rain/snow/cloud effects.
+- Edit → Appearance → Advanced tools → Environment chooses current HA weather for bounded outdoor rain/snow/cloud effects.
   Complete indoor outlines protect the house; static/low quality supports wall panels
-- Edit → Model saves Normal, No realtime shadows or Authored shading (lamps off).
+- Edit → House → Model saves Normal, No realtime shadows or Authored shading (lamps off).
   Existing model materials stay intact; the material report checks actual textures and UVs.
   These display choices leave real light states and controls available
-- Edit → Scenes saves explicit light previews such as Movie or Bedtime. The bottom bar
+- Edit → Controls → Scenes saves explicit light previews such as Movie or Bedtime. The bottom bar
   offers Preview, Stop and a separate Activate action. Previews change the model lights;
   actual Home Assistant readings and device controls stay current
-- Edit → Idle sets an optional idle delay, gentle rotation and picture brightness.
+- Edit → Appearance → Advanced tools → Idle sets an optional idle delay, gentle rotation and picture brightness.
   Actual sun readings or quiet hours in Home Assistant's time zone can dim the drawing;
   touch, menus, editing, alerts and camera flights take priority
-- Edit → Model → Wall presentation saves exact wall selections with normal, faded,
+- Edit → House → Model → Wall presentation saves exact wall selections with normal, faded,
   glass-like or cut-away appearance. Camera-side walls can expose the interior;
   authored materials and manual Section remain available. See the [wall guide](docs/WALL-PRESENTATION-GUIDE.md)
-- Edit → Model → Floor presentation separates up to four explicitly linked floors
+- Edit → House → Model → Floor presentation separates up to four explicitly linked floors
   side by side or into stacked layers. The tested Phase 20 local candidate optionally gives
   horizontal floors separate panels: columns on wide scenes, stacked pictures on
   phones, with linked orbit/pan/zoom and the same renderer/light pool. For a GLB,
-  use Edit → Views → Linked HA floors to allow the intended floors in All or your
+  use Edit → Controls → Views → Linked HA floors to allow the intended floors in All or your
   overview, then choose that view. Panels respect its existing visibility rules.
   Real positions, calibrations and the mini-map keep their source coordinates.
   Local checks pass; actual HA/model/panel checks remain. See the [floor guide](docs/FLOOR-PRESENTATION-GUIDE.md)
 - Edit mode for admins: draw rooms, doors, floors, pin and hide devices, import/export
+- Five editing sections keep related tools together. Continue setup opens the real
+  house upload, floor/room links and controls, then an explicit final Save
+- A status strip shows unsaved changes, saving, saved, failure and connection state.
+  An action request is separate from the device's actual reported state
 - One layout shared by every user and device (stored by the companion integration)
 - Robot mower: live position, trail, map image or camera overlay, point calibration
 - Optional 3D model of the house (.glb) under the plan: views per storey (upper storeys and the
@@ -121,7 +145,7 @@ position over its map.
 ![Room controls and readings in the dark theme](docs/images/navigation-room.png)
 
 The bubble bar sits below the house, with space reserved so it does not cover the plan.
-View buttons follow the names/order saved under **Edit → Views**. On a narrow panel the bar
+View buttons follow the names/order saved under **Edit → Controls → Views**. On a narrow panel the bar
 uses two rows, and long button lists scroll sideways.
 
 Tap a room's floor in the main view to open its panel. Rooms need an outline and an HA area
@@ -142,10 +166,14 @@ the original device-tap behavior. Layout editing inside the card remains availab
 
 Room and device controls now open on the right by default. On wide screens the house and
 mini-map have their own space beside the panel. The visual editor can choose a popup instead.
+On a narrow card, **Summary**, **Controls** and **Details** change the room sheet's
+size and content. Drag its handle between sizes, or focus the handle and use
+arrow keys/Home/End. Details keeps the complete device list and Home Assistant's
+All controls links reachable. The house retains its own visible space.
 
 ![Right-hand controls beside the house and mini-map](docs/images/panel-wide.png)
 
-**Edit → Views** names this browser for camera automations. **Edit → Overlays** assigns
+**Edit → Controls → Views** names this browser for camera automations. **Edit → Appearance → Advanced tools → Overlays** assigns
 temperature/power/energy sensors and smoke/leak/unlocked-door alerts to rooms. The edit panel
 also has Undo/Redo for layout changes. Read the controls guide above for setup and limits.
 
@@ -154,12 +182,36 @@ house model, Home Assistant and wall panel is tracked in [the feature log](REQUI
 
 ## Install
 
-HACS and the latest published release currently supply **v0.1.0**. To evaluate the
-custom-controls `0.3.0` candidate, use its separately supplied local ZIP or build this
-source version. The latest local checks are linked at the top of this README.
+The published checkpoint recorded in this repository is **v0.1.0**. To evaluate
+the `0.4.0` development candidate, use a matching supplied testing ZIP or build
+this source version. A local build does not upload a release to HACS. The feature
+log records which checks and package belong to each checkpoint.
 
 The repository is a Home Assistant integration that also serves the card, so one install
 covers both. The integration stores the layout and makes it available to all users.
+
+### Local 0.4 testing package
+
+Use the supplied local **`taylors3d-phase22-ui-polish-local-candidate.zip`**. HACS still
+uses the published `0.1.0` checkpoint until a future release; downloading that
+release will not install these new controls.
+
+1. Keep the previous installation package and export your layout/dashboard
+   backup before changing the installed version.
+2. Create `/config/custom_components/taylors3d/` if needed. Extract the testing
+   ZIP's contents **directly into that folder**. `__init__.py`, `manifest.json`
+   and the `frontend/` folder should be directly inside it, with no second
+   nested `taylors3d/` folder.
+3. Restart Home Assistant, then hard refresh the browser: **Ctrl+Shift+R** on
+   Windows/Linux or **Cmd+Shift+R** on Mac. If Taylor's 3D has not been set up
+   before, use **Settings → Devices & services → Add integration → Taylor's 3D**.
+4. Add a test card and set its visual **Layout name** to `polish-test` before
+   making plan edits. Follow the [UI test guide](docs/UI-POLISH.md).
+
+This installation changes the integration/card program used by **every Taylor's
+3D card in that HA instance**. A separate Layout name protects the saved plan
+edits, not the installed program version. Keep the prior package and backups
+available if you need to return to the earlier version.
 
 ### HACS
 
@@ -168,7 +220,7 @@ covers both. The integration stores the layout and makes it available to all use
 2. Search for **Taylor's 3D** in HACS and download it.
 3. Restart Home Assistant.
 4. Settings → Devices & services → **Add integration** → **Taylor's 3D** → Submit.
-5. Reload the browser.
+5. Hard refresh the browser: **Ctrl+Shift+R** on Windows/Linux or **Cmd+Shift+R** on Mac.
 
 ### Manual
 
@@ -196,7 +248,7 @@ The options below can be set in the visual editor or in YAML.
 | `group_by` | `device` | `device`: one marker per device. `entity`: one per entity. |
 | `wall_height` | `1.0` | Height of the cut-away drawn walls in metres (rooms drawn on the card; a model is cut at its storey height instead). |
 | `occlusion` | `true` | With a model: markers hidden behind a wall from the current camera angle are shown faint (25 %) and can't be tapped; in edit mode they stay half visible and draggable. Checked once the camera has been still for 150 ms; not in top view. `false` turns it off. |
-| `merge` | `true` | With a model: static parts that share a room / zone / level / layer group and a material are merged into one mesh when the model loads (far fewer draw calls; Edit → Model shows "Draw calls: before → after"). Objects, glass and other transparent parts, `<room>_floor` pieces and parts named by a `node:` view rule stay separate. `false` keeps every part (reloads the model). |
+| `merge` | `true` | With a model: static parts that share a room / zone / level / layer group and a material are merged into one mesh when the model loads (far fewer draw calls; Edit → House → Model shows "Draw calls: before → after"). Objects, glass and other transparent parts, `<room>_floor` pieces and parts named by a `node:` view rule stay separate. `false` keeps every part (reloads the model). |
 | `sky_bodies` | `true` | With a model: sun and moon discs on a dome around the house with a compass ring (moon position and phase from the HA location) and faint moonlight at night. `false` hides the discs and the ring. |
 | `view` | `3d` | Start in `3d` or `top` view. |
 | `floor` | first floor with rooms | Floor id (or view id) to show first, or `all`. |
@@ -214,8 +266,26 @@ The options below can be set in the visual editor or in YAML.
 
 ## Set up the plan
 
-Click **Edit** on the card (admins only). The panel has tabs Rooms, Devices, Objects (with a
-model that has objects), Mower, Views, Overlays, Cameras, Tracking, Model and Data.
+Click **Edit** on the card (admins only). Related tools are grouped into five
+sections. On a phone, choose the section from the dropdown above the tools.
+
+| Section | Tools |
+|---|---|
+| House | Rooms, Model |
+| Devices | Devices, Objects when the model has them; Advanced: Cameras, Tracking, Security, Mower |
+| Controls | Buttons and bars, Views, Scenes |
+| Appearance | House settings when using House layout, Furniture; Advanced: Overlays, Environment, Idle |
+| Data | Shared-storage information, import/export and dashboard backup |
+
+For a new house, **Continue setup** guides you through Upload house → Link
+floors/rooms → Add devices/controls → Save. Upload your `.glb`, select the actual
+Home Assistant floors and areas, and choose your real controls. You can choose
+drawn rooms and add controls later deliberately. Finish an open feature draft
+with Save or Cancel before moving to the next setup step. The final Save keeps
+the layout in the current storage backend and closes setup after a successful
+response. **Edit → Data** identifies that backend: the companion integration
+shares the layout; fallback storage belongs to a user or browser. **Edit existing**
+returns to the regular sections, and Continue setup resumes the current progress.
 
 ![Edit mode](docs/images/edit-rooms.png)
 
@@ -332,7 +402,7 @@ front axis). Its popup shows state, battery and start / dock.
 
 ![Model](docs/images/model.png)
 
-Upload it on the card: **Edit → Model → Upload .glb**, then align it with the sliders. The file
+Upload it on the card: **Edit → House → Model → Upload .glb**, then align it with the sliders. The file
 is stored in `/config/taylors3d/models/` and only served to logged-in users.
 
 Alternatively put a `.glb` in `/config/www/` and set `model: /local/house.glb` in the card
@@ -343,7 +413,7 @@ levels become floors, tagged rooms and zones become the card's rooms, so the mod
 replace hand-drawn ones. Format and examples: [docs/model-builder-guide.md](docs/model-builder-guide.md).
 Untagged models still load and show whole.
 
-In **Edit → Model** you choose which HA floor each level belongs to and assign each room to an
+In **Edit → House → Model** you choose which HA floor each level belongs to and assign each room to an
 HA area. Defaults follow level order and the tag's suggested area, so most of it is automatic;
 your choices are stored by id and survive re-exports. Click a part of the model in the view to
 find it in the lists. A tagged model shows whole levels and is never clipped; only an untagged
@@ -418,7 +488,7 @@ the floor of its top storey):
 - Switching views keeps the camera, unless the view has a saved camera. **Reset view** (the
   crosshair button) returns to the view's camera or frames the house.
 
-**Edit → Views** edits the current view: label, add / hide / reorder views, linked HA floors,
+**Edit → Controls → Views** edits the current view: label, add / hide / reorder views, linked HA floors,
 **Save current view as start** (the camera), and a tree of the model (levels, rooms, objects,
 layers, groups) with an eye per row: *default* → *shown* → *hidden* in this view. Click any part
 of the model in 3D for a menu: **Hide in this view**, **Show in this view**, **Hide in all
@@ -433,7 +503,7 @@ view allows all current floors. Panels keep the view's model show/hide rules.
 
 #### Camera
 
-- **Rotation centre**: *Edit → Views → Set rotation centre*, then click a point on the model (or
+- **Rotation centre**: *Edit → Controls → Views → Set rotation centre*, then click a point on the model (or
   the floor of the view when nothing is hit; Esc cancels). The camera moves so it orbits and zooms
   around that point, keeping its angle and distance, and the view's camera (position + centre) is
   saved. While the Views tab is open a small cross marks the current centre.
@@ -457,7 +527,7 @@ The **Section** button (box cutter, 3D view with a model) cuts the house with on
 and turns the camera to look at the cut face: every storey and the roof are shown while it is on,
 devices beyond the cut are hidden, and cut walls read solid. Turning it off, switching views,
 **Reset view** or **Top** clears the cut and returns to the view. Where the cut runs is set per
-view in **Edit → Views → Side section**: which half stays (*Keep west / east / north / south
+view in **Edit → Controls → Views → Side section**: which half stays (*Keep west / east / north / south
 half*) and a **Position** slider across the house (its storeys; 0.05 m steps, the cut follows the
 slider live). The camera looks at the cut face from the removed half. Without a setting the
 model's `fp.views[*].section` is used (`{ "normal": [-1, 0, 0], "constant": 7 }`, a three.js plane

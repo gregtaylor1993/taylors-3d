@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CustomControlsEditor } from '../src/custom-controls-editor.js';
 import { EditHistory } from '../src/history.js';
 import { inspectSourceValue } from '../src/imported-source-controls.js';
+import { CUSTOM_CONTROL_ICONS, searchCustomControlIcons } from '../src/custom-controls-icons.js';
+import { parseImport, fitImport } from '../src/editor.js';
+import { collectDashboardReferences } from '../src/dashboard-backup-references.js';
 
 const owners = [];
 const state = (id, value = 'off', extra = {}) => ({ entity_id: id, state: value, attributes: { friendly_name: id }, ...extra });
@@ -47,6 +50,108 @@ function setup({ raw, config = {}, ...overrides } = {}) {
 }
 function pointer(node, type, id = 1) { const event = new Event(type, { bubbles: true, cancelable: true }); Object.assign(event, { pointerId: id, button: 0, clientX: 10, clientY: 10 }); node.dispatchEvent(event); return event; }
 afterEach(() => { owners.splice(0).forEach((editor) => editor.dispose()); document.body.replaceChildren(); delete document.elementFromPoint; vi.restoreAllMocks(); });
+
+describe('visual catalogue, templates and deliberate favourites', () => {
+  it('preserves a future visibility envelope through review and Cancel, and changes it only after explicit replacement Save', () => {
+    const raw = settings([bar('evening', [button('movie', { type: 'scene', entity: 'scene.movie' }, {
+      visibility: { type: 'future-rule', entity: 'vacuum.literal_future', state: 'cleaning', unknown: { keep: 'raw' } } })])]);
+    const before = structuredClone(raw), h = setup({ raw });
+    expect(h.editor.draft).toEqual(before); expect(h.action('save').disabled).toBe(true); expect(h.host.querySelector('[data-cc-button-row]')).toBeNull();
+    h.click('replace'); expect(h.card._layout.custom_controls).toEqual(before); h.click('cancel'); expect(h.card._layout.custom_controls).toEqual(before);
+    h.click('replace'); h.click('save'); expect(h.card._layout.custom_controls).toEqual(settings([])); expect(raw).toEqual(before);
+    expect(h.card._hass.callService).not.toHaveBeenCalled(); expect(h.history.size).toBe(1);
+  });
+  it.each(['single', 'full'])('deliberately repairs an exact condition link after a %s backup round trip without changing dock or extras', (kind) => {
+    const controls = settings([bar('evening', [button('movie', { type: 'scene', entity: 'scene.movie' }, { pinned: true,
+      visibility: { type: 'state', entity: 'vacuum.saved_missing', state: 'cleaning', extension: { keep: true } } })], { dock: { limit: 4, extension: 'dock' } })]);
+    const layout = { version: 1, rooms: [], floors: [], pins: {}, custom_controls: controls, extension: 'layout' }, before = structuredClone(layout);
+    let restored;
+    if (kind === 'single') restored = fitImport(parseImport(JSON.stringify(layout)), [{ id: 'ground', elevation: 0 }], []).layout;
+    else {
+      const archive = JSON.parse(JSON.stringify({ dashboard: { views: [{ cards: [{ type: 'custom:taylors3d-card', layout_key: 'saved' }] }] }, layouts: { saved: { layout } } }));
+      restored = archive.layouts.saved.layout;
+      expect(collectDashboardReferences(archive).references).toContainEqual(expect.objectContaining({ kind: 'entity', id: 'vacuum.saved_missing',
+        path: '/preview/layouts/saved/layout/custom_controls/bars/0/buttons/0/visibility/entity' }));
+    }
+    expect(restored.custom_controls).toEqual(controls); const h = setup({ raw: restored.custom_controls });
+    h.card._hass.states['vacuum.current'] = state('vacuum.current', 'cleaning', { attributes: { friendly_name: 'Current robot' } });
+    h.editor.observe(); h.editor.updatePreviews(h.host);
+    const old = h.field('condition-source', 'evening', 'movie'); expect(old.value).toBe('vacuum.saved_missing'); expect(old.selectedOptions[0].disabled).toBe(true);
+    h.change('condition-source', 'vacuum.current', 'evening', 'movie'); h.click('save');
+    expect(h.card._layout.custom_controls.bars[0]).toMatchObject({ dock: { limit: 4, extension: 'dock' }, buttons: [{ pinned: true,
+      visibility: { type: 'state', entity: 'vacuum.current', state: 'cleaning', extension: { keep: true } } }] });
+    expect(layout).toEqual(before); expect(restored.custom_controls.bars[0].buttons[0].visibility.entity).toBe('vacuum.saved_missing');
+    expect(h.card._hass.callService).not.toHaveBeenCalled(); expect(h.card._hass.callWS).not.toHaveBeenCalled(); expect(h.history.size).toBe(1);
+  });
+  it('bundles useful local SVGs without needing the full remote icon set', () => {
+    expect(CUSTOM_CONTROL_ICONS.length).toBeGreaterThanOrEqual(60); expect(CUSTOM_CONTROL_ICONS.length).toBeLessThanOrEqual(80);
+    expect(CUSTOM_CONTROL_ICONS.every((entry) => /^mdi:[a-z0-9-]+$/.test(entry.icon) && /^M/.test(entry.path))).toBe(true);
+    expect(searchCustomControlIcons('robot vacuum').map((entry) => entry.icon)).toEqual(['mdi:robot-vacuum']);
+    expect(searchCustomControlIcons('<script>')).toEqual([]);
+  });
+  it('loads icon choices only on opening, filters pictures, preserves search focus and accepts a native icon choice', () => {
+    const h = setup({ raw: settings() }), picker = h.host.querySelector('.cc-icon-picker');
+    expect(picker.querySelectorAll('svg')).toHaveLength(0); picker.open = true; h.editor.updatePreviews(h.host);
+    expect(picker.querySelectorAll('svg')).toHaveLength(CUSTOM_CONTROL_ICONS.length);
+    const search = h.change('icon-search', 'robot vacuum', 'evening', 'movie', 'input'); search.focus(); h.editor.updatePreviews(h.host);
+    expect(document.activeElement).toBe(search); expect(picker.querySelectorAll('svg')).toHaveLength(1);
+    const choice = picker.querySelector('[data-cc-icon="mdi:robot-vacuum"]'); choice.click();
+    expect(h.editor.draft.bars[0].buttons[0].icon).toBe('mdi:robot-vacuum'); expect(h.field('icon', 'evening', 'movie').value).toBe('mdi:robot-vacuum');
+    expect(h.card._hass.callService).not.toHaveBeenCalled(); expect(h.card.commitFeatureLayout).not.toHaveBeenCalled();
+    h.change('icon', 'mdi:account-hard-hat', 'evening', 'movie', 'input'); expect(h.action('save').disabled).toBe(false);
+  });
+  it('searches friendly source names and IDs while retaining an exact saved missing choice', () => {
+    const h = setup({ raw: settings() }); h.card._hass.states['scene.second'].attributes.friendly_name = 'Evening cinema';
+    const original = h.field('source', 'evening', 'movie'); h.change('source-search', 'cinema', 'evening', 'movie', 'input');
+    expect(h.field('source', 'evening', 'movie')).toBe(original);
+    expect([...original.options].map((row) => row.value)).toEqual(['', 'scene.second', 'scene.movie']);
+    expect([...original.options].find((row) => row.value === 'scene.second').textContent).toContain('Evening cinema');
+    expect([...original.options].find((row) => row.value === 'scene.second').textContent).toContain('scene.second');
+    h.change('source-search', 'scene.second', 'evening', 'movie', 'input'); expect([...original.options].some((row) => row.value === 'scene.second')).toBe(true);
+    const missing = setup({ raw: settings([bar('evening', [button('movie', { type: 'scene', entity: 'scene.gone' })])]) });
+    missing.change('source-search', 'cinema', 'evening', 'movie', 'input'); expect(missing.field('source', 'evening', 'movie').value).toBe('scene.gone');
+    expect(missing.field('source', 'evening', 'movie').selectedOptions[0].disabled).toBe(true);
+  });
+  it('duplicates a globally unique button, preserving frozen, non-enumerable extensions and missing links', () => {
+    const original = button('movie', { type: 'scene', entity: 'scene.gone', actionExtra: { kept: true } }, { pinned: true });
+    Object.defineProperty(original, 'inert', { value: { kept: 'opaque' }, enumerable: false }); Object.freeze(original);
+    const h = setup({ raw: settings([bar('evening', [original]), bar('room', [button('button_1')])]) }); h.click('duplicate', 'evening', 'movie');
+    const copy = h.editor.draft.bars[0].buttons[1]; expect(copy.id).toBe('button_2'); expect(copy.pinned).toBe(false);
+    expect(copy.inert).toEqual({ kept: 'opaque' }); expect(Object.getOwnPropertyDescriptor(copy, 'inert').enumerable).toBe(false);
+    expect(copy.action).toEqual(original.action); expect(copy.action).not.toBe(original.action); expect(h.action('save').disabled).toBe(false);
+    h.click('save'); expect(h.card._layout.custom_controls.bars[0].buttons[1].action.entity).toBe('scene.gone'); expect(h.card._hass.callService).not.toHaveBeenCalled();
+  });
+  it.each([['movie', 'scene', 'mdi:movie'], ['bedtime', 'scene', 'mdi:weather-night'], ['return-vacuum', 'script', 'mdi:robot-vacuum']])('starts %s with a deliberate blank exact source', (starter, type, icon) => {
+    const h = setup({ raw: settings([bar('evening', [])]) }); h.click(`template-${starter}`, 'evening'); const saved = h.editor.draft.bars[0].buttons[0];
+    expect(saved).toMatchObject({ starter, icon, action: { type, entity: '' } }); expect(h.action('save').disabled).toBe(true);
+    expect(h.card._hass.callService).not.toHaveBeenCalled(); expect(h.card._hass.callWS).not.toHaveBeenCalled();
+  });
+  it('keeps compact mode and pins deliberate, with no automatic choice or device action', () => {
+    const h = setup({ raw: settings([bar('evening', Array.from({ length: 5 }, (_, index) => button(`b${index}`)))]) });
+    h.change('compact', true); expect(h.editor.draft.bars[0].dock).toEqual({ limit: 5 });
+    expect(h.editor.draft.bars[0].buttons.every((row) => row.pinned === undefined)).toBe(true);
+    for (let index = 0; index < 5; index++) h.change('pinned', true, 'evening', `b${index}`);
+    h.change('dock-limit', '4'); expect(h.action('save').disabled).toBe(true); h.change('pinned', false, 'evening', 'b4'); expect(h.action('save').disabled).toBe(false);
+    h.click('save'); expect(h.history.size).toBe(1); expect(h.history.undo().layout.custom_controls.bars[0]).not.toHaveProperty('dock');
+    expect(h.history.redo().layout.custom_controls.bars[0].dock.limit).toBe(4); expect(h.card._hass.callService).not.toHaveBeenCalled();
+  });
+  it('chooses a return script and separately chooses a real vacuum cleaning rule, then cancels without writes', () => {
+    const h = setup({ raw: settings([bar('evening', [])]) }); h.card._hass.states['vacuum.house'] = state('vacuum.house', 'cleaning', { attributes: { friendly_name: 'Downstairs robot' } });
+    h.click('template-return-vacuum', 'evening'); h.change('source', 'script.sleep', 'evening', 'button_1');
+    h.change('conditional', true, 'evening', 'button_1'); expect(h.field('condition-state', 'evening', 'button_1').value).toBe('cleaning');
+    expect(h.action('save').disabled).toBe(true); h.change('condition-source', 'vacuum.house', 'evening', 'button_1'); expect(h.action('save').disabled).toBe(false);
+    const field = h.field('condition-state', 'evening', 'button_1'); field.focus(); h.card._hass.states['vacuum.house'].state = 'docked'; h.editor.updatePreviews(h.host);
+    expect(h.editor.stale).toBe(false); expect(document.activeElement).toBe(field); expect(h.action('save').disabled).toBe(false);
+    h.click('cancel'); expect(h.card._layout.custom_controls.bars[0].buttons).toEqual([]); expect(h.card.commitFeatureLayout).not.toHaveBeenCalled(); expect(h.card._hass.callService).not.toHaveBeenCalled();
+  });
+  it('poisons held catalogue choices and duplicate presses after connection/account change', () => {
+    const h = setup({ raw: settings() }), picker = h.host.querySelector('.cc-icon-picker'); picker.open = true; h.editor.updatePreviews(h.host);
+    const choice = picker.querySelector('[data-cc-icon="mdi:robot-vacuum"]'); pointer(choice, 'pointerdown'); h.card._hass.connection.connected = false; h.editor.updatePreviews(h.host);
+    h.card._hass.connection.connected = true; h.editor.updatePreviews(h.host); pointer(choice, 'pointerup'); choice.click(); expect(h.editor.draft.bars[0].buttons[0].icon).toBe('mdi:movie');
+    const duplicate = h.action('duplicate', 'evening', 'movie'); pointer(duplicate, 'pointerdown'); h.card._hass.user.id = 'another-admin'; h.editor.updatePreviews(h.host);
+    pointer(duplicate, 'pointerup'); duplicate.click(); expect(h.editor.draft.bars[0].buttons).toHaveLength(1); expect(h.card._hass.callService).not.toHaveBeenCalled();
+  });
+});
 
 describe('visual custom control drafts', () => {
   it('starts empty and requires a deliberate source, without choosing or executing one', () => {

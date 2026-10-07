@@ -12,7 +12,8 @@ describe('normalise', () => {
   });
   it('keeps saved button bars and future extensions through normalise and JSON backup round trips', () => {
     const raw = { version: 1, rooms: [], custom_controls: { version: 1, bars: [{ id: 'evening', label: 'Evening', placement: 'bottom', style: 'pills',
-      buttons: [{ id: 'movie', label: 'Movie', icon: 'mdi:movie', color: 'amber', action: { type: 'scene', entity: 'scene.movie' }, extra: { literal: 'scene.label' } }] }],
+      dock: { limit: 4, extension: 'dock' }, buttons: [{ id: 'movie', label: 'Movie', icon: 'mdi:movie', color: 'amber', pinned: true,
+        action: { type: 'scene', entity: 'scene.movie' }, visibility: { type: 'state', entity: 'vacuum.exact', state: 'cleaning', extension: 'visibility' }, extra: { literal: 'scene.label' } }] }],
       extension: { retained: ['é', false, null] } } };
     const before = structuredClone(raw), restored = normalise(JSON.parse(JSON.stringify(normalise(raw))));
     expect(restored.custom_controls).toEqual(raw.custom_controls); expect(raw).toEqual(before);

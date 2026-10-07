@@ -24,6 +24,7 @@ import { moonPosition } from './sky.js';
 import { ObjectPopup, objectAction, actionTarget, toggleCall } from './objects/popup.js';
 import { DevicePopup } from './device-popup.js';
 import { CustomControlsView } from './custom-controls-view.js';
+import { FeedbackController, FeedbackView } from './ui-feedback.js';
 import { resolveCustomControls, customControlCommand } from './custom-controls.js';
 import { inspectSourceValue } from './imported-source-controls.js';
 import { roomActionsFor } from './room-actions.js';
@@ -56,7 +57,7 @@ import { floorPresentationContext } from './floor-presentation-context.js';
 import { displayPlanPosition, displayFloorFootprint, displayLocatedRecords, displayCameraAnchors,
   translateFloorCamera } from './floor-presentation-adapters.js';
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 const NONE = Object.freeze({}); // stable stand-in for a missing layout.objects / groups (binding cache key)
 const TAP_TOGGLE = new Set(['light', 'switch', 'fan', 'input_boolean']);
 const LONG_PRESS_MS = 500;
@@ -77,8 +78,14 @@ const STYLE = `
     background: var(--ha-card-background, var(--card-background-color, #fff));
     border-radius: var(--ha-card-border-radius, 12px); color: var(--primary-text-color); }
   .stage { position: relative; width: 100%; touch-action: none; user-select: none; -webkit-user-select: none; }
+  .feedback-host { box-sizing: border-box; min-width: 0; padding: 8px; }
+  .feedback-host[hidden] { display: none; }
   .stage canvas { display: block; }
   .scene { position: absolute; inset: 0 var(--taylors3d-controls-width, 0px) var(--taylors3d-bar-height, 0px) 0; }
+  .stage[data-taylors3d-standard-sheet] .scene { bottom:calc(var(--taylors3d-bar-height,0px) + var(--taylors3d-standard-sheet-height,0px)); }
+  .stage[data-taylors3d-standard-sheet] .taylors3d-device-popup[data-placement="right"] {
+    left:8px;right:8px;top:auto;bottom:calc(var(--taylors3d-bar-height,0px) + 8px);width:auto;
+  }
   @container (min-width: 740px) {
     .stage.controls-open { --taylors3d-controls-width: 332px; }
   }
@@ -193,7 +200,7 @@ const STYLE = `
   @container (max-width: 640px) {
     .body.editing { flex-direction: column; }
     .body.editing .stage { flex: none; width: 100%; }
-    .editing .panel { width: auto; max-height: 420px; border-left: none; border-top: 1px solid var(--divider-color, rgba(0,0,0,.12)); }
+    .editing .panel { width: auto; max-height: 560px; border-left: none; border-top: 1px solid var(--divider-color, rgba(0,0,0,.12)); }
   }
   .tabs { display: flex; flex-wrap: wrap; flex: none; border-bottom: 1px solid var(--divider-color, rgba(0,0,0,.12)); }
   .panel .tabs button { flex: 1 0 64px; min-width: 64px; min-height: 44px; box-sizing: border-box; white-space: nowrap;
@@ -402,11 +409,13 @@ class Taylors3dCard extends HTMLElement {
     this._bindKey = null;
     this._miniMapVisible = true;
     this._history = new EditHistory();
+    this._ensureFeedback();
     this._lightPreview = null;
     this._lightPreviewOwner = null;
     this._scenePreviewStatus = null;
     this._scenePreviewController = new ScenePreviewController({
       getContext: () => this._scenePreviewContext(),
+      requestService: (...args) => this._requestSceneService(...args),
       onPreview: (overrides, metadata) => this.previewSceneLights(overrides, metadata),
       onStatus: (status) => { this._scenePreviewStatus = status; this._scenePreviewBar?.update(); },
     });
@@ -811,6 +820,7 @@ class Taylors3dCard extends HTMLElement {
 
   connectedCallback() {
     if (!this._config) return; // setConfig renders once it arrives
+    this._ensureFeedback();
     this._ambientPointers.clear(); this._ambientKeys.clear();
     this._ambientControlsGesture = false;
     this._ambientWindowActive = typeof document.hasFocus !== 'function' || document.hasFocus();
@@ -847,6 +857,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this._restoreStandardSheetMinimum();
     this._syncCustomControls();
     this._edit?._customControlsEditor?.observe?.();
     this._edit?._dashboardBackupEditor?.setActive(false);
@@ -892,6 +903,10 @@ class Taylors3dCard extends HTMLElement {
     this._skyTimer = null;
     this._setCameraTimer(0);
     this._setImageTimer(0);
+    this._feedbackView?.dispose(); this._feedbackView = null;
+    this._feedback?.dispose();
+    this._unbindFeedbackEditor();
+    if (this._feedbackHost) this._feedbackHost.hidden = true;
   }
 
   async _load() {
@@ -922,6 +937,11 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _render() {
+    this._restoreStandardSheetMinimum();
+    this._feedbackView?.dispose(); this._feedbackView = null;
+    this._feedback?.dispose(); this._feedback = null;
+    this._unbindFeedbackEditor();
+    this._feedbackContextRefs = null;
     this._edit?._dashboardBackupEditor?.dispose();
     this._edit?._customControlsEditor?.dispose();
     this._edit?._furnitureDrag?.cancel();
@@ -976,11 +996,14 @@ class Taylors3dCard extends HTMLElement {
             <div class="status-legend" data-taylors3d-ui role="status" aria-live="polite" hidden><strong></strong><div class="scale"></div><span></span></div>
           </div>
         </div>
+        <div class="feedback-host" data-taylors3d-ui hidden></div>
       </ha-card>`;
     this._stage = root.querySelector('.stage');
     this._stage.tabIndex = -1; // Return keyboard focus when a tracked label disappears.
     this._scene = root.querySelector('.scene');
     this._toolbar = root.querySelector('.toolbar');
+    this._feedbackHost = root.querySelector('.feedback-host');
+    this._ensureFeedback();
     this._stage.style.height = this._config.height;
     root.querySelector('.body').style.setProperty('--fp-height', this._config.height);
     this._chips = root.querySelector('.chips');
@@ -1038,7 +1061,7 @@ class Taylors3dCard extends HTMLElement {
     };
     this._view.onObjectsInvalidate = () => { this._updateObjects(); this._syncFurniture(); }; // view, section or placement changed
     this._popup = new ObjectPopup(this._stage, {
-      onAction: (domain, service, data) => this._hass && this._hass.callService(domain, service, data),
+      onAction: (domain, service, data) => this._requestService(domain, service, data),
       project: (w, members) => this._view.projectWorld(w,
         this._view._floorPanels?.active
           ? this._view._floorPanels.floorForNode(this._objects.objectAt(this._popup?._id)?.obj?.node, members) : undefined),
@@ -1049,11 +1072,15 @@ class Taylors3dCard extends HTMLElement {
         return { obj: o.obj, chain: o.chain, states: this._hass.states, groups: this._groups, hass: this._hass };
       },
     });
+    const closeObjectPopup = this._popup.close.bind(this._popup);
+    this._popup.close = (...args) => { const result = closeObjectPopup(...args); this._syncFeedback(); return result; };
     this._devicePopup = new DevicePopup(this._stage, {
-      onAction: (domain, service, data) => this._hass.callService(domain, service, data),
+      keepOpenForPointerDown: (event) => this._keepPopupForEditPress(event),
+      onAction: (domain, service, data) => this._requestService(domain, service, data),
       getRoomActions: (room) => this._roomShortcutData(room?.id),
       onRoomAction: (roomId, actionId) => this._runRoomShortcut(roomId, actionId),
       getCustomRoomControls: (room) => this._customControlContext('room', room?.id),
+      getRoomSheetContext: (room) => this._customControlContext('room', room?.id),
       onCustomControl: (roomId, barId, buttonId) => this._runCustomControl(barId, buttonId, 'room', roomId),
       onMoreInfo: (entityId) => this._moreInfo(entityId),
       placement: this._houseLayoutEnabled() ? 'right' : this._config.control_panel,
@@ -1062,6 +1089,7 @@ class Taylors3dCard extends HTMLElement {
         if (open) this._stopScenePreview('device controls opened');
         this._stage.classList.toggle('controls-open', open && placement === 'right');
         if (!open) this._houseSelection = 'house';
+        this._syncFeedback();
         this._syncHouseShell();
         requestAnimationFrame(() => this.isConnected && this._resize());
       },
@@ -1130,6 +1158,13 @@ class Taylors3dCard extends HTMLElement {
     this._syncToolbar();
   }
 
+  _keepPopupForEditPress(event) {
+    const button = this._editBtn;
+    return this.isConnected === true && button?.isConnected === true && button.getRootNode() === this.shadowRoot
+      && !button.hidden && !button.disabled && this._hass?.user?.is_admin === true
+      && this._hass.user.is_active !== false && event.composedPath().includes(button);
+  }
+
   _toggleEdit() {
     this._suspendAmbient('editing changed');
     this._stopScenePreview('editing changed');
@@ -1162,6 +1197,8 @@ class Taylors3dCard extends HTMLElement {
 
   // Apply an edited layout: rebuild the plan and save it.
   _commit(layout) {
+    // Capture the actual transport before any editor/status callback can run.
+    const store = this._store, hass = this._hass, editor = this._edit;
     this._suspendAmbient('layout edit');
     if (!this._history.current && this._layout) this.resetHistory();
     this._layout = layout;
@@ -1172,11 +1209,41 @@ class Taylors3dCard extends HTMLElement {
     this.finishWallSelectionPreparation(); // Reload around the newly saved exact wall paths.
     if (!this._historyReplaying) this._recordHistory('Layout edit');
     const seq = (this._saveSeq = (this._saveSeq || 0) + 1);
-    this._edit?.setSaveState('saving');
-    this._store.save(this._hass, layout).then((ok) => {
-      if (seq === this._saveSeq) this._edit?.setSaveState(ok ? 'saved' : 'failed');
+    editor?.setSaveState('saving');
+    this._syncFeedback?.();
+    const feedback = this._feedback;
+    const feedbackToken = store === this._store && editor === this._edit && hass === this._hass
+      ? feedback?.setSaveState('saving') : null;
+    let request;
+    try { request = store.save(hass, layout); }
+    catch { request = Promise.resolve(false); }
+    const saved = this._pendingLayoutSave = Promise.resolve(request).then((ok) => {
+      const current = seq === this._saveSeq && store === this._store && editor === this._edit;
+      this._syncFeedback?.();
+      const owned = current && (!feedback || feedback === this._feedback && feedbackToken
+        && feedback.setSaveState(ok === true ? 'saved' : 'failed', feedbackToken));
+      if (current && owned) editor?.setSaveState(ok === true ? 'saved' : 'failed');
+      return current && ok === true;
+    }, () => {
+      this._syncFeedback?.();
+      const current = seq === this._saveSeq && store === this._store && editor === this._edit;
+      const owned = current && (!feedback || feedback === this._feedback && feedbackToken && feedback.setSaveState('failed', feedbackToken));
+      if (owned) editor?.setSaveState('failed');
+      return false;
     });
     this._schedule();
+    return saved;
+  }
+
+  async completeSetup(layout, token) {
+    const editor = this._edit, store = this._store;
+    const current = () => this._edit === editor && this._store === store
+      && this._editing === true && editor?.setupSaveCurrent?.(token) === true;
+    if (!current() || !layout || token?.next !== layout) return false;
+    const saved = await this._commit(layout);
+    if (!saved || !current() || this._layout !== layout) return false;
+    this._toggleEdit();
+    return true;
   }
 
   resetHistory() {
@@ -2144,13 +2211,50 @@ class Taylors3dCard extends HTMLElement {
     this._syncHouseShell();
   }
 
+  _restoreStandardSheetMinimum() {
+    const saved = this._standardSheetMinimum;
+    if (!saved) return;
+    const stage = saved.stage || this._stage;
+    if (stage?.style.getPropertyValue('min-height') === saved.last
+      && stage.style.getPropertyPriority('min-height') === (saved.lastPriority || '')) {
+      if (saved.value) stage.style.setProperty('min-height', saved.value, saved.priority);
+      else stage.style.removeProperty('min-height');
+    }
+    if (stage?.getAttribute('data-taylors3d-standard-sheet') === '') stage.removeAttribute('data-taylors3d-standard-sheet');
+    if (stage?.style.getPropertyValue('--taylors3d-standard-sheet-height') === saved.sheetHeight
+      && !stage.style.getPropertyPriority('--taylors3d-standard-sheet-height')) stage.style.removeProperty('--taylors3d-standard-sheet-height');
+    this._standardSheetMinimum = null;
+  }
+
   _resize() {
+    if (this._standardSheetMinimum?.stage && this._standardSheetMinimum.stage !== this._stage) this._restoreStandardSheetMinimum();
     const r = this._stage.getBoundingClientRect();
     if (!r.width || !r.height) return;
-    if (this._houseShell?.enabled) this._houseShell.measure({ baseHeight: houseBaseHeight(this._stage) });
+    if (this._houseShell?.enabled) {
+      this._restoreStandardSheetMinimum();
+      this._houseShell.measure({ baseHeight: houseBaseHeight(this._stage) });
+    }
     else {
       const barHeight = this._toolbar.hidden ? 0 : this._toolbar.getBoundingClientRect().height + 16;
       this._stage.style.setProperty('--taylors3d-bar-height', `${barHeight}px`);
+      const baseHeight = houseBaseHeight(this._stage);
+      this._devicePopup?.updateRoomSheetGeometry?.({ width:r.width, baseHeight, availableHeight:Math.max(0,baseHeight-barHeight) });
+      const popup = this._devicePopup?.el;
+      const sheet = !this._editing && this._devicePopup?.isOpen && popup?.dataset.roomSheet
+        && popup.dataset.roomSheet !== 'desktop' && this._devicePopup.placement === 'right';
+      this._stage.toggleAttribute('data-taylors3d-standard-sheet', !!sheet);
+      const sheetHeight = sheet ? popup.getBoundingClientRect().height + 16 : 0;
+      this._stage.style.setProperty('--taylors3d-standard-sheet-height', `${sheetHeight}px`);
+      if (sheet) {
+        this._standardSheetMinimum ??= { stage:this._stage, value:this._stage.style.getPropertyValue('min-height'), priority:this._stage.style.getPropertyPriority('min-height') };
+        const height = `${Math.max(baseHeight,barHeight+sheetHeight+240)}px`;
+        this._stage.style.setProperty('min-height',height);
+        this._standardSheetMinimum.last = height;
+        this._standardSheetMinimum.lastPriority = '';
+        this._standardSheetMinimum.sheetHeight = `${sheetHeight}px`;
+      } else if (this._standardSheetMinimum) {
+        this._restoreStandardSheetMinimum();
+      }
     }
     const scene = this._scene.getBoundingClientRect();
     this._view.resize(scene.width, scene.height);
@@ -3429,7 +3533,8 @@ class Taylors3dCard extends HTMLElement {
     const target = actionTarget(o.obj, o.binding, this._groups || {}, this._hass.states);
     const call = this._objectToggleCall(target);
     if (!call) return false;
-    this._hass.callService(...call);
+    const request = this._requestService ? this._requestService(...call) : this._hass.callService(...call);
+    Promise.resolve(request).catch(() => {});
     return true;
   }
 
@@ -3480,9 +3585,13 @@ class Taylors3dCard extends HTMLElement {
       if (a) this._popup.open(o.obj, a.world);
     } else if (action === 'toggle') {
       const call = this._objectToggleCall(target);
-      if (call) this._hass.callService(...call);
+      if (call) {
+        const request = this._requestService ? this._requestService(...call) : this._hass.callService(...call);
+        Promise.resolve(request).catch(() => {});
+      }
     }
     else this._moreInfo(target);
+    this._syncFeedback?.();
   }
 
   _refreshMarkerNames() {
@@ -3678,7 +3787,9 @@ class Taylors3dCard extends HTMLElement {
       this._devicePopup.update(this._hass);
       this._devicePopup.showMarker(m, p && this._view.screenPoint(p.x, p.y, p.z || 0, p.floorId));
     } else if (TAP_TOGGLE.has(m.domain)) {
-      this._hass.callService(m.domain, 'toggle', { entity_id: m.entityId });
+      const request = this._requestService ? this._requestService(m.domain, 'toggle', { entity_id: m.entityId })
+        : this._hass.callService(m.domain, 'toggle', { entity_id: m.entityId });
+      Promise.resolve(request).catch(() => {});
     } else {
       this._moreInfo(m.entityId);
     }
@@ -3747,13 +3858,164 @@ class Taylors3dCard extends HTMLElement {
       rooms: (this._roomList || []).map((entry) => entry.room) });
   }
 
+  _ensureFeedback() {
+    if (!this._feedback || this._feedback._disposed) {
+      this._feedbackContextRefs = null;
+      this._feedbackActionSource = null;
+      this._feedback = new FeedbackController({ onChange: (snapshot) => {
+        const presentation = () => this._feedbackView && JSON.stringify([...this._feedbackView.rows].map(([kind, refs]) =>
+          [kind, refs.row.hidden, refs.message.textContent, refs.detail.hidden, refs.detail.textContent, refs.dismiss.hidden]));
+        const before = presentation();
+        this._feedbackView?.update(snapshot, this._hass);
+        if (this._feedbackHost) this._feedbackHost.hidden = this._feedbackView?.el.hidden !== false;
+        // Status sits below the body so it cannot move the scene mid-gesture.
+        // Internal token/generation changes still revoke old results and presses,
+        // but only a changed visible presentation requests layout measurement.
+        if (before !== presentation() && !this._feedbackResizePending && this.isConnected && this._view && this._feedbackHost) {
+          this._feedbackResizePending = true;
+          queueMicrotask(() => {
+            this._feedbackResizePending = false;
+            if (this.isConnected && this._view && this._feedbackHost?.isConnected) this._resize();
+          });
+        }
+      } });
+    }
+    if (this._feedbackHost && !this._feedbackView) {
+      this._feedbackView = new FeedbackView(this._feedbackHost, { onDismiss: (kind) => this._feedback?.dismiss(kind) });
+    }
+    this._syncFeedback();
+  }
+
+  _feedbackContext() {
+    const hass = this._hass, selection = this._devicePopup?._selection, source = this._feedbackActionSource;
+    const metadata = (source?.ids || []).map((entityId) => {
+      const current = entityMetadata(hass, entityId), attributes = current.state?.attributes || {};
+      return [entityId, current.name, current.registry, current.device, current.area, current.floor,
+        current.hidden, current.disabled, current.category, current.hasState,
+        current.available || current.domain === 'scene' && current.hasState && current.state.state !== 'unavailable',
+        attributes.restored === true, current.supportedFeatures, attributes.supported_color_modes,
+        attributes.hvac_modes, attributes.fan_speed_list];
+    });
+    const modelSource = inspectSourceValue([this._config?.model, this._config?.model_position,
+      this._config?.model_rotation, this._config?.model_scale]).signature;
+    const refs = [this._store, this._config?.layout_key, this._layout, this._view, this._view?.model?.root,
+      modelSource, this._customControlsModelLoad?.promise, this._viewId, this._selectedRoomId,
+      selection?.kind, selection?.room?.id, this._devicePopup?._session, this._popup?.objectId,
+      this.isConnected, hass?.connection, hass?.auth, hass?.connection?.options?.auth, hass?.callService,
+      hass?.user, hass?.user?.id, hass?.user?.is_active, hass?.user?.is_admin,
+      inspectSourceValue(hass?.user?.permissions).signature, hass?.services,
+      source?.domain, source?.service, hass?.services?.[source?.domain]?.[source?.service],
+      inspectSourceValue(metadata).signature];
+    const old = this._feedbackContextRefs;
+    if (!old || refs.some((value, index) => value !== old[index])) {
+      this._feedbackContextRefs = refs;
+      this._feedbackContextEpoch = (this._feedbackContextEpoch || 0) + 1;
+    }
+    return { contextKey: `feedback:${this._feedbackContextEpoch}`,
+      connected: this.isConnected === true && hass?.connection?.connected === true,
+      loading: !!this._loading || !!this._customControlsModelLoad || !this._layout || !hass };
+  }
+
+  _syncFeedback() {
+    if (!this._feedback || this._feedback._disposed) return;
+    const panel = this._edit?.panel;
+    if (panel !== this._feedbackEditorPanel) {
+      this._unbindFeedbackEditor();
+      this._feedbackEditorPanel = panel;
+      this._feedbackEditorEvent = () => {
+        if (this._feedbackEditorEventQueued) return;
+        this._feedbackEditorEventQueued = true;
+        queueMicrotask(() => {
+          this._feedbackEditorEventQueued = false;
+          if (this.isConnected && panel === this._feedbackEditorPanel) this._syncFeedback();
+        });
+      };
+      for (const name of ['input', 'change', 'click']) panel?.addEventListener(name, this._feedbackEditorEvent);
+    }
+    const before = this._feedback.snapshot();
+    this._feedback.setContext(this._feedbackContext());
+    const current = this._feedback.snapshot();
+    if (before.contextGeneration !== current.contextGeneration && current.save.persistedStatus === 'idle'
+      && ['saving', 'saved', 'failed'].includes(this._edit?.saveState)) this._edit.setSaveState('');
+    const editor = this._edit;
+    const dirty = this._editing === true && ['_customControlsEditor', '_roomActionsEditor', '_cameraEditor',
+      '_trackingEditor', '_weatherEditor', '_securityEditor', '_modelRenderingEditor', '_scenePreviewEditor',
+      '_ambientIdleEditor', '_houseSummaryEditor', '_wallPresentationEditor', '_floorPresentationEditor', '_furnitureEditor']
+      .some((name) => editor?.[name]?.dirty === true);
+    this._feedback.setDirty(dirty);
+    // Locale updates change text only, preserving both ownership and focus.
+    this._feedbackView?.update(this._feedback.snapshot(), this._hass);
+    if (this._feedbackHost) this._feedbackHost.hidden = this._feedbackView?.el.hidden !== false;
+  }
+
+  _unbindFeedbackEditor() {
+    for (const name of ['input', 'change', 'click']) this._feedbackEditorPanel?.removeEventListener(name, this._feedbackEditorEvent);
+    this._feedbackEditorPanel = null;
+    this._feedbackEditorEvent = null;
+  }
+
+  _requestSceneService(hass, domain, service, data, options) {
+    if (hass !== this._hass || domain !== 'scene' || service !== 'turn_on')
+      return Promise.reject(new Error('The current scene request changed.'));
+    return this._requestService(domain, service, data, options?.label, options);
+  }
+
+  _requestService(domain, service, data, label, { isCurrent } = {}) {
+    const hass = this._hass;
+    const current = () => {
+      if (typeof isCurrent !== 'function') return true;
+      try { return isCurrent() === true; } catch { return false; }
+    };
+    if (!hass || typeof hass.callService !== 'function' || !this.isConnected || this._loading
+      || hass.connection?.connected === false || hass.user?.is_active === false)
+      return Promise.reject(new Error('Home Assistant is unavailable.'));
+    const rawIds = data?.entity_id;
+    const ids = typeof rawIds === 'string' ? [rawIds] : Array.isArray(rawIds) ? rawIds.filter((id) => typeof id === 'string') : [];
+    const entityId = ids[0];
+    const name = typeof label === 'string' && label.trim() ? label
+      : entityId ? entityMetadata(hass, entityId).name : `${domain}.${service}`;
+    this._feedbackActionSource = { domain, service, ids };
+    this._syncFeedback();
+    const feedback = this._feedback;
+    const token = hass === this._hass ? feedback?.beginAction({ id: entityId || `${domain}.${service}`, label: name.slice(0, 160) }) : null;
+    if (!current()) {
+      feedback?.cancelAction(token);
+      return Promise.reject(new Error('The current action source changed.'));
+    }
+    let request;
+    try { request = hass.callService(domain, service, data); }
+    catch (error) {
+      this._syncFeedback();
+      if (feedback === this._feedback) {
+        if (current()) feedback?.actionFailed(token); else feedback?.cancelAction(token);
+      }
+      return Promise.reject(error);
+    }
+    return Promise.resolve(request).then((result) => {
+      this._syncFeedback();
+      if (feedback === this._feedback) {
+        if (!current()) feedback?.cancelAction(token);
+        else if (result === false || result?.ok === false) feedback?.actionFailed(token);
+        else feedback?.actionRequested(token);
+      }
+      return result;
+    }, (error) => {
+      this._syncFeedback();
+      if (feedback === this._feedback) {
+        if (current()) feedback?.actionFailed(token); else feedback?.cancelAction(token);
+      }
+      throw error;
+    });
+  }
+
   _runRoomShortcut(roomId, actionId) {
     const selection = this._devicePopup?._selection;
     if (!this._devicePopup?.isOpen || selection?.kind !== 'room' || selection.room?.id !== roomId || this._editing || this._loading)
       return Promise.reject(new Error('Reopen the current room controls and choose the shortcut deliberately.'));
     const current = this._roomShortcutData(roomId).actions.find((action) => action.id === actionId);
     if (!current?.available) return Promise.reject(new Error(current?.issue || 'This room shortcut is no longer available.'));
-    return this._hass.callService(current.domain, current.service, { entity_id: current.entityId });
+    return this._requestService ? this._requestService(current.domain, current.service, { entity_id: current.entityId }, current.label)
+      : this._hass.callService(current.domain, current.service, { entity_id: current.entityId });
   }
 
   _customControlsSettings() {
@@ -3793,10 +4055,13 @@ class Taylors3dCard extends HTMLElement {
     return { hass: this._hass, suspended, ...resolveCustomControls({ hass: this._hass,
       settings: this._customControlsSettings(), views: this._views || [], rooms: this._customControlsRooms(),
       placement, roomId, editing: !!this._editing, loading: loading || !this.isConnected || !activeRoom || !this._layout,
+      selectedViewId: this._viewId, selectedRoomId: selected?.kind === 'room' ? selected.room?.id : undefined,
       contextKey: `${placement}:${epoch}` }) };
   }
 
   _syncCustomControls() {
+    this._syncFeedback?.();
+    this._edit?.observeSetupContext?.();
     this._customControlsView?.update();
     if (this._customControlsHost && this._customControlsView?.el) {
       const hidden = this._customControlsView.el.hidden === true;
@@ -3816,7 +4081,9 @@ class Taylors3dCard extends HTMLElement {
     this._suspendAmbient('custom control'); this._stopScenePreview('custom control');
     if (command.kind === 'view') return this._setView(command.viewId);
     if (command.kind === 'more-info') return this._moreInfo(command.entityId);
-    return this._hass.callService(command.domain, command.service, command.data);
+    const label = context.bars?.find((bar) => bar.id === barId)?.buttons?.find((button) => button.id === buttonId)?.label;
+    return this._requestService ? this._requestService(command.domain, command.service, command.data, label)
+      : this._hass.callService(command.domain, command.service, command.data);
   }
 
   _openRoomAt(x, y) {

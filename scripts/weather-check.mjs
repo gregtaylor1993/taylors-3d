@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // Explicit simulated HA readings verify the UI/rendering contract, not household weather.
 // Run after npm run build: node scripts/weather-check.mjs (set CHROME_PATH when needed).
 import fs from 'node:fs';
@@ -11,6 +12,7 @@ const check = (name, pass, detail) => {
 };
 const settle = (page) => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 async function control(page, selector, action) {
+  await revealEditorTab(page, selector);
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {
     const element = handle.asElement();

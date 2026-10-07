@@ -14,8 +14,8 @@ const ignored = (keys) => Object.fromEntries(keys.split(' ').map((key) => [key, 
 const position = obj({ floorId: F, floor_id: F, ...ignored('x y z elevation shown visible') });
 const schemas = {
   custom_controls: obj({ version: I, bars: list(obj({ room_id: R,
-    ...ignored('id label placement style'), buttons: list(obj({ ...ignored('id label icon color'),
-      action: { customAction: true } })) })) }),
+    ...ignored('id label placement style'), dock: obj({ limit: I }), buttons: list(obj({ ...ignored('id label icon color pinned'),
+      visibility: { customVisibility: true }, action: { customAction: true } })) })) }),
   room_actions: obj({ version: I, rooms: list(obj({ room_id: R, actions: list(obj({ entity: E, ...ignored('id label service') })) })) }),
   scene_previews: obj({ enabled: I, items: list(obj({ scene_entity: E, lights: list(obj({ entity: E,
     ...ignored('state brightness color') })), ...ignored('id label') })) }),
@@ -56,6 +56,15 @@ export function enumerateSavedHaReferences(input = {}) {
       // A saved camera view ID belongs to this card, not HA's entity registry.
       walk(value, obj({ ...ignored('type skip_conditions'),
         ...(type.value === 'view' ? { view_id: I } : { entity: E }) }), segments, feature, depth + 1); return;
+    }
+    if (schema.customVisibility) {
+      const type = field(value, 'type');
+      if (!type.safe || type.value !== 'state') {
+        diagnostic(type.safe ? 'reference_shape' : 'reference_accessor', [...segments, 'type'], feature); return;
+      }
+      // Future rule envelopes stay opaque. Their raw values are retained but
+      // cannot be claimed as understood HA links by this card version.
+      walk(value, obj({ entity: E, type: I, state: I }), segments, feature, depth + 1); return;
     }
     if (schema.planTarget) {
       const type = field(value, 'type');

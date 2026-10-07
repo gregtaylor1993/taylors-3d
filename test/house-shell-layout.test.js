@@ -12,8 +12,8 @@ describe('future photo layout measures the card instead of the window', () => {
   it('keeps the house above a phone sheet and both reachable bottom control rows', () => {
     const result = planHouseShell({ width: 320, height: 520, summaryHeight: 112, toolbarHeight: 120,
       navigationHeight: 76, controlsOpen: true, controlsHeight: 450 });
-    expect(result).toMatchObject({ mode: 'bottom', railReserve: 0, controlsReserve: 0, sheetReserve: 336,
-      stageHeight: 916, scene: { x: 0, y: 112, width: 320, height: 240 } });
+    expect(result).toMatchObject({ mode: 'bottom', railReserve: 0, controlsReserve: 0, sheetReserve: 466,
+      stageHeight: 1046, scene: { x: 0, y: 112, width: 320, height: 240 } });
   });
   it('shrinks again after a sheet closes by using the requested base height', () => {
     const input = { width: 390, height: 600, summaryHeight: 80, toolbarHeight: 80, navigationHeight: 64,
@@ -21,6 +21,15 @@ describe('future photo layout measures the card instead of the window', () => {
     const opened = planHouseShell(input), closed = planHouseShell({ ...input, controlsOpen: false });
     expect(opened.stageHeight).toBeGreaterThan(input.height); expect(closed.stageHeight).toBe(input.height);
     expect(closed.sheetReserve).toBe(0); expect(closed.scene.height).toBeGreaterThan(opened.scene.height);
+  });
+  it('reserves actual Summary/Controls/Details heights and never accumulates expansion across snaps or resizes', () => {
+    const input={width:360,height:600,summaryHeight:80,toolbarHeight:80,navigationHeight:64,controlsOpen:true};
+    const detail=planHouseShell({...input,controlsHeight:560}),compact=planHouseShell({...input,controlsHeight:200});
+    expect(detail.sheetReserve).toBe(576); expect(detail.stageHeight).toBe(1072); expect(detail.scene.height).toBe(240);
+    expect(compact.sheetReserve).toBe(216); expect(compact.stageHeight).toBe(712); expect(compact.scene.height).toBe(240);
+    expect(planHouseShell({...input,controlsHeight:560})).toEqual(detail);
+    expect(planHouseShell({...input,width:1200,controlsHeight:560}).sheetReserve).toBe(0);
+    expect(planHouseShell({...input,controlsOpen:false}).stageHeight).toBe(600);
   });
   it.each([320, 390, 739, 740, 959, 960, 1280])('uses non-overlapping actual reservations at width %i', (width) => {
     const result = planHouseShell({ width, height: 480, summaryHeight: 128, toolbarHeight: 144,

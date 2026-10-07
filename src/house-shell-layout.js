@@ -25,7 +25,7 @@ export function planHouseShell({ width = 0, height = 0, summaryHeight = 0, toolb
   const toolbarReserve = toolbarHeight ? toolbarHeight + limits.gap : 0;
   const summaryReserve = editing ? 0 : summaryHeight;
   const sheetReserve = controlsOpen && !editing && width < limits.sheetBelow && controlsHeight
-    ? Math.min(limits.sheet, controlsHeight) + limits.gap : 0;
+    ? controlsHeight + limits.gap : 0;
   const controlsReserve = controlsOpen && !editing && width >= limits.sheetBelow && controlsWidth
     ? Math.min(controlsWidth, width * .4) + limits.gap : 0;
   const bottom = toolbarReserve + navigationReserve + sheetReserve;

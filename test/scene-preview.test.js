@@ -255,6 +255,23 @@ describe('preview lifecycle and latest-context restoration', () => {
 });
 
 describe('explicit activation is independent from preview completeness', () => {
+  it('delegates one exact scene request with a live activation owner to the mounted card', async () => {
+    const f = controllerFixture();
+    f.controller.requestService = vi.fn((hass, domain, service, data, options) => {
+      expect(hass).toBe(f.hass); expect(options.isCurrent()).toBe(true);
+      return hass.callService(domain, service, data);
+    });
+    await f.controller.activate('movie');
+    expect(f.controller.requestService).toHaveBeenCalledOnce();
+    expect(f.hass.callService).toHaveBeenCalledExactlyOnceWith('scene', 'turn_on', { entity_id: 'scene.movie' });
+    f.controller.dispose();
+  });
+  it.each([false, { ok: false }])('reports an explicit rejected scene response %j without an accepted status', async (response) => {
+    const f = controllerFixture(); f.hass.callService.mockResolvedValue(response);
+    expect(await f.controller.activate('movie')).toMatchObject({ ok: false, status: 'error', current: true });
+    expect(f.statuses.mock.calls.some(([message]) => message.status === 'activated')).toBe(false);
+    expect(f.hass.states['light.main'].state).toBe('on'); f.controller.dispose();
+  });
   it('activates one exact saved scene once with missing visual mappings and no invented light services', async () => {
     const f = controllerFixture({ admin: false, lights: [] }); expect(f.controller.preview('movie').ok).toBe(false);
     expect(await f.controller.activate('movie', { expectedSceneEntity: 'scene.movie' })).toMatchObject({ ok: true, status: 'activated', current: true });

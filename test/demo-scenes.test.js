@@ -68,7 +68,7 @@ describe('honest opt-in simulated HA scenes', () => {
       button.dispatchEvent(Object.assign(new Event('pointerup', { bubbles: true }), { pointerType: 'mouse', button: 0 })); button.click();
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
       expect(window.__serviceCalls).toEqual([['scene', 'turn_on', { entity_id: 'scene.movie' }]]);
-      expect(f.hass.states['scene.movie'].state).not.toBe('unknown'); expect(bar.status.textContent).toContain('Activated Movie (simulated)');
+      expect(f.hass.states['scene.movie'].state).not.toBe('unknown'); expect(bar.status.textContent).toContain('Request for Movie (simulated) accepted. Check the current readings.');
     } finally { bar.dispose(); controller.dispose(); host.remove(); }
   });
   it('offers two explicit independent current-capability mappings, labelled as simulated', () => {

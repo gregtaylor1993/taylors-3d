@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // Browser proof of the saved editing tools, using their visible controls.
 // Run after npm run build: node scripts/history-check.mjs (set CHROME_PATH when needed).
 import fs from 'node:fs';
@@ -13,6 +14,7 @@ const check = (name, passed) => {
 const selectorFor = (field) => `[data-field="${field}"]`;
 
 async function control(page, selector, index = 0) {
+  await revealEditorTab(page, selector, index);
   const handle = await page.evaluateHandle((selector, index) => document.querySelectorAll('taylors3d-card')[index].shadowRoot.querySelector(selector), selector, index);
   const element = handle.asElement();
   if (!element) throw new Error(`Missing control: ${selector}`);

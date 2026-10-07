@@ -10,7 +10,8 @@
 import { CameraFeedController } from './camera-feed.js';
 import { entityMetadata, formatEntityValue } from './entity-metadata.js';
 import { lightCapabilities, readLightAppearance } from './light-state.js';
-import { buildRoomSummary } from './room-summary.js';
+import { buildRoomSummary, buildRoomOverview } from './room-summary.js';
+import { RoomSheet } from './room-sheet.js';
 import { localize } from './localization.js';
 import { CustomControlsView } from './custom-controls-view.js';
 import { readDeviceControls, deviceCommand, deviceAuthContext, sameDeviceAuth } from './device-controls.js';
@@ -93,6 +94,36 @@ const STYLE = `
   .taylors3d-device-popup .t3d-room-actions h4 { margin:12px 0 6px; }
   .taylors3d-device-popup .t3d-room-action-row { min-width:0; }
   .taylors3d-device-popup .t3d-room-action-row button { width:100%; }
+  .taylors3d-device-popup .t3d-room-sheet-tools { display:grid;grid-template-columns:44px minmax(0,1fr);gap:8px;margin:-4px -4px 8px; }
+  .taylors3d-device-popup .t3d-room-sheet-handle { display:grid;place-items:center;width:100%;height:44px;min-width:44px;
+    padding:0;border:0;background:transparent;touch-action:none;cursor:ns-resize; }
+  .taylors3d-device-popup .t3d-room-sheet-handle span { width:22px;height:5px;border-radius:8px;background:var(--taylors3d-ui-muted,var(--secondary-text-color,#727272));
+    box-shadow:0 -6px var(--taylors3d-ui-muted,var(--secondary-text-color,#727272)),0 6px var(--taylors3d-ui-muted,var(--secondary-text-color,#727272)); }
+  .taylors3d-device-popup .t3d-room-sheet-modes { display:grid;grid-template-columns:repeat(3,auto);gap:6px; }
+  .taylors3d-device-popup[data-room-sheet] .t3d-room-sheet-tools .t3d-room-sheet-modes button[data-room-sheet-mode] { min-width:44px;min-height:44px;padding:4px;
+    font-size:12px;line-height:1.4;overflow-wrap:normal;white-space:nowrap; }
+  .taylors3d-device-popup[data-room-sheet] .t3d-room-sheet-tools .t3d-room-sheet-modes button[aria-pressed="true"] {
+    border-color:var(--taylors3d-ui-teal,var(--primary-color,#03a9f4));color:var(--taylors3d-ui-teal-ink,var(--primary-text-color,#212121));
+    background:var(--taylors3d-ui-teal-soft,var(--card-background-color,#fff));font-weight:650; }
+  .taylors3d-device-popup[data-room-sheet]:not([data-room-sheet="desktop"]) { height:var(--taylors3d-room-sheet-height);max-height:var(--taylors3d-room-sheet-height);
+    display:flex;flex-direction:column;overflow:hidden;left:8px;right:8px;top:auto;bottom:calc(var(--taylors3d-bar-height,0px) + var(--taylors3d-navigation-height,0px) + 8px);
+    width:auto;max-width:none;transition:background-color 150ms ease,border-color 150ms ease; }
+  .taylors3d-device-popup[data-room-sheet-dragging] { transition:none; }
+  .taylors3d-device-popup[data-room-sheet]:not([data-room-sheet="desktop"]) .t3d-room-sheet-tools,
+  .taylors3d-device-popup[data-room-sheet]:not([data-room-sheet="desktop"]) .t3d-popup-head { flex:none; }
+  .taylors3d-device-popup[data-room-sheet]:not([data-room-sheet="desktop"]) .t3d-popup-content { min-height:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-y; }
+  .taylors3d-device-popup[data-room-sheet]:not([data-room-sheet="desktop"]) .t3d-popup-kind { display:none; }
+  .taylors3d-device-popup[data-room-sheet]:not([data-room-sheet="desktop"]) .t3d-room-glance { max-height:2.8em;overflow:auto;touch-action:pan-y; }
+  .taylors3d-device-popup[data-room-sheet]:not([data-room-sheet="desktop"]) .t3d-room-summary { max-height:3.9em;overflow:auto;touch-action:pan-y; }
+  .taylors3d-device-popup[data-room-sheet="controls"] .t3d-room-actions h4 { display:none; }
+  .taylors3d-device-popup[data-room-sheet="controls"] .t3d-room-actions-grid { margin:4px 0; }
+  .taylors3d-device-popup[data-room-sheet="summary"] .t3d-popup-content { display:none; }
+  .taylors3d-device-popup[data-room-sheet="summary"] .t3d-popup-head { min-height:0;overflow:auto;touch-action:pan-y; }
+  .taylors3d-device-popup[data-room-sheet="controls"] .t3d-entity[data-room-secondary] { display:none; }
+  .taylors3d-device-popup .t3d-room-glance { display:grid;gap:6px;margin:8px 0;color:var(--taylors3d-ui-muted,var(--secondary-text-color,#727272));font-size:12px;line-height:1.4;overflow-wrap:anywhere; }
+  .taylors3d-device-popup .t3d-room-glance p { margin:0; }
+  .taylors3d-device-popup .t3d-room-summary { margin:6px 0;font-size:12px;line-height:1.4;overflow-wrap:anywhere;color:var(--secondary-text-color,#727272); }
+  @media (prefers-reduced-motion:reduce) { .taylors3d-device-popup[data-room-sheet]:not([data-room-sheet="desktop"]) { transition:none; } }
   .taylors3d-device-popup [hidden] { display: none; }
 `;
 
@@ -164,12 +195,13 @@ function button(text, action, entityId) {
 }
 
 export class DevicePopup {
-  constructor(root, { onAction, onMoreInfo, placement = 'popup', onVisibilityChange, getRoomActions, onRoomAction, getCustomRoomControls, onCustomControl } = {}) {
+  constructor(root, { onAction, onMoreInfo, placement = 'popup', onVisibilityChange, getRoomActions, onRoomAction, getCustomRoomControls, onCustomControl, getRoomSheetContext, keepOpenForPointerDown } = {}) {
     this.root = root;
     this.placement = placement === 'right' ? 'right' : 'popup';
     this.onVisibilityChange = onVisibilityChange || (() => {});
     this.getRoomActions = getRoomActions; this.onRoomAction = onRoomAction;
     this.getCustomRoomControls = getCustomRoomControls; this.onCustomControl = onCustomControl;
+    this.getRoomSheetContext = getRoomSheetContext; this._roomSheet = null; this._sheetGeometry = null;
     this.onAction = onAction || ((domain, service, data) => this.hass.callService(domain, service, data));
     this.onMoreInfo = onMoreInfo || ((entityId) => root.dispatchEvent(new CustomEvent('hass-more-info', {
       detail: { entityId }, bubbles: true, composed: true,
@@ -189,6 +221,9 @@ export class DevicePopup {
     });
     this._onOutside = (e) => {
       if (!this.el || e.composedPath().includes(this.el)) return;
+      // The card may own a deliberate control whose click closes this panel.
+      // Keep that exact press target in place until its native click finishes.
+      if (keepOpenForPointerDown?.(e) === true) return;
       this.closedBy = e;
       this.close({ restoreFocus: false });
     };
@@ -248,7 +283,8 @@ export class DevicePopup {
       element('h3', '', selection.title));
     if (selection.kind === 'room') {
       this._roomSummary = element('p', 't3d-room-summary'); this._roomSummary.hidden = true;
-      heading.append(this._roomSummary);
+      this._roomOverview = element('div', 't3d-room-glance');
+      heading.append(this._roomSummary, this._roomOverview);
     }
     head.append(heading, close);
     this._body = element('div', 't3d-popup-body');
@@ -256,7 +292,10 @@ export class DevicePopup {
     this._roomActionsTitle = element('h4'); this._roomActionsGrid = element('div','t3d-room-actions-grid');
     this._roomActions.append(this._roomActionsTitle,this._roomActionsGrid);
     this._customControlsHost = element('div', 't3d-custom-room-controls'); this._customControlsHost.hidden = true;
-    el.append(style, head, this._cameraContainer, this._roomActions, this._customControlsHost, this._body);
+    this._content = element('div', 't3d-popup-content');
+    this._content.append(this._cameraContainer, this._roomActions, this._customControlsHost, this._body);
+    el.append(style, head, this._content);
+    if (selection.kind === 'room' && this.placement === 'right') this._createRoomSheet(el, head);
     if (selection.kind === 'room' && this.getCustomRoomControls) {
       this._customControls = new CustomControlsView(this._customControlsHost, {
         getContext: () => this.getCustomRoomControls(this._selection?.room),
@@ -277,6 +316,7 @@ export class DevicePopup {
     el.addEventListener('pointercancel', (e) => { if (e.target.dataset.lightControl) { e.target.dataset.cancelled = 'true'; this._clearInput(e.target); this._refreshRows(); } });
     this.el = el;
     this.root.append(el);
+    if (this._roomSheet) this.updateRoomSheetGeometry(this._sheetGeometry || { width:this.root.getBoundingClientRect().width, baseHeight:this.root.getBoundingClientRect().height });
     this.onVisibilityChange(true, this.placement);
     window.addEventListener('pointerdown', this._onOutside, true);
     window.addEventListener('keydown', this._onKey);
@@ -297,6 +337,7 @@ export class DevicePopup {
     const opening = this._cameraFeed.open(entityId, this.hass);
     // Keep the chosen camera visible even after browsing a long grouped-device list.
     this.el.scrollTop = 0;
+    if (this._content) this._content.scrollTop = 0;
     return opening;
   }
 
@@ -349,6 +390,12 @@ export class DevicePopup {
       this._roomSummary.hidden = !house;
       this._roomSummary.textContent = house ? buildRoomSummary({ hass: this.hass, entityIds: ids }).text : '';
     }
+    if (this._roomOverview) {
+      const overview = buildRoomOverview({ hass:this.hass, entityIds:ids });
+      const lines = overview.temperatures.map((item) => `${item.name}: ${item.value}`);
+      if (overview.media.length) lines.push(...overview.media.map((item) => `${item.name}: ${item.value}`));
+      this._roomOverview.textContent = lines.join(' · '); this._roomOverview.hidden = !lines.length;
+    }
     const keep = new Set(ids);
     if (this._cameraFeed.entityId && !keep.has(this._cameraFeed.entityId)) this._cameraFeed.close();
     for (const [id, row] of this._rows) {
@@ -377,6 +424,11 @@ export class DevicePopup {
         this._rows.set(id, row);
       }
       row.name.textContent = control.name;
+      if (this._selection.kind === 'room') {
+        const state = this.hass.states?.[id], domain = id.split('.')[0];
+        const primary = ['light','media_player','climate'].includes(domain) || domain === 'sensor' && state?.attributes?.device_class === 'temperature';
+        row.el.toggleAttribute('data-room-secondary', !primary);
+      }
       row.value.textContent = control.value;
       row.info.textContent = localize(this.hass, 'common.controls');
       row.info.setAttribute('aria-label', localize(this.hass, 'popup.entityControls', { name: control.name }));
@@ -663,6 +715,16 @@ export class DevicePopup {
     this._fieldIntents.set(target,{stamp:this._deviceState(target),editing:false,poisoned:false});
   }
   _devicePress(event) {
+    const sheetControl = event.target?.closest?.('.t3d-room-sheet-tools button');
+    if (sheetControl && this._roomSheet?.element.contains(sheetControl)
+      && (event.type === 'pointerdown' && event.button === 0 && event.isPrimary !== false
+        || event.type === 'keydown' && [' ','Enter','ArrowUp','ArrowDown','Home','End'].includes(event.key))) {
+      // Resizing/summarising a panel may blur an unfinished scalar before its
+      // native click. Movement is presentation-only, so discard that draft.
+      const field = this.el.getRootNode().activeElement, draft = this._fieldIntents.get(field);
+      if (this.el.contains(field) && draft?.editing) draft.poisoned = true;
+      return;
+    }
     const close = event.target?.closest?.('button[data-action="close"]');
     if (event.type === 'pointerdown' && event.button === 0 && event.isPrimary !== false
       && close && close === this.el?.querySelector('button[data-action="close"]') && !close.disabled) {
@@ -902,6 +964,7 @@ export class DevicePopup {
   close({ restoreFocus = true } = {}) {
     const hadPopup = !!this.el;
     this._session++;
+    this._roomSheet?.dispose(); this._roomSheet = null;
     this._customControls?.dispose(); this._customControls = null; this._customControlsHost = null;
     this._cameraFeed.close();
     window.removeEventListener('pointerdown', this._onOutside, true);
@@ -912,6 +975,7 @@ export class DevicePopup {
     this._body = null;
     this._empty = null;
     this._roomSummary = null;
+    this._roomOverview = null; this._content = null;
     this._selection = null;
     this._rows.clear();
     this._pending.clear();
@@ -927,6 +991,9 @@ export class DevicePopup {
   dispose() { this.close({ restoreFocus: false }); this._cameraFeed.dispose(); }
 
   updateCustomControls() {
+    // Root synchronously calls this for model/layout/history transitions too,
+    // so a temporary loss and recovery cannot revive a held resize gesture.
+    this._roomSheet?.observe();
     this._customControls?.update();
     if (this._customControlsHost && this._customControls?.el) {
       const hidden = this._customControls.el.hidden === true;
@@ -940,7 +1007,32 @@ export class DevicePopup {
     this.el.dataset.placement = this.placement;
     this.el.style.left = '';
     this.el.style.top = '';
+    if (this._selection?.kind === 'room') {
+      if (this.placement === 'right' && !this._roomSheet) {
+        this._createRoomSheet(this.el, this.el.querySelector('.t3d-popup-head'));
+        this.updateRoomSheetGeometry(this._sheetGeometry || { width:this.root.getBoundingClientRect().width,baseHeight:this.root.getBoundingClientRect().height });
+      } else if (this.placement !== 'right' && this._roomSheet) { this._roomSheet.dispose(); this._roomSheet = null; }
+    }
     this.onVisibilityChange(true, this.placement);
     this.reposition();
+  }
+
+  _roomSheetContext() {
+    const auth = popupAuthContext(this.hass), room = this._selection?.room;
+    let external;
+    try { external = this.getRoomSheetContext?.(room); } catch { return null; }
+    return { ready:!!room && !!auth && this.hass?.connected !== false && this.hass?.connection?.connected !== false && external?.suspended !== true,
+      key:JSON.stringify([this._session,room?.id,room?.area_id,room?.floor_id,auth?.semantic,external?.contextKey]),
+      auth:auth?.auth,connection:auth?.connection,callService:auth?.callService,user:auth?.userId };
+  }
+  _createRoomSheet(el, head) {
+    this._roomSheet = new RoomSheet(el, { getContext:() => this._roomSheetContext(),getHass:() => this.hass,
+      onChange:() => this.onVisibilityChange(true,this.placement) });
+    el.insertBefore(this._roomSheet.element,head);
+  }
+  updateRoomSheetGeometry(geometry) {
+    if (!geometry) return;
+    this._sheetGeometry = geometry;
+    this._roomSheet?.updateGeometry(geometry);
   }
 }

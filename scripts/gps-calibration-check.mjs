@@ -1,3 +1,4 @@
+import { revealEditorTab } from './lib/editor-tab-navigation.mjs';
 // Native GPS workflow against source and the built bundle. --preflight checks
 // simulated data, pure production readers and HTTP boundaries without Chrome.
 // Build the current candidate before a browser run; CHROME_PATH may be needed.
@@ -21,6 +22,7 @@ const closeTo = (a, b, tolerance = 1e-6) => Array.isArray(a) && Array.isArray(b)
 const field = (name) => `[data-field="trk-${name}"]`, act = (name, index) => `[data-act="trk-${name}"]${index === undefined ? '' : `[data-index="${index}"]`}`;
 const frames = (page) => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 async function control(page, selector, action) {
+  await revealEditorTab(page, selector);
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {
     const element = handle.asElement(); if (!element) throw new Error('Missing native GPS control ' + selector);
