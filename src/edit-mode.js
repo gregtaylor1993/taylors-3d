@@ -41,6 +41,11 @@ const DENSE_TRIS = 150000;
 
 const CLICK_SLOP_PX = 5;
 const SNAP_PX = 10; // snap radius never smaller than this many screen pixels
+const DRAFT_SAVES = [['_roomActionsEditor', 'room-actions-save'], ['_customControlsEditor', 'custom-controls-save'],
+  ['_cameraEditor', 'cov-save'], ['_trackingEditor', 'trk-save'], ['_weatherEditor', 'env-weather-save'],
+  ['_securityEditor', 'sec-save'], ['_modelRenderingEditor', 'model-rendering-save'], ['_scenePreviewEditor', 'scene-preview-save'],
+  ['_ambientIdleEditor', 'ambient-idle-save'], ['_houseSummaryEditor', 'house-summary-save'],
+  ['_wallPresentationEditor', 'wall-presentation-save'], ['_floorPresentationEditor', 'floor-presentation-save'], ['_furnitureEditor', 'furniture-save']];
 const activeEditors = new Set(); // window shortcuts belong to the focused card
 const coreNotices = new WeakMap(); // Display metadata never changes the saved/action message contract.
 
@@ -196,6 +201,7 @@ export class EditMode {
 
   // card detached while editing / attached again: window listeners off / on (state kept)
   detach() {
+    this._pendingLeave = null; this._pendingReplacement = null;
     this._navigation.cancel();
     this._backupDetached = true;
     this._dashboardBackupEditor.setActive(false);
@@ -414,6 +420,7 @@ export class EditMode {
 
   // Key changes/reloads discard transient tools before another layout can receive their results.
   cancelHistoryGestures() {
+    this._pendingLeave = null; this._pendingReplacement = null;
     this._navigation.cancel();
     this._assetRequest = null;
     this._dashboardBackupEditor.reset();
@@ -1394,6 +1401,7 @@ export class EditMode {
 
   _render() {
     this._navigation.observe();
+    this._reviewCurrent();
     this._dashboardBackupEditor.setActive(!this._backupDetached && this.card._editing === true && this.tab === 'data');
     if (this.tab === 'house' && this.card._config?.layout_style !== 'house') {
       this._houseSummaryEditor.reset(); this.tab = 'rooms';
@@ -1453,13 +1461,14 @@ export class EditMode {
       scenes: () => this._scenePreviewEditor.render(),
       controls: () => this._customControlsEditor.render(),
       idle: () => this._ambientIdleEditor.render(),
-      house: () => this._houseSummaryEditor.render(),
+      house: () => `<p class="hint" data-editor-text="houseSettingsHelp">${this._navigation.t('houseSettingsHelp')}</p>${this._houseSummaryEditor.render()}`,
       furniture: () => `<p><button data-act="library-refresh">${this._coreCaption('libraryRefresh')}</button></p>${this._furnitureEditor.render()}${this._furnitureLibraryDetails()}`,
       setup: () => '',
     }[this.tab]();
     const msg = this.message ? `<div class="msg ${this.message.error ? 'error' : this.message.warn ? 'warn' : ''}">${esc(this._messageText())}</div>` : '';
     this.panel.innerHTML = `
       ${this._navigation.renderTabs(tabs)}
+      ${this._leavePrompt()}
       <div class="row history-controls" role="group" aria-label="${esc(localize(this.hass, 'history.aria'))}" style="padding: 4px 12px">
         <button data-act="history-undo" style="min-height: 44px" disabled>${esc(localize(this.hass, 'history.undo'))}</button>
         <button data-act="history-redo" style="min-height: 44px" disabled>${esc(localize(this.hass, 'history.redo'))}</button>
@@ -1504,6 +1513,7 @@ export class EditMode {
   // gives grouped navigation and browser regression helpers one stable entry.
   revealTab(tab, { guided = false } = {}) {
     if (!editorTabs({ hasObjects: this._hasObjects(), houseStyle: this.card._config?.layout_style === 'house' }).some(([id]) => id === tab)) return false;
+    if (tab !== this.tab && !this._requestLeave({ type: 'tab', tab, guided })) return false;
     if (!guided) this._navigation.wizard = false;
     this._navigation.reveal(tab);
     const target = this.panel.querySelector(`[data-act="tab"][data-id="${tab}"]`);
@@ -1514,6 +1524,88 @@ export class EditMode {
   setupSnapshot() { return this._navigation.snapshot(); }
   setupSaveCurrent(token) { return this._navigation.current(token); }
   observeSetupContext() { this._navigation.update(this.panel); }
+
+  _dirtyEditors() { return DRAFT_SAVES.filter(([name]) => this[name]?.dirty === true); }
+  _reviewContext() { this._navigation.observe(); return [this._generation, this.tab, this._navigation._epoch, ...this._navigation.context(), this.layout]; }
+  _sameReviewContext(context, allowLayout = false) { const current = this._reviewContext(); return context?.every((value, index) => allowLayout && index === current.length - 1 || value === current[index]); }
+  _reviewCurrent() {
+    if (this._pendingLeave && !this._sameReviewContext(this._pendingLeave.context, this._savingLeaveFeature === true)) this._pendingLeave = null;
+    if (this._pendingReplacement && !this._sameReviewContext(this._pendingReplacement.context)) this._pendingReplacement = null;
+  }
+  _requestLeave(target) {
+    this._reviewCurrent();
+    if (!this._dirtyEditors().length && !this._pendingLeave?.retry) return true;
+    if (this._pendingLeave?.busy) return false;
+    this._pendingLeave = { ...target, retry: this._pendingLeave?.retry, context: this._reviewContext() };
+    this._syncLeavePrompt();
+    this.panel.querySelector('[data-act="draft-leave-stay"]')?.focus({ preventScroll: true });
+    const picker = this.panel.querySelector('[data-field="editor-group"]'); if (picker) picker.value = this._navigation.group;
+    return false;
+  }
+  requestClose() { return this._requestLeave({ type: 'close' }); }
+  _leavePrompt() {
+    const pending = this._pendingLeave; if (!pending) return '';
+    const t = (key) => this._navigation.t(key);
+    return `<section class="editor-leave-review" data-editor-leave role="region" aria-label="${t('leaveTitle')}">
+      <strong>${t('leaveTitle')}</strong><p role="status">${t(pending.notice || 'leaveHelp')}</p><div class="row">
+      <button data-act="draft-leave-save" ${pending.busy ? 'disabled' : ''}>${t(pending.busy ? 'leaveSaving' : 'leaveSave')}</button>
+      <button data-act="draft-leave-discard" ${pending.busy ? 'disabled' : ''}>${t('leaveDiscard')}</button>
+      <button data-act="draft-leave-stay" ${pending.busy ? 'disabled' : ''}>${t('leaveStay')}</button></div></section>`;
+  }
+  _syncLeavePrompt() {
+    const old = this.panel.querySelector('[data-editor-leave]'), html = this._leavePrompt();
+    if (!html) { old?.remove(); this._leaveNode = null; this._leaveMarkup = ''; return; }
+    if (old && old !== this._leaveNode) { this._leaveNode = old; this._leaveMarkup = html; return; }
+    if (old && html === this._leaveMarkup) return;
+    const template = document.createElement('template'); template.innerHTML = html;
+    const next = template.content.firstElementChild;
+    if (old) old.replaceWith(next);
+    else this.panel.querySelector('[data-editor-navigation]')?.after(next);
+    this._leaveNode = next; this._leaveMarkup = html;
+  }
+  async _resolveLeave(action) {
+    const pending = this._pendingLeave;
+    if (!pending || pending.busy || !this._sameReviewContext(pending.context)) { this._reviewCurrent(); this._syncLeavePrompt(); return; }
+    if (action === 'draft-leave-stay') { this._pendingLeave = null; this._syncLeavePrompt(); return; }
+    if (action === 'draft-leave-save') {
+      const editors = this._dirtyEditors();
+      if (editors.some(([, save]) => !this.panel.querySelector(`[data-act="${save}"]`) || this.panel.querySelector(`[data-act="${save}"]`).disabled)) {
+        pending.notice = 'leaveInvalid'; this._syncLeavePrompt(); return;
+      }
+      pending.busy = true; this._syncLeavePrompt();
+      const requests = [];
+      for (const [name, save] of editors) {
+        const button = this.panel.querySelector(`[data-act="${save}"]`);
+        if (!button || button.disabled || this._pendingLeave !== pending || !this._sameReviewContext(pending.context)) break;
+        this._savingLeaveFeature = true;
+        try { button.click(); } finally { this._savingLeaveFeature = false; }
+        if (!this._sameReviewContext(pending.context, true)) break;
+        pending.context = this._reviewContext();
+        if (this.card._pendingLayoutSave) requests.push(this.card._pendingLayoutSave);
+        if (this[name]?.dirty) break;
+      }
+      if (pending.retry && !editors.length && typeof this.card._commit === 'function') {
+        this._savingLeaveFeature = true;
+        let request; try { request = this.card._commit(this.layout); } finally { this._savingLeaveFeature = false; }
+        if (this._sameReviewContext(pending.context, true)) pending.context = this._reviewContext();
+        if (request?.then) requests.push(request);
+      }
+      // The final layout contains earlier feature Saves. Root owns only the
+      // newest save reply; an older superseded reply deliberately returns false.
+      const saved = await Promise.all(requests.slice(-1).map((request) => Promise.resolve(request).then((ok) => ok === true, () => false)));
+      if (this._pendingLeave !== pending || !this._sameReviewContext(pending.context)) { this._reviewCurrent(); this._syncLeavePrompt(); return; }
+      pending.busy = false;
+      if (this._dirtyEditors().length || saved.some((ok) => !ok)) {
+        pending.retry = !this._dirtyEditors().length && saved.some((ok) => !ok);
+        pending.notice = pending.retry ? 'leaveFailed' : 'leaveInvalid'; this._syncLeavePrompt(); return;
+      }
+    } else if (action === 'draft-leave-discard') {
+      for (const [name] of this._dirtyEditors()) { const editor = this[name]; if (typeof editor.cancel === 'function') editor.cancel(); else editor.reset(); }
+    } else return;
+    this._pendingLeave = null; this._syncLeavePrompt();
+    if (pending.type === 'close') this.card._toggleEdit?.();
+    else this.revealTab(pending.tab, { guided: pending.guided });
+  }
 
   _backendLabel() {
     return localize(this.hass, `edit.storage.${this.card._store.backend}`);
@@ -2517,13 +2609,18 @@ export class EditMode {
       && request.context.every((value, index) => value === current[index]);
   }
 
-  async _uploadModel(file) {
+  async _uploadModel(file, approvedReplacement = null) {
     if (!this._navigation.canEdit() || this.uploading) return;
     if (!/\.glb$/i.test(file.name)) {
       this.message = this._coreNotice('glbNotice', {}, { error: true });
       this.render();
       return;
     }
+    if (this.layout.model?.version && !approvedReplacement) {
+      this._pendingReplacement = { file, context: this._reviewContext(), previous: this.layout.model.name || 'house.glb' };
+      this.render(); this.panel.querySelector('[data-act="model-replace-cancel"]')?.focus({ preventScroll: true }); return;
+    }
+    if (approvedReplacement && (approvedReplacement.file !== file || !this._sameReviewContext(approvedReplacement.context))) return;
     const request = { context: this._assetContext() }; this._assetRequest = request;
     this.uploading = file.name;
     this.message = null;
@@ -2582,9 +2679,14 @@ export class EditMode {
       return rendering + `<p class="note warn">${this._coreCaption('layoutKeyHelp', { id: c.layout_key })}</p>`;
     }
     const m = this.layout.model;
+    const replacement = this._pendingReplacement;
     let out = rendering + `<p class="hint">${this._coreCaption('modelIntro')}<code>fp</code>${this._coreCaption('modelTagHelp')}<a href="https://github.com/gregtaylor1993/taylors-3d/blob/main/docs/model-builder-guide.md" target="_blank" rel="noopener">docs/model-builder-guide.md</a>${this._coreCaption('modelIntroEnd')}</p>
       <div class="row"><label class="button ${this.uploading ? 'disabled' : 'primary'}" data-setup-upload tabindex="${this.uploading ? '-1' : '0'}" role="button" aria-disabled="${!!this.uploading}">${this._coreCaption(this.uploading ? 'uploading' : m ? 'replaceModel' : 'uploadModel', { name: this.uploading })}
       <input type="file" accept=".glb,model/gltf-binary" data-field="model-file" hidden ${this.uploading ? 'disabled' : ''}></label></div>`;
+    if (replacement) out += `<section class="editor-leave-review" data-model-replacement role="region" aria-label="${this._navigation.t('replaceTitle')}">
+      <strong>${this._navigation.t('replaceTitle')}</strong><p>${this._navigation.t('replaceFiles', { old: replacement.previous, next: replacement.file.name })}</p>
+      <p>${this._navigation.t('replaceHelp')}</p><div class="row"><button data-act="model-replace-confirm">${this._navigation.t('replaceConfirm')}</button>
+      <button data-act="model-replace-cancel">${this._navigation.t('replaceCancel')}</button></div></section>`;
     if (!m) return out;
 
     this._modelPositionScope = { id: (this._modelPositionScope?.id || 0) + 1,
@@ -2610,7 +2712,9 @@ export class EditMode {
       + slider('opacity', 'Opacity', 0, 1, 0.05, m.opacity ?? 1)
       + `<label>Scale <input type="number" step="any" min="0.0001" data-field="md-scale" value="${m.scale || 1}"></label>
       <p class="hint">Scale 0.01 for a model made in centimetres, 0.001 for millimetres.</p>
-      <div class="row"><button data-act="model-delete" class="danger">${this._coreCaption(this.confirmModelDelete ? 'reallyRemove' : 'removeModel')}</button></div>`;
+      <p class="hint">${this._navigation.t('modelBackupHelp')}</p>
+      <div class="row"><button data-act="model-delete" class="danger">${this._coreCaption(this.confirmModelDelete ? 'reallyRemove' : 'removeModel')}</button></div>
+      ${this.confirmModelDelete ? `<p role="status">${this._navigation.t('removeHelp')}</p>` : ''}`;
     return out;
   }
 
@@ -2727,6 +2831,14 @@ export class EditMode {
   _applyPanelClick(e) {
     const btn = e.target.closest('[data-act]');
     if (!btn || btn.disabled) return;
+    if (/^(draft-leave-|model-replace-)/.test(btn.dataset.act) && !this._navigation.allowed(btn)) return;
+    if (btn.dataset.act.startsWith('draft-leave-')) { void this._resolveLeave(btn.dataset.act); return; }
+    if (btn.dataset.act === 'model-replace-cancel') { this._pendingReplacement = null; this.render(); return; }
+    if (btn.dataset.act === 'model-replace-confirm') {
+      const pending = this._pendingReplacement;
+      if (!pending || !this._sameReviewContext(pending.context) || !this._navigation.canEdit()) { this._pendingReplacement = null; this.render(); return; }
+      this._pendingReplacement = null; void this._uploadModel(pending.file, pending); return;
+    }
     if (this._navigation.onClick(btn)) return;
     const id = btn.dataset.id;
     if (this._dashboardBackupEditor.onClick(btn.dataset.act, btn)) return;
@@ -2763,6 +2875,7 @@ export class EditMode {
       case 'history-undo': this._runHistory('undo'); return;
       case 'history-redo': this._runHistory('redo'); return;
       case 'tab':
+        if (id !== this.tab && !this._requestLeave({ type: 'tab', tab: id })) return;
         this._navigation.reveal(id);
         if (this.tab === 'rooms' && id !== 'rooms') this._roomActionsEditor.reset();
         if (this.tab === 'controls' && id !== 'controls') this._customControlsEditor.reset();

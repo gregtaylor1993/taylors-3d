@@ -22,7 +22,7 @@ describe('current house category memberships', () => {
     add(hass, 'switch.light_named', 'on'); add(hass, 'sensor.brand_named_light', '20');
     expect(read(hass, 'lights')).toEqual({ id: 'lights', title: 'Lights', entityIds: ['light.a', 'light.z'], emptyText: 'No current visible lights are available.' });
     expect(read(hass, 'media')).toMatchObject({ title: 'Media', entityIds: [], emptyText: expect.stringContaining('media players') });
-    expect(read(hass, 'cars')).toMatchObject({ title: 'Cars', entityIds: [], emptyText: expect.stringContaining('Edit → Tracking') });
+    expect(read(hass, 'cars')).toMatchObject({ title: 'Cars', entityIds: [], emptyText: expect.stringContaining('Edit → Devices → Advanced → Tracking') });
   });
 
   it('includes genuine media, climate/weather and temperature/humidity sensors only', () => {

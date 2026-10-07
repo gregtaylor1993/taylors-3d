@@ -9,13 +9,13 @@ const buttonData = (id = 'movie', patch = {}) => ({ id, label: id === 'movie' ? 
 const barData = (id = 'evening', buttons = [buttonData()], patch = {}) => ({ id, label: 'Evening', style: 'pills', placement: 'bottom', buttons, ...patch });
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
 function deferred() { let resolve, reject; const promise = new Promise((done, fail) => { resolve = done; reject = fail; }); return { promise, resolve, reject }; }
-function fixture(bars = [barData()], { callback = vi.fn(), shadow = false } = {}) {
+function fixture(bars = [barData()], { callback = vi.fn(), shadow = false, placement = 'bottom' } = {}) {
   const host = document.createElement('div');
   document.body.append(host);
   const parent = shadow ? host.attachShadow({ mode: 'open' }) : host;
   const context = { bars, diagnostics: [], contextKey: 'session/layout/model/room', suspended: false, hass: { locale: { language: 'en' } } };
   const getContext = vi.fn(() => context);
-  const view = new CustomControlsView(parent, { getContext, onAction: callback });
+  const view = new CustomControlsView(parent, { getContext, onAction: callback, placement });
   instances.push({ view, host });
   const button = (id = 'movie') => view.el.querySelector(`button[data-custom-controls-button-id="${id}"]`);
   const status = (id = 'movie') => button(id)?.parentNode.querySelector('[role="status"]');
@@ -37,6 +37,33 @@ beforeEach(() => { visibility = vi.spyOn(document, 'hidden', 'get').mockReturnVa
 afterEach(() => { for (const { view, host } of instances.splice(0)) { view.dispose(); host.remove(); } vi.restoreAllMocks(); });
 
 describe('compact favourites and honest visibility', () => {
+  it('keeps left actions hidden until a labelled toggle opens, with Escape and outside dismiss sending nothing', () => {
+    const f = fixture([barData('evening', [buttonData()], { placement: 'left' })], { placement: 'left' });
+    const toggle = f.view.el.querySelector('[data-custom-controls-toggle]'), list = f.view.el.querySelector('.custom-controls-bars');
+    expect(toggle.textContent).toBe('Quick actions'); expect(toggle.getAttribute('aria-controls')).toBe(list.id);
+    expect(list.hidden).toBe(true); click(f.button()); expect(f.callback).not.toHaveBeenCalled();
+    click(toggle); expect(list.hidden).toBe(false); expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    f.button().focus(); key(f.button(), 'keydown', 'Escape'); expect(list.hidden).toBe(true); expect(document.activeElement).toBe(toggle);
+    click(toggle); pointer(document.body, 'pointerdown'); expect(list.hidden).toBe(true); expect(f.callback).not.toHaveBeenCalled();
+  });
+  it('retains left More, cancels old held gestures on context change, and requires a fresh drawer opening', () => {
+    const f = fixture([barData('left', Array.from({ length: 6 }, (_, i) => buttonData(`b${i}`, { pinned: i < 4 })), { placement: 'left', dock: { limit: 4 } })], { placement: 'left' });
+    const toggle = f.view.el.querySelector('[data-custom-controls-toggle]'), more = f.view.el.querySelector('[data-custom-controls-more]');
+    click(toggle); click(more); expect(f.button('b5').parentElement.hidden).toBe(false);
+    pointer(f.button('b5'), 'pointerdown'); f.context.contextKey = 'new-account'; f.view.update();
+    pointer(f.button('b5'), 'pointerup'); click(f.button('b5'), 1); expect(f.callback).not.toHaveBeenCalled();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false'); click(toggle); click(more); press(f.button('b5'));
+    expect(f.callback).toHaveBeenCalledExactlyOnceWith('left', 'b5');
+  });
+  it('consumes the first outside house gesture but preserves a deliberate toolbar action and later fresh house gestures', () => {
+    const f = fixture([barData('left', [buttonData()], { placement: 'left' })], { placement: 'left' }); f.host.className = 'stage';
+    const canvas = document.createElement('canvas'), toolbar = document.createElement('button'); f.host.append(canvas, toolbar);
+    const sceneAction = vi.fn(), toolbarAction = vi.fn(); for (const kind of ['pointerdown', 'pointerup', 'click']) canvas.addEventListener(kind, sceneAction);
+    toolbar.addEventListener('click', toolbarAction); const toggle = f.view.el.querySelector('[data-custom-controls-toggle]');
+    click(toggle); press(canvas); expect(sceneAction).not.toHaveBeenCalled(); expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    press(canvas); expect(sceneAction).toHaveBeenCalledTimes(3); click(toggle); press(toolbar); expect(toolbarAction).toHaveBeenCalledOnce();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false'); expect(f.callback).not.toHaveBeenCalled();
+  });
   const dock = () => barData('evening', Array.from({ length: 7 }, (_, index) => buttonData(`b${index}`, { pinned: index < 4 })), { dock: { limit: 4 } });
   it('shows deliberate favourites and native More without automatically pinning or calling an action', () => {
     const f = fixture([dock()]), more = f.view.el.querySelector('[data-custom-controls-more]');
@@ -210,6 +237,72 @@ describe('keyed DOM, focus and ordinary readings', () => {
     expect(original.getAttribute('aria-pressed')).toBe('true');
     expect(f.view.el.getAttribute('aria-label')).not.toBe('Custom controls');
     expect(f.callback).not.toHaveBeenCalled();
+  });
+  it.each([false, true])('moves focus to the next usable action when its neighbour is removed (shadow=%s)', (shadow) => {
+    const f = fixture([barData('evening', [buttonData('first'), buttonData('middle'), buttonData('disabled', { available: false }), buttonData('last')])], { shadow });
+    f.button('middle').focus();
+    f.context.bars[0].buttons.splice(1, 1); f.view.update();
+    expect(f.parent.getRootNode().activeElement).toBe(f.button('last'));
+    f.context.bars[0].buttons.pop(); f.view.update();
+    expect(f.parent.getRootNode().activeElement).toBe(f.button('first'));
+    expect(f.callback).not.toHaveBeenCalled();
+  });
+  it.each(['hidden', 'disabled'])('moves focus away from an action that becomes %s', (state) => {
+    const f = fixture([barData('evening', [buttonData('first'), buttonData('last')])]); f.button('first').focus();
+    if (state === 'hidden') f.context.bars[0].buttons[0].visible = false;
+    else f.context.bars[0].buttons[0].available = false;
+    f.view.update(); expect(document.activeElement).toBe(f.button('last'));
+    expect(f.callback).not.toHaveBeenCalled();
+  });
+  it('prefers the nearer preceding action when the following neighbour becomes unavailable', () => {
+    const f = fixture([barData('evening', ['first', 'middle', 'next', 'last'].map((id) => buttonData(id)))]);
+    f.button('middle').focus(); f.context.bars[0].buttons.splice(1, 1);
+    f.context.bars[0].buttons[1].available = false; f.view.update();
+    expect(document.activeElement).toBe(f.button('first')); expect(f.callback).not.toHaveBeenCalled();
+  });
+  it('uses More when the remaining enabled action is in collapsed overflow', () => {
+    const f = fixture([barData('evening', [buttonData('first', { pinned: true }), buttonData('overflow')], { dock: { limit: 4 } })]);
+    f.button('first').focus(); f.context.bars[0].buttons.shift(); f.view.update();
+    const more = f.view.el.querySelector('[data-custom-controls-more]');
+    expect(document.activeElement).toBe(more); expect(more.getAttribute('aria-expanded')).toBe('false');
+    expect(f.button('overflow').parentElement.hidden).toBe(true); expect(f.callback).not.toHaveBeenCalled();
+  });
+  it('returns to the left-menu toggle when no visible action remains enabled', () => {
+    const f = fixture([barData('left', [buttonData('first'), buttonData('unavailable', { available: false })], { placement: 'left' })], { placement: 'left' });
+    const toggle = f.view.el.querySelector('[data-custom-controls-toggle]'); click(toggle); f.button('first').focus();
+    f.context.bars[0].buttons.shift(); f.view.update();
+    expect(document.activeElement).toBe(toggle); expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(f.callback).not.toHaveBeenCalled();
+  });
+  it.each(['new context', 'suspended', 'hidden host', 'closed drawer', 'all hidden', 'outside focus'])('does not recover focus for %s', (state) => {
+    const left = state === 'closed drawer';
+    const f = fixture([barData('evening', [buttonData('first'), buttonData('last')], { placement: left ? 'left' : 'bottom' })], { placement: left ? 'left' : 'bottom' });
+    if (left) click(f.view.el.querySelector('[data-custom-controls-toggle]'));
+    f.button('first').focus();
+    if (state === 'new context') f.context.contextKey = 'another-house';
+    if (state === 'suspended') f.context.suspended = true;
+    if (state === 'hidden host') f.host.hidden = true;
+    if (state === 'closed drawer') f.view.closeDrawer();
+    if (state === 'all hidden') f.context.bars[0].buttons[1].visible = false;
+    const outside = document.createElement('button'); f.host.append(outside);
+    if (state === 'outside focus') outside.focus();
+    const remainingFocus = vi.spyOn(f.button('last'), 'focus');
+    const toggleFocus = left ? vi.spyOn(f.view.el.querySelector('[data-custom-controls-toggle]'), 'focus') : null;
+    f.context.bars[0].buttons.shift(); f.view.update();
+    expect(remainingFocus).not.toHaveBeenCalled(); expect(toggleFocus?.mock.calls.length || 0).toBe(0);
+    if (state === 'outside focus') expect(document.activeElement).toBe(outside);
+    expect(f.callback).not.toHaveBeenCalled();
+  });
+  it.each([false, true])('respects focus claimed outside the bar while an action is removed (shadow=%s)', (shadow) => {
+    const f = fixture([barData('evening', [buttonData('first'), buttonData('last')])], { shadow });
+    const outside = document.createElement('button'); document.body.append(outside);
+    try {
+      f.button('first').focus();
+      const row = f.button('first').parentElement, remove = row.remove.bind(row);
+      vi.spyOn(row, 'remove').mockImplementation(() => { remove(); outside.focus(); });
+      f.context.bars[0].buttons.shift(); f.view.update();
+      expect(document.activeElement).toBe(outside); expect(f.callback).not.toHaveBeenCalled();
+    } finally { outside.remove(); }
   });
   it('makes zero DOM writes for repeated equal data, without requesting size/frame work', () => {
     const f = fixture();

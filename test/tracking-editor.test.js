@@ -268,6 +268,12 @@ describe('presence drafts and explicit room evidence', () => {
     expect(ctx.editor.draft).toBeNull(); expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled();
     chooseRoomLocation(ctx); ctx.section('vehicles'); expect(ctx.editor.maps).toEqual([]); expect(ctx.editor.draft).toBeNull(); ctx.assertNoHA();
   });
+  it('reports new and changed drafts to parent feedback without marking unchanged saved bindings dirty', () => {
+    const ctx = setup(); expect(ctx.editor.dirty).toBe(false); chooseActivity(ctx); expect(ctx.editor.dirty).toBe(true);
+    ctx.click('save'); expect(ctx.editor.dirty).toBe(false); ctx.click('edit', 0); expect(ctx.editor.dirty).toBe(false);
+    ctx.change('label', 'Unfinished name'); expect(ctx.editor.dirty).toBe(true); ctx.click('cancel'); expect(ctx.editor.dirty).toBe(false);
+    ctx.assertNoHA();
+  });
 });
 
 describe('vehicle observations remain truthful', () => {

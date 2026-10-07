@@ -87,9 +87,10 @@ describe('Tracking through the actual EditMode panel', () => {
     expect(ctx.edit.panel.querySelector('[data-field="trk-label"]').value).toBe('An unfinished idea'); expect(ctx.card._commit).not.toHaveBeenCalled();
     ctx.assertNoHA();
   });
-  it('Cancel and leaving Tracking discard the draft instead of applying it later', () => {
+  it('Cancel and deliberately discarding when leaving Tracking never apply the draft later', () => {
     const ctx = setup(); ctx.activity(); ctx.change('trk-label', 'Unwanted draft'); ctx.click('trk-cancel'); expect(ctx.edit._trackingEditor.draft).toBeNull();
-    ctx.click('trk-add'); ctx.change('trk-entity', 'binary_sensor.motion'); ctx.click('tab', '[data-id="data"]');
+    ctx.click('trk-add'); ctx.change('trk-entity', 'binary_sensor.motion'); ctx.change('trk-label', 'Unsaved replacement'); ctx.click('tab', '[data-id="data"]');
+    expect(ctx.edit.tab).toBe('tracking'); expect(ctx.edit._trackingEditor.dirty).toBe(true); ctx.click('draft-leave-discard');
     expect(ctx.edit._trackingEditor.draft).toBeNull(); ctx.tracking(); expect(ctx.edit.panel.querySelector('[data-act="trk-add"]')).toBeTruthy();
     expect(ctx.card._commit).not.toHaveBeenCalled(); ctx.assertNoHA();
   });
@@ -122,7 +123,8 @@ describe('Tracking through the actual EditMode panel', () => {
     expect(ctx.card._commit).not.toHaveBeenCalled(); ctx.assertNoHA();
   });
   it('preserves legacy device height, pin reset and Hide operations outside Tracking', () => {
-    const ctx = setup(); ctx.activity(); ctx.click('tab', '[data-id="devices"]'); ctx.edit.selectedMarker = 'entity:light.lamp'; ctx.edit.render();
+    const ctx = setup(); ctx.activity(); ctx.click('tab', '[data-id="devices"]'); expect(ctx.edit.tab).toBe('tracking');
+    ctx.click('draft-leave-discard'); ctx.edit.selectedMarker = 'entity:light.lamp'; ctx.edit.render();
     ctx.change('marker-z', '1.7'); expect(ctx.card._layout.pins['entity:light.lamp']).toMatchObject({ x: 1, y: 2, z: 1.7, floor_id: 'ground' });
     expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled(); ctx.edit.render(); ctx.click('unpin'); expect(ctx.card._layout.pins['entity:light.lamp']).toBeUndefined();
     ctx.edit.render(); ctx.click('hide'); expect(ctx.card._layout.hidden).toContain('entity:light.lamp');

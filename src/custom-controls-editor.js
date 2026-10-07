@@ -62,9 +62,9 @@ export class CustomControlsEditor {
       && (!Object.hasOwn(user, 'is_active') || user.is_active === true) && this.card._loading !== true && !this.card._customControlsModelLoad
       && this.card._editing === true && this.card._edit?.tab === 'controls';
   }
-  _t(key, params = {}) {
+  _t(key, params = {}, fallback = key) {
     const name = `controls.editor.${key}`, language = localeInfo(this.hass).resolved;
-    return localize(this.hass, name, params, messages[language]?.[name] ?? messages.en[name] ?? key);
+    return localize(this.hass, name, params, messages[language]?.[name] ?? messages.en[name] ?? fallback);
   }
   _views() { try { return Array.isArray(this.card._views) ? clone(this.card._views) : []; } catch { return []; } }
   _rooms() {
@@ -143,10 +143,12 @@ export class CustomControlsEditor {
       const before = readCustomControls(this.effective).bars;
       for (const bar of this._bars()) {
         const saved = before.find((old) => old.id === bar.id);
+        if ((!saved || bar.label !== saved.label) && !bar.label?.trim()) issues.push('nameRequired');
         if (bar.placement === 'room' && (!saved || saved.placement !== bar.placement || saved.room_id !== bar.room_id)
           && !this._rooms().some((room) => room.id === bar.room_id)) issues.push('sourceLost');
         for (const button of bar.buttons) {
           const old = before.flatMap((row) => row.buttons).find((row) => row.id === button.id || row.id === this.duplicateOrigins.get(button.id));
+          if ((!old || button.label !== old.label) && !button.label?.trim()) issues.push('nameRequired');
           if ((!old || stamp(old.action) !== stamp(button.action)) && !this._availability(button.action).available) issues.push('sourceLost');
           if (button.visibility && (!old || stamp(old.visibility) !== stamp(button.visibility))
             && ['invalid', 'missing', 'unknown'].includes(customControlVisibility({ hass: this.hass, visibility: button.visibility }).conditionStatus)) issues.push('conditionLost');
@@ -195,6 +197,22 @@ export class CustomControlsEditor {
       row.selectable ? `${row.label} (${row.value})` : this._t('missing', { name: row.label, id: row.value }), selected, !row.selectable)).join('');
   }
   _search(id, kind) { return this.searches?.get(`${id}:${kind}`) || ''; }
+  _conditionStates(visibility) {
+    const entity = visibility?.entity, domain = entity?.split('.')[0];
+    const raw = field(field(this.hass, 'states'), entity), current = field(raw, 'state');
+    const known = ['light', 'switch', 'fan', 'input_boolean', 'binary_sensor', 'automation', 'script'].includes(domain) ? ['on', 'off']
+      : domain === 'vacuum' ? ['cleaning', 'docked', 'returning', 'idle', 'paused', 'error']
+        : domain === 'cover' ? ['open', 'closed', 'opening', 'closing']
+          : domain === 'lock' ? ['locked', 'unlocked', 'locking', 'unlocking', 'jammed']
+            : ['person', 'device_tracker'].includes(domain) ? ['home', 'not_home'] : [];
+    const values = [...new Set([...known, current, visibility?.state])].filter((value) => typeof value === 'string' && value.length > 0
+      && value.length <= 256 && !['unknown', 'unavailable'].includes(value) && ![...value].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127));
+    return values.map((value) => ({ value, label: `${this._t(`state_${value}`, {}, value)}${value === current ? ` · ${this._t('currentState')}` : ''}` }));
+  }
+  _conditionStateOptions(visibility) {
+    return option('', this._t('chooseState'), visibility?.state || '') + this._conditionStates(visibility)
+      .map((row) => option(row.value, row.label, visibility?.state)).join('');
+  }
   _iconsHtml(bar, button) {
     const results = searchCustomControlIcons(this._search(button.id, 'icon'));
     return results.map((entry) => `<button type="button" data-act="${prefix}choose-icon" data-cc-icon="${entry.icon}" ${this._attrs(bar.id, button.id)}
@@ -234,7 +252,9 @@ export class CustomControlsEditor {
       <label class="cc-check"><input type="checkbox" data-field="${prefix}conditional" ${this._attrs(bar.id, button.id)} ${button.visibility ? 'checked' : ''}>${this._caption('conditional')}</label>
       ${button.visibility ? `<div class="cc-fields">${this._control('condition-search', 'searchSources', this._search(button.id, 'condition'), { ...opts, type: 'search' })}
       ${this._control('condition-source', 'conditionSource', '', { ...opts, select: this._visibilityOptions(button.visibility.entity, this._search(button.id, 'condition')) })}
-      ${this._control('condition-state', 'conditionState', button.visibility.state, { ...opts, maxlength: 256 })}</div>${this._caption('conditionHint', 'p')}` : ''}</details>
+      ${this._control('condition-choice', 'friendlyState', button.visibility.state, { ...opts, select: this._conditionStateOptions(button.visibility) })}</div>
+      <p data-cc-condition-status="${esc(button.id)}" role="status"></p>
+      <details class="cc-picker cc-state-advanced"><summary>${this._caption('advancedState')}</summary>${this._control('condition-state', 'conditionState', button.visibility.state, { ...opts, maxlength: 256 })}${this._caption('conditionHint', 'p')}</details>` : ''}</details>
       <p data-cc-source-status="${esc(button.id)}" role="status"></p>
       <div class="cc-actions">${this._action('button-up', 'up', bar.id, button.id)}${this._action('button-down', 'down', bar.id, button.id)}${this._action('duplicate', 'duplicate', bar.id, button.id)}${this._action('remove-button', 'removeButton', bar.id, button.id)}</div>
       <div class="cc-move">${this._control('move-to', 'moveTo', '', { ...opts, select: this._moveOptions(bar.id, button.id) })}${this._action('move', 'move', bar.id, button.id)}</div></div>`;
@@ -243,7 +263,7 @@ export class CustomControlsEditor {
     return `<article data-cc-bar-row="${esc(bar.id)}" class="cc-bar">
       <div class="cc-row-heading">${this._handle('bar', bar.id)}<strong data-cc-bar-name="${esc(bar.id)}">${esc(bar.label)}</strong></div>
       <div class="cc-fields">${this._control('bar-label', 'barName', bar.label, { bar: bar.id, maxlength: CUSTOM_CONTROL_LIMITS.label })}
-      ${this._control('placement', 'placement', bar.placement, { bar: bar.id, select: this._namedOptions(['bottom', 'room'], bar.placement) })}
+      ${this._control('placement', 'placement', bar.placement, { bar: bar.id, select: this._namedOptions(['bottom', 'left', 'room'], bar.placement) })}
       ${bar.placement === 'room' ? this._control('room', 'roomSource', bar.room_id, { bar: bar.id, select: this._roomOptions(bar.room_id) }) : ''}
       ${this._control('style', 'style', bar.style, { bar: bar.id, select: this._namedOptions(['pills', 'tiles'], bar.style) })}</div>
       <label class="cc-check"><input type="checkbox" data-field="${prefix}compact" ${this._attrs(bar.id)} ${bar.dock ? 'checked' : ''}>${this._caption('compact')}</label>
@@ -277,6 +297,7 @@ export class CustomControlsEditor {
       [data-custom-controls-editor] .cc-picker>summary{min-height:44px;display:flex;align-items:center;gap:8px;cursor:pointer;overflow-wrap:anywhere}
       [data-custom-controls-editor] .cc-picker[open]{padding-bottom:12px}[data-custom-controls-editor] .cc-picker>summary ha-icon{flex:0 0 24px}
       [data-custom-controls-editor] .cc-icon-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(86px,100%),1fr));gap:8px;max-height:300px;overflow:auto;overscroll-behavior:contain;padding:6px 3px;margin:8px 0}
+      [data-custom-controls-editor] .cc-save-actions{position:sticky;bottom:0;z-index:3;padding:12px 0;margin-bottom:0;background:var(--cc-surface);border-top:1px solid var(--cc-line);box-shadow:0 -6px 12px var(--cc-surface);display:flex;flex-wrap:wrap;gap:8px}
       [data-custom-controls-editor] .cc-icon-grid>button{display:flex;flex-direction:column;align-items:center;gap:5px;min-height:72px;padding:8px 4px;font-size:11px;overflow-wrap:anywhere;line-height:1.25}
       [data-custom-controls-editor] .cc-icon-grid>button[aria-pressed=true]{border-color:var(--taylors3d-ui-teal,#51d4c4);box-shadow:inset 0 0 0 1px currentColor}
       [data-custom-controls-editor] .cc-icon-grid svg{width:24px;height:24px;fill:currentColor;flex:0 0 24px}
@@ -292,7 +313,7 @@ export class CustomControlsEditor {
       </style>${this._caption('title', 'h3')}${this._caption('description', 'p')}${this._caption('dragHint', 'p')}
       <div data-cc-bars>${this._bars().map((bar) => this._barHtml(bar)).join('') || (this._editable ? this._caption('empty', 'p') : '')}</div>
       ${this._action('add-bar', 'addBar')}<p data-cc-drag-status role="status" aria-live="polite"></p>
-      <div data-cc-status aria-live="polite">${this._status()}</div><div class="cc-actions">${this._action('save', 'save')}${this._action('cancel', 'cancel')}${!this._editable ? this._action('replace', 'replace') : ''}</div>
+      <div data-cc-status aria-live="polite">${this._status()}</div><div class="cc-actions cc-save-actions">${this._action('save', 'save')}${this._action('cancel', 'cancel')}${!this._editable ? this._action('replace', 'replace') : ''}</div>
       ${!this._editable ? this._caption('replaceHint', 'p') : ''}${this._caption('limit', 'p')}</section>`;
   }
   _allowed(kind, node) {
@@ -345,10 +366,11 @@ export class CustomControlsEditor {
       if (control.tagName !== 'SELECT') continue;
       const choices = kind === 'source' ? this._sourceOptions(button.action, this._search(button.id, 'source'))
         : kind === 'condition-source' ? this._visibilityOptions(button.visibility?.entity, this._search(button.id, 'condition'))
+        : kind === 'condition-choice' ? this._conditionStateOptions(button.visibility)
         : kind === 'dock-limit' ? [4, 5].map((value) => option(value, value, Number(control.value))).join('') : kind === 'room' ? this._roomOptions(bar.room_id)
         : kind === 'move-to' ? this._moveOptions(bar.id, button.id) : this._namedOptions(kind === 'action' ? CUSTOM_CONTROL_ACTIONS
-          : kind === 'color' ? CUSTOM_CONTROL_COLORS : kind === 'placement' ? ['bottom', 'room'] : ['pills', 'tiles'], control.value);
-      syncEditorOptions(control, choices, control.value);
+          : kind === 'color' ? CUSTOM_CONTROL_COLORS : kind === 'placement' ? ['bottom', 'left', 'room'] : ['pills', 'tiles'], control.value);
+      syncEditorOptions(control, choices, kind === 'condition-choice' ? button.visibility?.state || '' : control.value);
     }
     for (const node of root.querySelectorAll('button[data-act]')) node.disabled = !this._allowed(node.dataset.act.slice(prefix.length), node);
     for (const handle of root.querySelectorAll('[data-cc-drag]')) handle.disabled = this._blocked() || !readCustomControls(this.draft).valid;
@@ -382,6 +404,13 @@ export class CustomControlsEditor {
           const caption = [...root.querySelectorAll('[data-cc-preview-name]')].find((entry) => entry.dataset.ccPreviewName === button.id); if (caption) caption.textContent = button.label;
           const source = [...root.querySelectorAll('[data-cc-source-status]')].find((entry) => entry.dataset.ccSourceStatus === button.id);
           if (source) source.textContent = this._availability(button.action).available ? '' : this._t('sourceLost');
+          if (button.visibility) {
+            const status = [...root.querySelectorAll('[data-cc-condition-status]')].find((entry) => entry.dataset.ccConditionStatus === button.id);
+            const condition = customControlVisibility({ hass: this.hass, visibility: button.visibility });
+            if (status) status.textContent = this._t(condition.conditionStatus === 'matched' ? 'conditionMatched' : condition.conditionStatus === 'false' ? 'conditionNotMatched' : 'conditionNeedsReading');
+            const rawState = [...root.querySelectorAll('[data-field="custom-controls-condition-state"]')].find((entry) => entry.dataset.ccButton === button.id);
+            if (rawState && root.getRootNode().activeElement !== rawState) rawState.value = button.visibility.state;
+          }
         });
         for (const node of existing.values()) node.remove();
       }
@@ -404,13 +433,13 @@ export class CustomControlsEditor {
     if (kind === 'move-to') { if (element.value === '' || this._bars().some((row) => row.id === element.value && row.id !== barId && row.buttons.length < CUSTOM_CONTROL_LIMITS.buttonsPerBar)) this.moveTargets.set(buttonId, element.value); this.updatePreviews(this._root); return true; }
     let redraw = false;
     if (['bar-label', 'placement', 'style', 'room', 'compact', 'dock-limit'].includes(kind)) {
-      if (kind === 'placement' && !['bottom', 'room'].includes(element.value) || kind === 'style' && !['pills', 'tiles'].includes(element.value)
+      if (kind === 'placement' && !['bottom', 'left', 'room'].includes(element.value) || kind === 'style' && !['pills', 'tiles'].includes(element.value)
         || kind === 'room' && !this._rooms().some((room) => room.id === element.value)) return true;
       this._mutateBar(barId, (row) => {
         if (kind === 'compact') { const next = clone(row); if (element.checked) next.dock = { limit: 5 }; else delete next.dock; return next; }
         if (kind === 'dock-limit') return [4, 5].includes(Number(element.value)) && row.dock ? updated(row, { dock: updated(row.dock, { limit: Number(element.value) }) }) : row;
         const next = updated(row, { [kind === 'bar-label' ? 'label' : kind === 'room' ? 'room_id' : kind]: element.value });
-        if (kind === 'placement') { if (next.placement === 'room' && typeof next.room_id !== 'string') next.room_id = ''; else if (next.placement === 'bottom') delete next.room_id; }
+        if (kind === 'placement') { if (next.placement === 'room' && typeof next.room_id !== 'string') next.room_id = ''; else if (next.placement !== 'room') delete next.room_id; }
         return next;
       }); redraw = ['placement', 'compact'].includes(kind);
     } else {
@@ -428,6 +457,7 @@ export class CustomControlsEditor {
       else if (kind === 'conditional') { if (element.checked) next.visibility = { type: 'state', entity: '', state: button.starter === 'return-vacuum' ? 'cleaning' : 'on' }; else delete next.visibility; redraw = true; }
       else if (kind === 'condition-source' && button.visibility && this._visibilityChoices(button.visibility.entity).some((row) => row.value === element.value && row.selectable)) next.visibility = updated(button.visibility, { entity: element.value });
       else if (kind === 'condition-state' && button.visibility) next.visibility = updated(button.visibility, { state: element.value });
+      else if (kind === 'condition-choice' && button.visibility && this._conditionStates(button.visibility).some((row) => row.value === element.value)) next.visibility = updated(button.visibility, { state: element.value });
       else return true;
       this._mutateBar(barId, (row) => updated(row, { buttons: row.buttons.map((entry) => entry.id === buttonId ? next : entry) }));
     }

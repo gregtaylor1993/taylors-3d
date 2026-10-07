@@ -23,14 +23,37 @@ messages. The [UI polish guide](docs/UI-POLISH.md) explains each change and give
 a practical Home Assistant test. The earlier `0.2.0` and `0.3.0` packages remain
 separate checkpoints; this work does not publish a HACS update.
 
-The tested local package is **`taylors3d-phase22-ui-polish-local-candidate.zip`**.
+The earlier local package is **`taylors3d-phase22-ui-polish-local-candidate.zip`**.
 Its complete unit checks, qualified 36-program browser coverage and independent
 installation-ZIP audit pass. The [feature log](REQUIREMENTS_AND_FEATURES.md#phase-22-040-ui-polish)
 records the exact build/package checksums and the household checks still to do.
 
-To try the photo-style interface in Home Assistant, open this card's visual settings and choose
-**House appearance → House with navigation and room panels**, then **Dark
-graphite**, **Light** or **Home Assistant colours**. New HA cards start in House;
+The 7 October usability follow-up adds room/device overlays that keep the house
+viewport unchanged, custom left-menu bars, explicit draft-leave choices and
+model replacement review. Its current checks and test package are listed in the
+[usability review](docs/UI-REVIEW.md). Earlier package evidence is not a rerun of
+this follow-up build.
+
+The current appearance follow-up applies a quiet black-and-white glass style
+across Taylor's 3D: floating controls, room popups, the mini-map, custom bars and
+readable solid settings. It supports both House and standard layouts and keeps
+real light colours, alerts and your custom button colours. See the
+[glass appearance guide](docs/GLASS-APPEARANCE-GUIDE.md) for simple setup and
+testing steps. Earlier packages above predate this visual change; use a matching
+verified build rather than treating their checks as current glass-style evidence.
+
+The latest approved source changes make busy houses easier to use: **Rooms**,
+**Important activity** and **All devices** display choices, a customisable House
+menu with a clear phone **More** button, and **Search** across rooms, devices,
+scenes, saved views and in-card settings. Crowded room labels move into a compact
+Rooms chooser. Read the [simple navigation guide](docs/SMART-NAVIGATION-GUIDE.md)
+for the controls and how to save your choices. The feature log tracks the final
+checks and Git delivery; earlier installation ZIPs do not contain this work.
+Recent activity and an extra Glass effects switch remain future ideas.
+
+To try the House interface in Home Assistant, open this card's visual settings and choose
+**Appearance → Card layout → House with navigation and room panels**, then
+**Appearance → Card colours → Dark glass**, **Light glass** or **Home Assistant colours**. New HA cards start in House;
 existing cards keep the standard layout until you select it. The standalone
 browser demo starts in the standard layout and does not include HA's visual-settings editor.
 The [House layout guide](docs/HOUSE-VIEW-GUIDE.md#choose-the-layout) shows the steps.
@@ -66,7 +89,13 @@ position over its map.
   3D model the chips are the model's views (Exterior, Ground floor, …), linked to HA floors
 - Bottom bubble bar for saved views, 3D/Top, reset, section, day/night, mini-map and Edit.
   Choose the buttons and their order in the visual card editor
-- Custom named button bars below the house or in one exact room panel. Use Edit →
+- Rooms, Important activity or All devices marker display; current room summaries
+  reveal devices when selected, with a compact room chooser when labels would overlap
+- House menu sections can be hidden and reordered in the visual card editor.
+  Phones show three/four sections plus More; wider cards retain the left rail
+- Search friendly names and entity IDs across rooms, devices, scenes, views and
+  in-card settings. Search opens controls; it does not operate a device or run a scene
+- Custom named button bars below the house, in an optional left menu or in one exact room panel. Use Edit →
   Controls → Buttons and bars to choose labels, pictured icons, colours and actions, drag them into
   order, and save one layout change with Undo/Redo. Link existing scenes, scripts,
   automations, camera views, supported device toggles and Home Assistant controls.
@@ -144,6 +173,10 @@ position over its map.
 
 ![Room controls and readings in the dark theme](docs/images/navigation-room.png)
 
+The [clearer house and navigation guide](docs/SMART-NAVIGATION-GUIDE.md) covers
+the new marker display, House menu and Search controls. The screenshots below
+show earlier navigation checkpoints; current controls use the glass appearance.
+
 The bubble bar sits below the house, with space reserved so it does not cover the plan.
 View buttons follow the names/order saved under **Edit → Controls → Views**. On a narrow panel the bar
 uses two rows, and long button lists scroll sideways.
@@ -164,12 +197,13 @@ Open the dashboard card's **Edit → Show visual editor → Navigation and devic
 choose the bubble buttons, reorder them, change the mini-map, or select **Quick toggle** for
 the original device-tap behavior. Layout editing inside the card remains available to admins.
 
-Room and device controls now open on the right by default. On wide screens the house and
-mini-map have their own space beside the panel. The visual editor can choose a popup instead.
+Room and device controls open over the right edge by default on wide screens.
+The visual editor can choose a popup beside the device instead. Opening either
+keeps the house drawing size and camera unchanged.
 On a narrow card, **Summary**, **Controls** and **Details** change the room sheet's
 size and content. Drag its handle between sizes, or focus the handle and use
 arrow keys/Home/End. Details keeps the complete device list and Home Assistant's
-All controls links reachable. The house retains its own visible space.
+All controls links reachable. The sheet overlays the unchanged house and scrolls internally.
 
 ![Right-hand controls beside the house and mini-map](docs/images/panel-wide.png)
 
@@ -192,9 +226,12 @@ covers both. The integration stores the layout and makes it available to all use
 
 ### Local 0.4 testing package
 
-Use the supplied local **`taylors3d-phase22-ui-polish-local-candidate.zip`**. HACS still
-uses the published `0.1.0` checkpoint until a future release; downloading that
-release will not install these new controls.
+Use a package matched to the verified checkpoint in the
+[feature log](REQUIREMENTS_AND_FEATURES.md). The earlier
+`taylors3d-phase23-ui-review-local-candidate.zip` contains the usability review;
+it does not contain the later glass design or the latest room/menu/search work.
+HACS uses a published release; a source commit or Git push alone does not create
+an installable HACS update.
 
 1. Keep the previous installation package and export your layout/dashboard
    backup before changing the installed version.

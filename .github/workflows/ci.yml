@@ -81,6 +81,14 @@ jobs:
               node scripts/gps-calibration-check.mjs
               node scripts/entity-area-filter-check.mjs
               node scripts/runtime-localization-check.mjs
+          - group: glass-appearance
+            commands: |
+              node scripts/glass-theme-check.mjs
+          - group: overview-menu-search
+            commands: |
+              npm run check:overview
+              npm run check:house-menu
+              npm run check:search
           - group: ui-polish
             commands: |
               node scripts/room-sheet-check.mjs

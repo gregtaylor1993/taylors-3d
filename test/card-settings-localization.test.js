@@ -43,9 +43,9 @@ describe('owned native card settings translations', () => {
   });
 
   it.each([
-    { locale: 'de-DE', height: 'Kartenhöhe', east: 'Modellposition Ost', north: 'Modellposition Nord', up: 'Modellposition Höhe', house: 'Hausdarstellung', popup: 'Gerätesteuerung öffnen' },
-    { locale: 'fr-FR', height: 'Hauteur de la carte', east: 'Position est du modèle', north: 'Position nord du modèle', up: 'Position en hauteur du modèle', house: 'Apparence de la maison', popup: 'Ouvrir les commandes de l’appareil' },
-    { locale: 'es-ES', height: 'Altura de la tarjeta', east: 'Posición este del modelo', north: 'Posición norte del modelo', up: 'Posición vertical del modelo', house: 'Aspecto de la casa', popup: 'Abrir controles del dispositivo' },
+    { locale: 'de-DE', height: 'Kartenhöhe', east: 'Modellposition Ost', north: 'Modellposition Nord', up: 'Modellposition Höhe', house: 'Darstellung', popup: 'Gerätesteuerung öffnen' },
+    { locale: 'fr-FR', height: 'Hauteur de la carte', east: 'Position est du modèle', north: 'Position nord du modèle', up: 'Position en hauteur du modèle', house: 'Apparence', popup: 'Ouvrir les commandes de l’appareil' },
+    { locale: 'es-ES', height: 'Altura de la tarjeta', east: 'Posición este del modelo', north: 'Posición norte del modelo', up: 'Posición vertical del modelo', house: 'Aspecto', popup: 'Abrir controles del dispositivo' },
   ])('translates $locale labels and choices without translating IDs or changing axis order', ({ locale, height, east, north, up, house, popup }) => {
     const f = setup(locale), schema = fields(f.form.schema);
     expect(f.form.computeLabel({ name: 'height' })).toBe(height);
@@ -65,9 +65,19 @@ describe('owned native card settings translations', () => {
     language(f, 'it-IT'); expect(f.form.schema).toBe(editorModule.SCHEMA); expect(f.form.computeLabel({ name: 'model_position_y' })).toBe('Model north position');
   });
 
+  it.each(['en', 'de', 'fr', 'es'])('names glass schemes in %s while preserving the existing saved values', (locale) => {
+    const f = setup(locale), schema = fields(f.form.schema);
+    expect(f.form.computeLabel({ name: 'house_colour_scheme' })).toBe(catalogues[locale]['settings.label.house_colour_scheme']);
+    const options = schema.find((row) => row.name === 'house_colour_scheme').selector.select.options;
+    expect(options.map((option) => option.value)).toEqual(['ha', 'dark', 'light']);
+    for (const option of options) expect(option.label).toBe(catalogues[locale][`settings.option.house_colour_scheme.${option.value}`]);
+    expect(f.changed).not.toHaveBeenCalled(); expect(f.config.model).toBe('/local/User_House_été.glb');
+  });
+
   it('covers every owned nonempty helper with the exact English text and translated counterparts', () => {
     const f = setup(), helpers = fields(f.form.schema).map((item) => item.name).filter((name) => f.form.computeHelper({ name }));
-    expect(helpers.length).toBe(22);
+    expect(helpers.length).toBe(23);
+    expect(helpers).toContain('marker_display');
     for (const name of helpers) {
       const key = `settings.helper.${name}`;
       expect(catalogues.en[key]).toBe(f.form.computeHelper({ name }));

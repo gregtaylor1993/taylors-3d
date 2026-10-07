@@ -47,6 +47,11 @@ async function ready(page) {
 }
 async function control(page, selector, callback) {
   await revealEditorTab(page, selector);
+  const needsMore = await page.evaluate((selector) => {
+    const node = document.querySelector('taylors3d-card').shadowRoot.querySelector(selector);
+    return node?.parentElement?.hasAttribute('data-house-navigation-overflow') && node.parentElement.hidden;
+  }, selector);
+  if (needsMore) await control(page, '[data-house-navigation-more]', (element) => element.click());
   context = `native control ${selector}`;
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try { const element = handle.asElement(); if (!element) throw new Error(`Missing house control ${selector}`);
@@ -211,9 +216,9 @@ async function geometry(page, name, expectedPopup) {
   await ready(page); const s = await snapshot(page), size = near(s.scene.w, s.size.w, .1) && near(s.scene.h, s.size.h, .1)
     && near(s.scene.w, s.canvas.w, .1) && near(s.scene.h, s.canvas.h, .1)
     && near(Math.floor(s.size.w * s.dpr), s.buffer.w, 1) && near(Math.floor(s.size.h * s.dpr), s.buffer.h, 1);
-  const protectedBoxes = [s.header, s.navigation, s.toolbar, s.popup].filter(Boolean);
+  const protectedBoxes = [s.header, s.navigation, s.toolbar].filter(Boolean);
   check(`${name}: renderer is the exact reserved scene and retains 240px height`, size && s.scene.h >= 239.9, { scene: s.scene, canvas: s.canvas, size: s.size, buffer: s.buffer });
-  check(`${name}: scene avoids header/navigation/toolbar/popup`, protectedBoxes.every((box) => !overlap(box, s.scene)), { stage: s.stage, scene: s.scene, protectedBoxes });
+  check(`${name}: scene avoids permanent header/navigation/toolbar while room panels overlay`, protectedBoxes.every((box) => !overlap(box, s.scene)), { stage: s.stage, scene: s.scene, protectedBoxes });
   check(`${name}: popup avoids header and both bottom rows`, !s.popup || ![s.header, s.navigation, s.toolbar].some((box) => overlap(box, s.popup)), { popup: s.popup, header: s.header, navigation: s.navigation, toolbar: s.toolbar });
   check(`${name}: no stage/header/page horizontal overflow`, !s.stageOverflow && !s.headerOverflow && !s.documentOverflow, s);
   check(`${name}: visible native controls have 44px touch targets`, s.controls.every((box) => box.w >= 43.9 && box.h >= 43.9), s.controls.filter((box) => box.w < 43.9 || box.h < 43.9));
@@ -268,6 +273,7 @@ async function editorVisuals(page, name, narrow = false) {
 }
 async function marker(page, entityId) {
   context = `native marker ${entityId}`;
+  const beforePopup = await snapshot(page);
   const point = await page.evaluate((entityId) => { const c = document.querySelector('taylors3d-card'), marker = c._markers.find((m) => m.entities.some((entry) => entry.eid === entityId));
     // Titles legitimately include the primary entity's friendly name; use exact
     // current marker membership only to choose its real pointer coordinates.
@@ -276,9 +282,17 @@ async function marker(page, entityId) {
     const p = [r.x + r.width / 2, r.y + r.height / 2]; return c.shadowRoot.elementFromPoint(...p)?.closest('.fp-marker') === element ? p : null;
   }, entityId);
   if (!point) throw new Error(`Actual ${entityId} marker is not reachable`); await page.mouse.click(...point); await ready(page);
+  preservePopupViewport(beforePopup,await snapshot(page),'device controls');
+}
+function preservePopupViewport(before,after,name) {
+  const shape = (reading,node) => {const r=reading[node],p=reading.stage;return[r.x-p.x,r.y-p.y,r.w,r.h];};
+  check(`${name}: opening overlays the exact unchanged scene/canvas/stage and camera`,
+    ['scene','canvas','stage'].every((node) => shape(after,node).every((value,index) => near(value,shape(before,node)[index],.1)))
+    &&samePose(before.camera,after.camera),{before:before.scene,after:after.scene,popup:after.popup});
 }
 async function roomTap(page) {
   context = 'stationary actual room-floor tap';
+  const beforePopup = await snapshot(page);
   const chosen = await page.evaluate(() => { const c = document.querySelector('taylors3d-card'), room = c._roomList.find((r) => r.room.id === 'house_room');
     const canvas = c._view.renderer.domElement, rect = canvas.getBoundingClientRect();
     for (const x of [-1, 0, 1, -3, 3]) for (const y of [-2, 2, -1, 1]) {
@@ -286,7 +300,8 @@ async function roomTap(page) {
       if (c.shadowRoot.elementFromPoint(...p) === canvas) return { point: p, roomId: room.room.id, name: room.name };
     } return null;
   });
-  if (!chosen) throw new Error('No genuine exposed room-floor point is reachable'); await page.mouse.click(...chosen.point); await ready(page); return chosen;
+  if (!chosen) throw new Error('No genuine exposed room-floor point is reachable'); await page.mouse.click(...chosen.point); await ready(page);
+  preservePopupViewport(beforePopup,await snapshot(page),'room controls'); return chosen;
 }
 async function escape(page) { await page.keyboard.press('Escape'); await ready(page); }
 
@@ -392,11 +407,12 @@ async function layoutScenario(page, mode) {
     const names = await page.evaluate(() => { const s = document.querySelector('taylors3d-card').shadowRoot;
       return [...s.querySelectorAll('[data-house-navigation-id]')].map((node) => ({ id: node.dataset.houseNavigationId, label: node.getAttribute('aria-label') })); });
     for (const row of names) {
+      await control(page, navButton(row.id), () => {});
       const reachable = await page.evaluate((id) => { const c = document.querySelector('taylors3d-card'), node = c.shadowRoot.querySelector(`[data-house-navigation-id="${id}"]`);
         node.scrollIntoView({ block: 'nearest', inline: 'nearest' }); const r = node.getBoundingClientRect(), nav = node.closest('[data-house-navigation]').getBoundingClientRect();
         return r.width >= 44 && r.height >= 44 && r.left >= nav.left && r.right <= nav.right + 1 && c.shadowRoot.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest('button') === node;
       }, row.id);
-      check(`${widthPx}px ${row.label} remains reachable by native navigation scroll`, reachable);
+      check(`${widthPx}px ${row.label} remains reachable through the menu or More`, reachable);
     }
     await screenshot(page, `house-${mode}-${widthPx}-dark.png`); await escape(page);
   }
@@ -404,9 +420,12 @@ async function layoutScenario(page, mode) {
   const lightRatios = await contrast(page); check('light native controls and header text reach AA', lightRatios.every((row) => row.ratio >= 4.5), lightRatios.filter((row) => row.ratio < 4.5));
   await screenshot(page, `house-${mode}-320-light.png`); await escape(page);
   await haPalette(page, false); await configure(page, { house_colour_scheme: 'ha' }); await geometry(page, '320px HA scheme');
-  check('HA scheme uses current HA text/surface variables', await page.evaluate(() => {
+  check('HA scheme uses current HA text/surface variables with the transparent glass header', await page.evaluate(() => {
     const c = document.querySelector('taylors3d-card'), style = getComputedStyle(c.shadowRoot.querySelector('[data-taylors3d-summary]'));
-    return !c.hasAttribute('data-taylors3d-scheme') && style.color === 'rgb(33, 33, 33)' && style.backgroundColor === 'rgb(255, 255, 255)';
+    const probe = document.createElement('span'); probe.style.cssText = 'position:absolute;width:0;height:0;background:var(--taylors3d-ui-surface)';
+    c.shadowRoot.append(probe); const surface = getComputedStyle(probe).backgroundColor; probe.remove();
+    return !c.hasAttribute('data-taylors3d-scheme') && style.color === 'rgb(33, 33, 33)'
+      && style.backgroundColor === 'rgba(0, 0, 0, 0)' && surface === 'rgb(255, 255, 255)';
   }));
   await width(page, 1280); await configure(page, { house_colour_scheme: 'light' }); await screenshot(page, `house-${mode}-desktop-light.png`);
   // The fixture explicitly sized the adaptive stage; its extra2px theme border
@@ -418,7 +437,7 @@ async function layoutScenario(page, mode) {
     return { attrs: { theme: c.getAttribute('data-taylors3d-theme'), scheme: c.getAttribute('data-taylors3d-scheme'), shell: c._stage.getAttribute('data-taylors3d-shell') },
       minHeight: c._stage.style.getPropertyValue('min-height'), props: Object.fromEntries(Object.keys(legacy.props).map((key) => [key, c._stage.style.getPropertyValue(`--taylors3d-${key}`)])), legacy };
   });
-  check('turning style off restores owned attributes/CSS and exact original scene geometry', equal(restored.attrs, restored.legacy.attrs)
+  check('Standard restores shell geometry and keeps the selected whole-app Light glass style', equal(restored.attrs, { ...restored.legacy.attrs, theme: 'glass', scheme: 'light' })
     && equal(restored.props, restored.legacy.props) && restored.minHeight === restored.legacy.minHeight
     && near(s.scene.w, original.scene.w, .1) && near(s.scene.h, original.scene.h, .1) && s.sceneSame && s.rendererSame, { restored, original: original.scene, actual: s.scene });
   await roomTap(page); s = await snapshot(page);
@@ -611,6 +630,7 @@ async function modelObjectTap(page, id) {
 
 async function modelRoomTap(page) {
   context = 'native actual tagged GLB upper-room floor triangle';
+  const beforePopup = await snapshot(page);
   const result = await page.evaluate((id) => {
     const c = document.querySelector('taylors3d-card'), v = c._view, rect = v.renderer.domElement.getBoundingClientRect();
     const points = [[1.2, -1.1], [-1.6, -1.1], [1.6, -1.1], [-1.6, 1.1], [1.6, 1.1], [0, 1.1], [0, -1.1], [-1.6, 0], [1.6, 0]];
@@ -631,7 +651,8 @@ async function modelRoomTap(page) {
   }, houseModelIds.upperRoom);
   check('tagged GLB room floor is an exposed real triangle outside bound device targets', !!result.chosen && result.room?.floorId === 'first', result);
   if (!result.chosen) throw new Error('No actual tagged GLB room floor is clear of real model/device targets');
-  await page.mouse.click(...result.chosen.screen); await ready(page); return result;
+  await page.mouse.click(...result.chosen.screen); await ready(page);
+  preservePopupViewport(beforePopup,await snapshot(page),'tagged GLB room controls'); return result;
 }
 
 async function modelScenario(page, mode, requests) {

@@ -7,21 +7,25 @@ when evaluating it; the feature log records the exact validation checkpoint.
 
 ## Design direction
 
-Your reference pictures are the target: the house is the main feature, with
-quiet charcoal panels, warm amber lighting and teal navigation. The paired light
-and Home Assistant themes remain supported. We reuse the existing palette:
-background `#131a21`, surface `#1d2731`, raised `#253340`, text `#f2f5f7`, amber
-`#ffc767`, teal `#51d4c4`. Typography inherits Home Assistant's font, with clear
-title, section and control sizes. Colour never substitutes for actual device state.
+The current design follows Taylor's later request for minimal black-and-white
+glass across the app. The house remains the main feature: dark charcoal or light
+surfaces, monochrome selected controls, system typography, subtle floating glass
+and solid editing panels. The same style applies to House and standard layouts.
+Real light colours, warnings and deliberate custom button colours remain useful
+information. See the [glass appearance guide](GLASS-APPEARANCE-GUIDE.md).
+The earlier Phase 22 palette used amber lights and teal navigation; the results
+under Testing below describe that historical palette and do not validate this
+later glass-style source. Colour never substitutes for actual device state.
 
-On a wide screen, room controls sit beside the house. On a phone they become a
-resizable bottom sheet. Editing uses five clear groups; the narrow version uses
+Room and device controls overlay the house: opening or resizing them does not
+shrink the drawing or change its camera view. On a phone they become a
+resizable bottom sheet with scrolling controls. Editing uses five clear groups; the narrow version uses
 a section selector to preserve useful editing space. Motion answers a user action
 and respects reduced-motion preferences. No decoration adds a new 3D renderer.
 
-To see this photo-style layout in Home Assistant, open the card's visual settings and choose
-**House appearance → House with navigation and room panels**, then **Dark
-graphite**, **Light** or **Home Assistant colours**. New HA cards start in House.
+To see this House layout in Home Assistant, open the card's visual settings and choose
+**Appearance → Card layout → House with navigation and room panels**, then
+**Appearance → Card colours → Dark glass**, **Light glass** or **Home Assistant colours**. New HA cards start in House.
 Existing cards keep the standard layout until you choose House. The standalone
 browser demo starts in standard view without HA's visual-settings editor.
 See [Choose the layout](HOUSE-VIEW-GUIDE.md#choose-the-layout) for the
@@ -42,7 +46,7 @@ steps. This setting changes the presentation without replacing your house or lin
 
 A bar is a named group of buttons, such as Evening or Garden. In **Edit →
 Controls → Buttons and bars**, choose Add bar and give it a name. Select Bottom
-bar or one exact Room panel, then add a button. Choose its label, pictured icon,
+bar, Left menu or one exact Room panel, then add a button. Choose its label, pictured icon,
 colour and action. Search by friendly name or exact ID. The advanced icon-name
 field still accepts a supported `mdi:` name.
 
@@ -51,6 +55,12 @@ Up/Down and Move to provide keyboard alternatives. **Duplicate** creates a new
 button with its own ID, keeps its chosen action/condition and starts unpinned.
 You can then change its label or source. Duplicating a button does not duplicate
 the underlying Home Assistant scene, script or automation.
+
+Left-menu bars appear under **Quick actions** over the house. Open the menu when
+you need it, then close it or press Escape. Opening it does not resize the house.
+The same saved action checks apply in every location. Use Save to keep a changed
+placement; moving a button does not run it. Save/Cancel stays at the top of the
+button editor while you scroll.
 
 The starter buttons need your existing routines. **Movie** and **Bedtime** ask
 you to select a scene. **Return vacuum** asks for an existing script; you can
@@ -64,7 +74,8 @@ on narrow cards to keep their labels readable. Existing ordinary bars retain
 their saved layout.
 
 An optional **state condition** shows a button when one exact entity reports the
-state you selected. For example, Return vacuum can appear while that vacuum is
+state you selected. Friendly state choices help you select the rule; Advanced
+retains the exact Home Assistant state text. For example, Return vacuum can appear while that vacuum is
 cleaning. A known false condition hides it. A missing, unavailable or unknown
 condition source leaves it visible and disabled with a reason, so you can repair
 the exact link. Imported unsupported conditions need a deliberate replacement.
@@ -97,6 +108,12 @@ controls. **Edit → Data** says where that layout is stored. The companion
 integration shares it across users/devices; fallback storage belongs to one HA
 user or browser. A successful save confirms that current backend's response.
 
+When you leave an unfinished settings page, choose **Save and continue**,
+**Discard changes** or **Stay here**. Invalid settings or a failed save keep the
+page open for repair. Replacing an existing uploaded house asks you to review
+the selected file first, because Undo cannot restore overwritten model bytes.
+Keep a model backup before replacing it. Initial house uploads stay simple.
+
 Five sections replace the long row of feature tabs:
 
 | Section | Where to find your tools |
@@ -115,7 +132,8 @@ With the right-side/House control layout on a narrow card, tap a room and use
 it and use arrows/Home/End. Summary shows current room information; Controls
 keeps frequent controls close; Details retains every original device row and
 All controls link. Scroll inside Details for the full list. A wide card keeps
-the complete right-hand room panel. Changing size sends no device action.
+the complete overlay room panel. Changing size sends no device action and does
+not change the house viewport. The popup scrolls inside the available height.
 
 ## What the messages mean
 
@@ -144,6 +162,10 @@ during furniture dragging or editing.
 
 ## Testing and limits
 
+See the [7 October usability review](UI-REVIEW.md) for the current overlay,
+left-menu and settings-safeguard checks. The Phase 22 results below describe
+the earlier candidate and remain qualified historical evidence.
+
 Use the browser preview first to learn the menus, dragging and setup. It uses
 simulated Home Assistant readings and replies. It is useful for interface
 testing; your actual Home Assistant is where you verify shared storage, the real
@@ -157,9 +179,9 @@ source; copying a previous ZIP will not include these new controls.
 Unit tests are small automatic code checks. Browser checks open the actual card
 and exercise its interface with simulated data; your house still needs its own test.
 
-The current `787c366e` build passed **6,610/6,610** unit tests in **207 files**,
+The earlier `787c366e` checkpoint passed **6,610/6,610** unit tests in **207 files**,
 with zero unhandled errors, full lint, build and bundle freshness passing.
-Its visual source/bundle check passed **10,564/10,564** checks across
+That checkpoint's visual source/bundle check passed **10,564/10,564** checks across
 **1,728 actual views**,
 including four languages, three colour modes, 1400px/320px, reduced motion,
 compact More open/closed and save/action/connection states. It measured caption

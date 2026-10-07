@@ -63,7 +63,7 @@ const STYLE = `
   .taylors3d-device-popup button:disabled { opacity: .5; cursor: default; }
   .taylors3d-device-popup .t3d-popup-close { min-width: 44px; font-size: 20px; }
   .taylors3d-device-popup[data-placement="right"] { left: auto; right: 8px; top: 8px;
-    bottom: calc(var(--taylors3d-bar-height, 0px) + 8px); width: 316px; max-height: none;
+    bottom: calc(var(--taylors3d-bar-height, 0px) + 8px); width: 316px; max-height: var(--taylors3d-popup-available-height,calc(100% - 16px));
     border-radius: 16px; box-shadow: 0 3px 18px rgba(0,0,0,.16); }
   .taylors3d-device-popup .t3d-popup-kind { margin: 0 0 4px; font-size: 12px;
     color: var(--secondary-text-color, #727272); }
@@ -72,7 +72,7 @@ const STYLE = `
   .taylors3d-device-popup .t3d-entity-value { margin: 4px 0 8px; color: var(--secondary-text-color, #727272); }
   .taylors3d-device-popup .t3d-entity-actions { display: flex; gap: 8px; flex-wrap: wrap; }
   .taylors3d-device-popup .t3d-brightness { display: block; margin: 10px 0 2px; }
-  .taylors3d-device-popup .t3d-brightness input { display: block; width: 100%; margin-top: 6px;
+  .taylors3d-device-popup .t3d-brightness input { display: block; width: 100%; margin: 6px 0 0;
     min-height: 44px; box-sizing: border-box; accent-color: var(--primary-color, #03a9f4); }
   .taylors3d-device-popup .t3d-colour { min-width: 0; border: 0; margin: 12px 0 0; padding: 0; }
   .taylors3d-device-popup .t3d-colour legend { padding: 0; }
@@ -120,6 +120,9 @@ const STYLE = `
   .taylors3d-device-popup[data-room-sheet="summary"] .t3d-popup-content { display:none; }
   .taylors3d-device-popup[data-room-sheet="summary"] .t3d-popup-head { min-height:0;overflow:auto;touch-action:pan-y; }
   .taylors3d-device-popup[data-room-sheet="controls"] .t3d-entity[data-room-secondary] { display:none; }
+  .taylors3d-device-popup[data-room-sheet-short]:not([data-room-sheet="summary"]) .t3d-popup-head :is(.t3d-room-glance,.t3d-room-summary) { display:none; }
+  .taylors3d-device-popup[data-room-sheet-short] .t3d-popup-head h3 { max-height:2.8em;overflow:auto; }
+  .taylors3d-device-popup[data-room-sheet-short]:not([data-room-sheet="summary"]) .t3d-popup-content { flex:1; }
   .taylors3d-device-popup .t3d-room-glance { display:grid;gap:6px;margin:8px 0;color:var(--taylors3d-ui-muted,var(--secondary-text-color,#727272));font-size:12px;line-height:1.4;overflow-wrap:anywhere; }
   .taylors3d-device-popup .t3d-room-glance p { margin:0; }
   .taylors3d-device-popup .t3d-room-summary { margin:6px 0;font-size:12px;line-height:1.4;overflow-wrap:anywhere;color:var(--secondary-text-color,#727272); }
@@ -1033,6 +1036,9 @@ export class DevicePopup {
   updateRoomSheetGeometry(geometry) {
     if (!geometry) return;
     this._sheetGeometry = geometry;
+    const available = geometry.availableHeight ?? geometry.baseHeight;
+    if (this.el && typeof available === 'number' && Number.isFinite(available) && available >= 0)
+      this.el.style.setProperty('--taylors3d-popup-available-height', `${Math.max(0,available - 16)}px`);
     this._roomSheet?.updateGeometry(geometry);
   }
 }

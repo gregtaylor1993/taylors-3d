@@ -15,9 +15,15 @@ can be shared across screens; card options belong to the individual card.
 ## General card options and imported setups
 
 Use Home Assistant's dashboard edit mode, choose the Taylor card, and open its
-visual card editor. Choose the House appearance, toolbar options, mini-map size,
+visual card editor. Under **Appearance → Card layout**, choose House or Standard
+card. Under **Appearance → Card colours**, choose **Dark glass**, **Light glass**
+or **Home Assistant colours**. These colours apply to both layouts and to this
+card's settings, while the rest of your dashboard keeps its own theme. See the
+[glass appearance guide](GLASS-APPEARANCE-GUIDE.md).
+
+Choose toolbar options, mini-map size,
 starting floor and **Starting named view (exact ID)** there. A view's exact ID is
-shown in **Edit → Views**. Leave the field blank to use the existing starting-view
+shown in **Edit → Controls → Views**. Leave the field blank to use the existing starting-view
 fallback. Press Home Assistant's **Save** to persist the changed card options.
 
 Imported card settings can take priority over shared layout settings. The source
@@ -38,7 +44,7 @@ cannot be partially cleared by mistake.
 
 ## Model, tracking, cameras and alerts
 
-**Edit → Model** includes exact numeric model-position fields and the full
+**Edit → House → Model** includes exact numeric model-position fields and the full
 supported opacity range, including zero. Coordinates describe the original house
 model, before visual floor separation. Changing one position field keeps the
 other coordinates intact. The lighting choices also include realtime shadows

@@ -60,7 +60,7 @@ function capture(ctx, latitude, longitude, plan) {
 }
 function setter(ctx, hass = ctx.card._hass) {
   for (const name of ['_observeSecuritySession', '_observeAlertMapContext', '_syncSecurity', '_syncFurniture', '_syncHouseShell', '_syncScenePreviews', '_syncAmbient',
-    '_schedule', '_suspendAmbient', 'finishWallSelectionPreparation', '_clearTrackingTimer', '_syncCustomControls']) ctx.card[name] = vi.fn();
+    '_schedule', '_suspendAmbient', 'finishWallSelectionPreparation', '_clearTrackingTimer', '_syncCustomControls', '_syncSearch']) ctx.card[name] = vi.fn();
   ctx.card._houseLayoutEnabled = () => false; ctx.card._presetEvents = { setHass: vi.fn() };
   Object.getOwnPropertyDescriptor(customElements.get('taylors3d-card').prototype, 'hass').set.call(ctx.card, hass);
 }

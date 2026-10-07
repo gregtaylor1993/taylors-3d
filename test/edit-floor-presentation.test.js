@@ -182,7 +182,8 @@ describe('floor presentation in the actual Model editor', () => {
   });
   it('clears drafts on tab leave, history cancellation and detach, but only permanent disposal destroys the fragment', () => {
     const { card, edit, model, change, field, click } = setup({ layout: { floor_presentation: saved() } }); model(); change('gap_m', '8');
-    click('tab', '[data-id="rooms"]'); expect(edit._floorPresentationEditor.draft).toBeNull(); model(); expect(field('gap_m').value).toBe('2');
+    click('tab', '[data-id="rooms"]'); expect(edit.tab).toBe('model'); expect(edit._floorPresentationEditor.dirty).toBe(true);
+    click('draft-leave-discard'); expect(edit._floorPresentationEditor.draft).toBeNull(); model(); expect(field('gap_m').value).toBe('2');
     change('gap_m', '8'); edit.cancelHistoryGestures(); expect(edit._floorPresentationEditor.draft).toBeNull(); edit.render();
     change('gap_m', '8'); edit.detach(); expect(edit._floorPresentationEditor.draft).toBeNull(); expect(edit._floorPresentationEditor.disposed).toBe(false);
     edit.attach(); edit.render(); expect(field('gap_m').value).toBe('2'); edit.dispose(); expect(edit._floorPresentationEditor.disposed).toBe(true);

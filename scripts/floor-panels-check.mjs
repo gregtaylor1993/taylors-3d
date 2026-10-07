@@ -770,12 +770,13 @@ async function matrix(page, mode, kind, width) {
     check(`${floorId}: actual pane ray returns the authored source room coordinates`, point && pointsNear(point.source, point.back)
       && point.floorId === floorId, pointDetail);
     if (!point) throw new Error(`No real ${floorId} room point is exposed`);
+    const beforePopup = await snapshot(page);
     await page.mouse.click(...point.screen); await ready(page); const room = await snapshot(page);
-    check(`${floorId}: native floor tap opens its correct room controls beside or below the real scene`, room.popup?.selection === 'room'
+    check(`${floorId}: native floor tap overlays correct room controls without changing canvas or pane geometry`, room.popup?.selection === 'room'
       && room.popup.areaId === (floorId === 'ground' ? 'floor_ground_area' : 'floor_upper_area')
       && room.popup.text.includes(floorId === 'ground' ? 'Simulated ground room' : 'Simulated upper room')
-      && (width === 320 ? room.popup.shellLayout === 'sheet' && room.popup.box.y >= room.canvas.bottom
-        : room.popup.shellLayout === 'right' && room.canvas.right <= room.popup.box.x)
+      && room.popup.shellLayout === (width === 320 ? 'sheet' : 'right')
+      && equal(room.canvas,beforePopup.canvas) && equal(room.panes,beforePopup.panes) && equal(room.stage,beforePopup.stage)
       && room.popup.box.x >= room.stage.x && room.popup.box.right <= room.stage.right
       && room.popup.box.y >= room.stage.y && room.popup.box.bottom <= room.stage.bottom
       && room.calls === 0, { popup: room.popup, canvas: room.canvas, stage: room.stage });

@@ -101,7 +101,8 @@ describe('Idle in the actual layout editor', () => {
   it('discards only unsaved changes on Cancel, tab leave, context reset and detach, with reusable reattach', () => {
     const original = settings(), { card, edit, idle, change, click, field } = setup({ layout: { ambient_idle: original } }); idle();
     change('idle_seconds', '30'); click('ambient-idle-cancel'); expect(field('idle_seconds').value).toBe('120');
-    change('idle_seconds', '31'); click('tab', '[data-id="rooms"]'); expect(edit._ambientIdleEditor.draft).toBeNull(); idle(); expect(field('idle_seconds').value).toBe('120');
+    change('idle_seconds', '31'); click('tab', '[data-id="rooms"]'); expect(edit.tab).toBe('idle'); expect(edit._ambientIdleEditor.dirty).toBe(true);
+    click('draft-leave-discard'); expect(edit._ambientIdleEditor.draft).toBeNull(); idle(); expect(field('idle_seconds').value).toBe('120');
     change('idle_seconds', '32'); edit.cancelHistoryGestures(); expect(edit._ambientIdleEditor.draft).toBeNull(); edit.render();
     change('idle_seconds', '33'); edit.detach(); expect(edit._ambientIdleEditor.draft).toBeNull(); expect(edit._ambientIdleEditor.disposed).toBe(false);
     edit.attach(); edit.render(); expect(field('idle_seconds').value).toBe('120'); change('idle_seconds', '34'); click('ambient-idle-save');

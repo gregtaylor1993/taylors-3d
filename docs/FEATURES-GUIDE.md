@@ -5,20 +5,20 @@ on one panel. This lets several panels show the same house while an automation s
 one of them. New features are tested with the mock Home Assistant preview; the feature log
 keeps testing on Taylor's real installation visible.
 
-For people/activity, parked vehicles and measured vacuum positions, use **Edit → Tracking** and
+For people/activity, parked vehicles and measured vacuum positions, use **Edit → Devices → Advanced tools → Tracking** and
 read [the tracking guide](TRACKING-GUIDE.md). It explains which readings can locate a person or
 vacuum, how recent sightings expire and how to preserve or repair a missing source.
 
-For lighter model rendering on a wall panel, open **Edit → Model → Model shading**.
+For lighter model rendering on a wall panel, open **Edit → House → Model → Model shading**.
 The [model shading guide](MODEL-SHADING-GUIDE.md) explains the shadow/lamp choices,
 what the material report means, and how to prepare ambient occlusion textures in Blender.
 
-For trying a lighting look, use **Edit → Scenes** and the [scene preview guide](SCENE-PREVIEW-GUIDE.md).
+For trying a lighting look, use **Edit → Controls → Scenes** and the [scene preview guide](SCENE-PREVIEW-GUIDE.md).
 You choose the lights and desired settings explicitly. A preview changes the house drawing;
 **Activate** runs the real saved Home Assistant scene and can also affect its other devices.
 The device menus continue to show actual readings during a preview.
 
-For your own furniture, use **Edit → Furniture** and the [furniture guide](FURNITURE-GUIDE.md).
+For your own furniture, use **Edit → Appearance → Furniture** and the [furniture guide](FURNITURE-GUIDE.md).
 Imported ZIPs keep their original models and licences. Movement is a draft until
 **Save furniture**; **Cancel**, **Undo** and **Redo** work with placements.
 
@@ -26,30 +26,33 @@ For current entity names, area filters and missing-link repair, use the
 [Home Assistant links guide](HOME-ASSISTANT-LINKS-GUIDE.md). Saved missing IDs stay
 visible so you can choose their replacements deliberately.
 
-For a wall panel that gently moves when untouched, open **Edit → Idle** and read the
+For a wall panel that gently moves when untouched, open **Edit → Appearance → Advanced tools → Idle** and read the
 [idle mode guide](AMBIENT-IDLE-GUIDE.md). Rotation and night picture dimming are optional.
 An interaction restores the pre-idle camera; the first tap on a rotating surface wakes
 the house, and a fresh tap can select a room or device. These effects use no device actions.
 
 ## Room and device controls
 
-In the card's visual settings, **House appearance** selects the photo-inspired
-House layout and Dark graphite, Light or Home Assistant colours. A wide card uses
-a left menu and right controls; a narrow card uses bottom navigation and a room
-sheet, reserving space for the house above it. **Settings → House** chooses the
-title and actual weather, people and alarm sources. See the
+In the card's visual settings, **Appearance → Card layout** selects the House
+layout or Standard card. **Appearance → Card colours** selects Dark glass, Light
+glass or Home Assistant colours in either layout. Floating controls use subtle
+glass; settings stay solid for easy reading. See the [appearance guide](GLASS-APPEARANCE-GUIDE.md).
+A wide House card uses a left menu and overlay controls; a narrow card uses bottom
+navigation and a room sheet. Opening room/device controls keeps the house's size
+and camera unchanged. The House menu's **Settings** opens **Edit → Appearance →
+House** for the title and actual weather, people and alarm sources. See the
 [House guide](HOUSE-VIEW-GUIDE.md). Existing cards keep the standard layout until
 you select House.
 
-For a clearer view through a GLB house, open **Edit → Model → Wall presentation** and
+For a clearer view through a GLB house, open **Edit → House → Model → Wall presentation** and
 read the [wall guide](WALL-PRESENTATION-GUIDE.md). Select actual wall meshes and the
 side you want to fade. Glass is a lightweight transparent look; cut-away removes
 the upper section at a chosen height above that wall's floor. Changes apply on Save.
 
-For separate storeys, open **Edit → Model → Floor presentation**. Choose **Side by
+For separate storeys, open **Edit → House → Model → Floor presentation**. Choose **Side by
 side** for the horizontal arrangement or **Stacked layers** for a vertical stack.
 The Phase 20 local candidate adds **Separate floor panels** in Side by side. Turn it
-on, select up to four floors and save. With a GLB, open **Edit → Views**, choose
+on, select up to four floors and save. With a GLB, open **Edit → Controls → Views**, choose
 **All** or the intended overview in **View**, and check those floors under **Linked
 HA floors**. A model's All view can otherwise follow only its highest visible
 storey's HA floor; panels preserve that view's floor and model visibility rules.
@@ -84,7 +87,7 @@ device controls**.
 
 ## Save camera views and use them in an automation
 
-1. On the intended panel, sign in as an administrator and open the card's **Edit → Views**.
+1. On the intended panel, sign in as an administrator and open the card's **Edit → Controls → Views**.
 2. Set **Screen name (this browser)** to a unique name, such as `kitchen-wall`, and save it.
    Use a different name on each screen. The name survives a browser reload. Clearing browser
    storage removes it; it takes precedence over the shared card's **Automation target** setting.
@@ -144,7 +147,7 @@ Undo never changes live sensor readings or reverses a command sent to a real dev
 
 ## Temperature, power, energy and alerts
 
-Open **Edit → Overlays**. Pick a measurement, its display unit and colour scale, then choose
+Open **Edit → Appearance → Advanced tools → Overlays**. Pick a measurement, its display unit and colour scale, then choose
 the sensors for each room. Saved visual settings are shared with the layout and take priority
 over earlier card configuration for these overlays.
 

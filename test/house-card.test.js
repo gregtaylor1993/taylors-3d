@@ -35,7 +35,7 @@ afterEach(() => {
 
 describe('House layout card integration', () => {
   it('starts new cards in the requested dark house layout while keeping old saved defaults small', () => {
-    expect(customElements.get('taylors3d-card').getStubConfig()).toEqual({ layout_style: 'house', house_colour_scheme: 'dark' });
+    expect(customElements.get('taylors3d-card').getStubConfig()).toEqual({ layout_style: 'house', house_colour_scheme: 'dark', marker_display: 'rooms' });
     expect(cleanConfig({ layout_style: 'original', house_colour_scheme: 'ha' })).toEqual({});
     expect(cleanConfig({ layout_style: 'house', house_colour_scheme: 'light' })).toEqual({ layout_style: 'house', house_colour_scheme: 'light' });
     expect(cleanConfig({ layout_style: '<invalid>', house_colour_scheme: 4 })).toEqual({});
@@ -46,6 +46,43 @@ describe('House layout card integration', () => {
     const { card } = fixture(); card._config.layout_style = 'original';
     card._syncHouseShell();
     expect(card._houseShell).toBeUndefined(); expect(card._ro.observe).not.toHaveBeenCalled();
+  });
+  it.each(['dark', 'light', 'ha'])('uses %s appearance in standard layout without creating House controls or device requests', (scheme) => {
+    const { card, stage } = fixture();
+    card._config.layout_style = 'original'; card._config.house_colour_scheme = scheme;
+    const initialHeight = stage.style.height;
+    card._syncHouseShell();
+    expect(card.getAttribute('data-taylors3d-theme')).toBe('glass');
+    expect(card.getAttribute('data-taylors3d-scheme')).toBe(scheme === 'ha' ? null : scheme);
+    expect(card._houseShell).toBeUndefined(); expect(stage.style.height).toBe(initialHeight);
+    expect(card._resize).not.toHaveBeenCalled(); expect(card._hass.callService).not.toHaveBeenCalled();
+  });
+  it.each([true, false])('keeps destructive-action fallback readable when Home Assistant reports darkMode=%s', (darkMode) => {
+    const { card } = fixture(); card._config.house_colour_scheme = 'ha';
+    card._hass.themes = { darkMode }; card._syncHouseShell();
+    expect(card.style.getPropertyValue('--taylors3d-ui-ha-danger')).toBe(darkMode ? '#ffb4a9' : '#a32620');
+    card._hass.themes = { darkMode: !darkMode }; card._syncHouseShell();
+    expect(card.style.getPropertyValue('--taylors3d-ui-ha-danger')).toBe(darkMode ? '#a32620' : '#ffb4a9');
+    expect(card._hass.callService).not.toHaveBeenCalled();
+  });
+  it.each([['#1c1c1e', '#ffb4a9'], ['#ffffff', '#a32620']])('reads the inherited %s surface when Home Assistant has no mode flag', (background, danger) => {
+    const { card } = fixture(); card._config.house_colour_scheme = 'ha';
+    card.style.setProperty('--card-background-color', background); card._syncHouseShell();
+    expect(card.style.getPropertyValue('--taylors3d-ui-ha-danger')).toBe(danger);
+    expect(card.style.getPropertyValue('--card-background-color')).toBe(background);
+  });
+  it('retains the chosen appearance when changing layout and clears an explicit scheme when HA colours are selected', () => {
+    const { card } = fixture();
+    card._syncHouseShell();
+    expect(card.getAttribute('data-taylors3d-theme')).toBe('house');
+    card._config.layout_style = 'original'; card._syncHouseShell();
+    expect(card.getAttribute('data-taylors3d-theme')).toBe('glass');
+    expect(card.getAttribute('data-taylors3d-scheme')).toBe('dark');
+    card._config.house_colour_scheme = 'ha'; card._syncHouseShell();
+    expect(card.hasAttribute('data-taylors3d-scheme')).toBe(false);
+    card._config.layout_style = 'house'; card._config.house_colour_scheme = 'light'; card._syncHouseShell();
+    expect(card.getAttribute('data-taylors3d-theme')).toBe('house');
+    expect(card.getAttribute('data-taylors3d-scheme')).toBe('light');
   });
   it('creates stable header/navigation and observes a new popup exactly once', () => {
     const { card } = fixture(); card._syncHouseShell();
@@ -161,7 +198,7 @@ describe('House layout card integration', () => {
     const { card, stage } = fixture(); card.setAttribute('data-taylors3d-theme', 'earlier');
     stage.style.setProperty('--taylors3d-bar-height', '22px', 'important');
     card._syncHouseShell(); card._config.layout_style = 'original'; card._syncHouseShell();
-    expect(card.getAttribute('data-taylors3d-theme')).toBe('earlier');
+    expect(card.getAttribute('data-taylors3d-theme')).toBe('glass');
     expect(stage.style.getPropertyValue('--taylors3d-bar-height')).toBe('22px');
     expect(stage.style.getPropertyPriority('--taylors3d-bar-height')).toBe('important');
     expect(card._devicePopup.placement).toBe('popup'); expect(card._houseObserved.size).toBe(0);

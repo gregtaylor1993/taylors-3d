@@ -68,7 +68,7 @@ async function appearance(page, name, options) {
       scene: box(card._scene), body: box(card._editing ? shadow.querySelector('.tab-body') : null), popup: box(card._devicePopup.isOpen ? card._devicePopup.el : null),
       reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, transitions: options.reduced ? transitions : [],
       brand: { amber: hostCSS.getPropertyValue('--taylors3d-ui-amber').trim(), teal: hostCSS.getPropertyValue('--taylors3d-ui-teal').trim(),
-        background: hostCSS.getPropertyValue('--taylors3d-ui-background').trim(), floorUsesAmber: samePaint(selectedFloor, '--taylors3d-ui-amber'), navUsesTeal: samePaint(selectedNav, '--taylors3d-ui-teal') },
+        background: hostCSS.getPropertyValue('--taylors3d-ui-background').trim(), floorUsesSelected: samePaint(selectedFloor, '--taylors3d-ui-teal'), navUsesSelected: samePaint(selectedNav, '--taylors3d-ui-teal') },
       renderer: card._view.renderer === window.roomActionsFixture.renderer, calls: window.roomActionsFixture.calls.length, commits: window.roomActionsFixture.commits,
       feedback: { present: !!shadow.querySelector('[data-ui-feedback]'), snapshot: card._feedback?.snapshot(),
         rows: [...shadow.querySelectorAll('[data-ui-feedback] [data-feedback-kind]')].filter(visible).map((node) => ({ kind: node.dataset.feedbackKind, status: node.dataset.status,
@@ -82,7 +82,7 @@ async function appearance(page, name, options) {
   if (options.editor) check(`${name}: the actual editor retains240px usable form space`, data.body?.height >= 239.9, data.body);
   if (!options.editor) check(`${name}: House marker targets remain44px around their original source centres`, data.markers.length > 0
     && data.markers.every((row) => row.width >= 43.9 && row.height >= 43.9 && row.centreError !== null && row.centreError < .75), data.markers);
-  check(`${name}: floor/lighting amber and active navigation teal use the supplied current tokens`, data.brand.floorUsesAmber && data.brand.navUsesTeal, data.brand);
+  check(`${name}: selected floors and navigation use the supplied monochrome selected token`, data.brand.floorUsesSelected && data.brand.navUsesSelected, data.brand);
   if (options.reduced) check(`${name}: reduced motion stops decorative UI transitions`, data.reduced && !data.transitions.length, data.transitions);
   if (options.feedback) check(`${name}: the actual feedback strip shows each required current status`, data.feedback.present
     && options.feedback.every((expected) => data.feedback.rows.some((row) => row.kind === expected.kind && row.status === expected.status && row.message

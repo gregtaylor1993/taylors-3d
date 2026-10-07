@@ -7,6 +7,44 @@ position and map overlay.
 
 ## Current 0.4.0 development scope
 
+Taylor approved the three recommendations from the
+[final design review](docs/FINAL-DESIGN-REVIEW.md): room-first marker display,
+configurable built-in House navigation and search. They are now implemented in
+source; see [the navigation guide](docs/SMART-NAVIGATION-GUIDE.md). Record final
+combined build, regression checks and the requested Git delivery in the current
+feature-log section. Do not reuse earlier receipts as verification of this source. Recent activity and an
+explicit Glass effects switch remain deferred proposals. No release or Home
+Assistant installation is claimed by this implementation.
+
+`marker_display: all|rooms|important` preserves All devices for existing cards;
+new stubs choose Rooms. The toolbar choice is temporary; the HA visual card
+editor saves the starting choice. Room summaries use actual linked readings;
+crowded views expose a compact Rooms chooser. Keep alerts and unassigned devices
+reachable within the existing visibility filters. Search opens current controls,
+views or in-card settings and never dispatches a device action from a result.
+`house_navigation: {order,hidden,...extras}` stores menu presentation only; House
+stays first and Settings stays reachable under existing admin permissions. The
+three/four-section phone menu uses More; custom action bars remain separate.
+
+The later 7 October [glass appearance follow-up](docs/GLASS-APPEARANCE-GUIDE.md)
+applies one minimal dark/light visual system across both House and standard
+layouts, their controls and the HA card editor. Keep semantic light/alert colours
+and deliberate custom colours; floating surfaces use restrained glass while
+settings remain solid. Card options still use `house_colour_scheme: dark|light|ha`.
+Current UI names are **Appearance → Card colours → Dark glass / Light glass**;
+the common styling is local to Taylor's 3D. Earlier test/package results below
+predate this appearance change and remain historical. Record new final checks
+against the actual final source/build rather than reusing those receipts.
+
+The 7 October follow-up [usability review](docs/UI-REVIEW.md) supersedes the
+panel-reservation behaviour described in the earlier Phase 22 checkpoint below.
+Room/device panels overlay both House and standard scenes without resizing or
+reframing them. Custom bars now support bottom, left and exact-room placements;
+left uses a collapsible overlay. Editor navigation explicitly reviews dirty
+drafts; existing model replacement requires review before any upload. Keep
+forced session/disconnect cleanup unguarded. Current review results are recorded
+in that report; the hashes and matrix counts below are earlier evidence.
+
 Read [the UI polish guide](docs/UI-POLISH.md) and the current section in
 [the feature log](REQUIREMENTS_AND_FEATURES.md) before changing the interface.
 The six connected changes are room-sheet sizing, visual button/source pickers,
@@ -14,15 +52,19 @@ grouped editing and guided setup, optional favourites, consistent presentation,
 and truthful save/action/connection feedback. Earlier checkpoints remain
 historical. This development work has not published or installed a new release.
 
-Current local delivery: `taylors3d-phase22-ui-polish-local-candidate.zip`, frontend
+Earlier Phase 22 local delivery: `taylors3d-phase22-ui-polish-local-candidate.zip`, frontend
 SHA-256 `787c366e017a567a5c158b56755bfbcfe35f259ca4336b5166f841a97a2e17d8`.
-Complete unit/lint/build/freshness checks pass: 6,610 tests in 207 files. Qualified
-native coverage passes all 36 programs: 16 on the final runtime and 20 retained
+That checkpoint passed unit/lint/build/freshness: 6,610 tests in 207 files. Its qualified
+native coverage passed all 36 programs: 16 on that runtime and 20 retained
 earlier checkpoints with independently verified unchanged relevant app code.
 This is not an assertion that every program was rerun on the final bundle.
 The independently audited 20-member ZIP matches the tested installation bytes.
 Actual HA/Linux compatibility, household/model/panel acceptance and current GitHub
-CI remain separate; no commit, push, tag, release or installation occurred here.
+CI remain separate. Phase 22 was saved locally as commit `162175b`; it was not
+pushed or installed at that checkpoint. The latest approved delivery includes
+that baseline and the usability, glass and navigation follow-ups. See the top
+of the feature log for current verification; no new release or installation is
+implied by a source push.
 
 Current in-card routes follow five groups: House contains Rooms/Model; Devices
 contains Devices/Objects and Advanced Cameras/Tracking/Security/Mower; Controls
@@ -44,6 +86,9 @@ do not prove a physical device responded or a real HA backup restored.
   --divider-color, --state-light-active-color). Light and dark themes must both look right.
 
 ## Already written (src/)
+- `marker-overview.js` / `room-overview-chooser.js` — Rooms, Important activity and All devices policies, real room summaries and an overflow chooser for crowded projections. Existing renderer, source positions, alerts, floor filters and lighting remain authoritative; editing reveals ordinary placement markers.
+- `global-search.js` / `house-search-data.js` — card-scoped Search and Ctrl+K/⌘K across current rooms, devices, scenes, views and admin editor pages. Revalidate result identity, account, model and layout; opening controls never invokes Toggle or activates a scene.
+- `house-navigation-editor.js` — friendly House menu show/hide, Up/Down and reset in the HA visual card editor; preserve unknown imported fields and unrelated card settings. `HouseNavigation.setLayout(mode,width)` selects the measured rail or compact menu, with More overlay, Escape/focus and dismiss-only outside taps.
 - `placement.js` — polygon geometry, type rules (domain/device_class -> anchor + height),
   `autoPlace(room, markers, roomHeight)`. Anchors: center (ceiling grid), wall, corner, door.
 - `registry.js` — builds markers from `hass.entities` / `hass.devices` / `hass.areas` /
@@ -55,11 +100,11 @@ do not prove a physical device responded or a real HA backup restored.
   least-squares affine. `overlayUrl()` for image./camera. entities via entity_picture.
 - `storage.js` — LayoutStore: companion integration WS -> `frontend/set_user_data` -> localStorage.
 - `device-popup.js` — room/device panels; explicit quick controls and HA All controls fallback.
-- `room-sheet.js` / `translations/room-sheet.js` — the same real room controls in Summary, Controls and Details sizes on narrow cards. Native drag and keyboard sizing preserve focus, scalar drafts and source/session ownership; desktop rows remain available. Root measures the actual sheet and reserves the scene, with no new renderer or service.
+- `room-sheet.js` / `translations/room-sheet.js` — the same real room controls in Summary, Controls and Details sizes on narrow cards. Native drag and keyboard sizing preserve focus, scalar drafts and source/session ownership; desktop rows remain available. Sheets overlay the unchanged scene, cap their height and scroll internally, with no new renderer or service.
 - `editor-navigation.js` / `translations/editor-navigation.js` — five groups retaining every existing feature tab; a narrow section dropdown and discoverable Advanced tools. Continue setup uses the actual uploader, explicit current floor/area links, controls and final root `completeSetup(nextLayout, token)`. Feature drafts need Save/Cancel; final completion waits for a current successful save in the actual active storage backend. Shared integration, HA user data and browser-local fallback are distinct; Edit → Data reports the backend. Preserve imported `ui_setup` extras and current admin/context fences. `EditMode.revealTab` is the supported path for existing helpers, so they open a hidden group before finding a tab.
-- `custom-controls.js` / `custom-controls-editor.js` / `custom-controls-view.js` / `custom-controls-icons.js` — inside-card bottom/exact-room bars with draft Save/Cancel and layout history; native mouse/touch/keyboard ordering, local SVG icon search, friendly source search, deliberate starter sources and safe duplication. Optional `bar.dock: {limit: 4|5}` uses explicit `button.pinned`; overflow is under More. Optional `button.visibility: {type: 'state', entity, state}` uses exact current evidence, keeping missing/unknown conditions readable. No new automation-rule editor or passive device action. Keep raw icon/ID editing, inert imported extras, shared JSON and full-dashboard backup round trips.
+- `custom-controls.js` / `custom-controls-editor.js` / `custom-controls-view.js` / `custom-controls-icons.js` — inside-card bottom/left/exact-room bars with sticky draft Save/Cancel and layout history; native mouse/touch/keyboard ordering, local SVG icon search, friendly source search, deliberate starter sources and safe duplication. Left actions use a collapsible overlay with dismiss-only first outside taps. Optional `bar.dock: {limit: 4|5}` uses explicit `button.pinned`; overflow is under More. Optional `button.visibility: {type: 'state', entity, state}` uses exact current evidence, keeping missing/unknown conditions readable. No new automation-rule editor or passive device action. Keep raw icon/ID editing, inert imported extras, shared JSON and full-dashboard backup round trips.
 - `ui-feedback.js` / `translations/ui-feedback.js` — separate stable live-status rows for connection, layout saving and action requests. Root aggregates real feature draft flags and owns exact save/action tokens. A successful service reply means requested; displayed device state still comes from HA. Old account/layout/model/source/connection replies cannot become current success. The strip follows `.body` in normal flow so notices keep the scene steady during dragging; invisible/internal token changes request no resize. It never adds a renderer or a device command.
-- `house-shell.js` / `house-shell-layout.js` / `house-card-size.js` — opt-in responsive House presentation in the existing card. Measure actual card width and configured height; reserve header, rail/bottom navigation, toolbar and right/sheet controls. Minimum scene height is 240px. Journal exact owned styles/attributes and restore them on style-off/disconnect without clobbering foreign changes; temporary expanded min-height is never the next base height. Existing cards default to standard; new card stubs select House/dark. Root observes stable nodes, owns resize and actual category actions; no additional renderer, timer or HA service.
+- `house-shell.js` / `house-shell-layout.js` / `house-card-size.js` — opt-in responsive House presentation in the existing card. Measure actual card width and configured height; reserve header, rail/bottom navigation and toolbar. Room/device sheets and the custom left menu overlay the scene without reserving its pixels or changing its camera. Minimum House scene height is 240px. Journal exact owned styles/attributes and restore them on style-off/disconnect without clobbering foreign changes; temporary expanded min-height is never the next base height. Existing cards default to standard; new card stubs select House/dark. Root observes stable nodes, owns resize and actual category actions; no additional renderer, timer or HA service.
 - `house-header.js` / `house-summary.js` / `house-summary-editor.js` / `room-summary.js` — explicit current weather/person/alarm sources and actual selected-room light/media counts. Missing sources remain missing; light groups are identified as entities rather than physical bulb totals. Optional House editor tab uses normal layout history, current loaded admin context and native held-gesture cancellation. Reference images never supply household readings.
 - `house-navigation.js` / `house-categories.js` / `taylors3d-theme.js` — stable native local category controls, exact current metadata and configured vehicle sources, paired theme palettes and reachable 44px controls. No invented dashboard routes, vehicle identity or automatic device action. Session/account changes close old panels; category membership and empty messages re-resolve on current readings. Generic theme padding must not squeeze rail labels.
 - `light-state.js` — strict finite current light appearance and independently reported modern capabilities. Use HA-derived RGB; never guess XY gamut or Kelvin bounds. Fixed legacy/non-colour display fallback is explicit. Model lamps, floor glows and panel readings share this reader. Controls revalidate current membership/source/capabilities/services/connection; input alone sends nothing.
@@ -138,8 +183,10 @@ View mode:
 - SVG mini-map: selected floor, devices and camera focus, click-to-focus; hidden during editing.
   The scene has its own container above the reserved bottom bar. Capture-phase object gestures
   must ignore `[data-taylors3d-ui]` and both popup elements, including their outside-dismiss events.
-- Room/device controls default to a right-hand panel. Wide containers reserve 332px beside the scene;
-  narrow containers keep the panel above the bubble bar. `control_panel: popup` uses the earlier popup.
+- Room/device controls default to an overlay panel. Wide containers place it on
+  the right; narrow containers keep it above the bubble bar. Popup lifecycle and
+  resizing never reserve scene pixels or change the camera. `control_panel: popup`
+  uses the earlier anchored popup, also bounded to the current scene.
 - `taylors3d.select_view` targets one registered open card. Browser-local `taylors3d.panel` (Edit → Views)
   overrides shared `automation_panel`; `automation_card_id` distinguishes cards on one screen.
   Saved `camera_mode` must survive resolveViews. Any pointer/manual navigation interrupts flight/return.

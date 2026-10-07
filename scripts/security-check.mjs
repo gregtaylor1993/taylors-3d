@@ -203,9 +203,11 @@ try {
   await click(page, '[data-act="sec-edit"][data-index="0"]'); await type(page, 'label', 'Never save this'); await click(page, '[data-act="sec-cancel"]');
   s = await snapshot(page); check('Cancel preserves the saved label and makes no extra layout change', s.bindings[0].label === 'Explicit front door' && s.commits === 1);
   await click(page, '[data-act="sec-edit"][data-index="0"]'); await type(page, 'label', 'Discard on tab change');
-  await click(page, '[data-act="tab"][data-id="devices"]'); await click(page, '[data-act="tab"][data-id="security"]');
+  await click(page, '[data-act="tab"][data-id="devices"]');
+  check('leaving Security keeps the unfinished draft until a choice is made', await page.evaluate(() => document.querySelector('taylors3d-card')._edit.tab === 'security' && document.querySelector('taylors3d-card')._edit._securityEditor.dirty));
+  await click(page, '[data-act="draft-leave-discard"]'); await click(page, '[data-act="tab"][data-id="security"]');
   const abandoned = await page.evaluate(() => document.querySelector('taylors3d-card')._edit._securityEditor.draft === null);
-  check('leaving Security discards its unsaved draft', abandoned && (await snapshot(page)).bindings[0].label === 'Explicit front door');
+  check('explicit Discard on leaving Security preserves its saved binding', abandoned && (await snapshot(page)).bindings[0].label === 'Explicit front door');
   await click(page, '[data-act="sec-add"]'); await select(page, 'kind', 'window');
   await select(page, 'entity', 'binary_sensor.security_window'); await select(page, 'object', 'security_window');
   await click(page, '[data-act="sec-contact-preset"]'); await type(page, 'label', 'Explicit test window');

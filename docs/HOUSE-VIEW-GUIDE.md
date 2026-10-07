@@ -5,28 +5,35 @@ browser checks pass with both drawn rooms and a loaded 3D model. The project gui
 identifies which installation package has completed the wider regression checks;
 use that package until a newer checkpoint is listed there.
 
-The current local 0.4 test package is
+The earlier local 0.4 test package is
 `taylors3d-phase22-ui-polish-local-candidate.zip`. Use the [manual test-package
 steps](../README.md#local-04-testing-package), then the [UI polish checklist](UI-POLISH.md)
 to try the newer room-sheet sizes, favourites and setup. Published HACS 0.1 remains
 a separate checkpoint; this local package has not been installed in your house.
+The [usability review](UI-REVIEW.md) lists the newer follow-up package and checks.
+The later [glass appearance guide](GLASS-APPEARANCE-GUIDE.md) describes the current
+shared visual style. The package/checks above are historical and predate that style.
 
 ## Choose the layout
 
 1. Edit your Home Assistant dashboard and open this card's visual settings.
-2. Under **House appearance**, choose **House with navigation and room panels**.
-3. Choose **Dark graphite**, **Light**, or **Home Assistant colours**.
+2. Under **Appearance → Card layout**, choose **House with navigation and room panels**.
+3. Under **Appearance → Card colours**, choose **Dark glass**, **Light glass**, or **Home Assistant colours**.
 4. Save the card settings.
 
 New cards start with the dark House layout. Existing cards keep their standard
 layout until you choose House. The selector changes how the card looks; it does
 not replace your house model, floor links or devices.
+Card colours also apply if you keep **Standard card**. The card's settings match
+the selected colours; other cards on the Home Assistant dashboard keep their own theme.
 
 On a wide card the menu runs down the left and room/device controls open on the
 right. A narrow card uses a scrolling bottom menu and a room sheet above it.
-The card reserves space for these controls and keeps at least 240 pixels of
-house-view height, expanding the card if needed. This also works when a narrow
-card sits inside a wide browser window.
+Room/device controls overlay the house. Opening, closing or resizing a panel
+keeps the drawing's size and camera unchanged; its contents scroll when needed.
+The header and navigation still have their usual reserved space. Optional custom
+left-menu bars sit under Quick actions and also overlay the house. This works
+when a narrow card sits inside a wide browser window.
 
 ## Use your real sources
 

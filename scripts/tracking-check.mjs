@@ -176,9 +176,11 @@ try {
   await click(page, '[data-act="history-undo"]'); s = await snapshot(page); check('Undo removes that binding while keeping the earlier car', s.savedVehicles.length === 1 && s.savedVehicles[0]?.id === 'parked');
   await click(page, '[data-act="history-redo"]'); s = await snapshot(page); check('Redo restores the exact saved source and position', s.savedVehicles.length === 2 && s.savedVehicles[1]?.position?.y === -1);
   await click(page, '[data-act="trk-edit"][data-index="1"]'); await type(page, 'label', 'Unsaved change');
-  await click(page, '[data-act="tab"][data-id="cameras"]'); await click(page, '[data-act="tab"][data-id="tracking"]');
+  await click(page, '[data-act="tab"][data-id="cameras"]');
+  check('leaving Tracking keeps the unfinished draft until a choice is made', await page.evaluate(() => document.querySelector('taylors3d-card')._edit.tab === 'tracking' && document.querySelector('taylors3d-card')._edit._trackingEditor.dirty));
+  await click(page, '[data-act="draft-leave-discard"]'); await click(page, '[data-act="tab"][data-id="tracking"]');
   const discarded = await page.evaluate(() => { const c = document.querySelector('taylors3d-card'); return c._edit._trackingEditor.draft === null && c._layout.vehicle_bindings[1].label === 'Parking bay'; });
-  check('leaving Tracking discards its unsaved draft without changing the saved binding', discarded);
+  check('explicit Discard on leaving Tracking keeps the saved binding', discarded);
   await page.setViewport({ width: 320, height: 1000, deviceScaleFactor: 1 }); await settle(page);
   await click(page, '[data-act="trk-add"]');
   const narrow = await page.evaluate(() => { const c = document.querySelector('taylors3d-card'), form = c.shadowRoot.querySelector('[data-trk-editor]');

@@ -108,32 +108,40 @@ describe('actual header/navigation composition and source authority', () => {
 });
 
 describe('measured scene, desktop rail, mobile sheet and editor', () => {
+  it('restores a fractional owned minimum after native CSSOM normalises pixel precision', () => {
+    const {update,measure,card,shell}=setup({width:320,height:340,summaryHeight:75.84375,toolbarHeight:114,navigationHeight:97.296875});
+    const write=card._stage.style.setProperty.bind(card._stage.style);
+    vi.spyOn(card._stage.style,'setProperty').mockImplementation((key,value,priority) => write(key,
+      key==='min-height'&&/^\d+[.]\d+px$/.test(value)?`${Math.round(parseFloat(value)*1000)/1000}px`:value,priority));
+    update();const plan=measure();expect(plan.stageHeight).toBe(559.140625);expect(card._stage.style.minHeight).toBe('559.141px');
+    shell.setData({enabled:false});expect(card._stage.style.minHeight).toBe('');
+  });
   it('reserves an actual wide right popup and rail without modifying a camera, scene object or renderer', () => {
     const { update, measure, popup, card, shell } = setup(); update(); const controller = popup(); const originalCamera = structuredClone(card._view.camera);
     controller.el.style.left = '134px'; controller.el.style.top = '225px'; const plan = measure();
-    expect(plan).toMatchObject({ mode: 'rail', stageHeight: 720, summaryReserve: 86, railReserve: 88, controlsReserve: 332,
-      scene: { x: 88, y: 86, width: 860, height: 542 } });
+    expect(plan).toMatchObject({ mode: 'rail', stageHeight: 720, summaryReserve: 86, railReserve: 88, controlsReserve: 0,
+      scene: { x: 88, y: 86, width: 1192, height: 542 } });
     expect(shell.navigation.element.dataset.houseNavigationLayout).toBe('rail'); expect(controller.el.dataset.houseControlsLayout).toBe('right');
-    expect(controller.el.style.left).toBe(''); expect(controller.el.style.top).toBe(''); expect(card._stage.style.getPropertyValue('--taylors3d-controls-width')).toBe('332px');
+    expect(controller.el.style.left).toBe(''); expect(controller.el.style.top).toBe(''); expect(card._stage.style.getPropertyValue('--taylors3d-controls-width')).toBe('0px');
     expect(card._view.camera).toEqual(originalCamera); expect(card._view.scene.children).toEqual([]); expect(card._view.resize).not.toHaveBeenCalled();
   });
   it('uses actual narrow stage width inside a wide browser, reserves both bottom rows, and expands min-height to preserve 240px scene', () => {
     const { update, measure, popup, card, shell } = setup({ width: 320, height: 520, summaryHeight: 112, toolbarHeight: 120 });
     expect(window.innerWidth).toBeGreaterThan(320); update(); popup({ h: 450 }); const plan = measure();
-    expect(plan).toMatchObject({ mode: 'bottom', navigationReserve: 92, toolbarReserve: 136, sheetReserve: 466,
-      stageHeight: 1046, scene: { x: 0, y: 112, width: 320, height: 240 } });
-    expect(card._stage.style.minHeight).toBe('1046px'); expect(shell.navigation.element.dataset.houseNavigationLayout).toBe('bottom');
+    expect(plan).toMatchObject({ mode: 'bottom', navigationReserve: 92, toolbarReserve: 136, sheetReserve: 0,
+      stageHeight: 580, scene: { x: 0, y: 112, width: 320, height: 240 } });
+    expect(card._stage.style.minHeight).toBe('580px'); expect(shell.navigation.element.dataset.houseNavigationLayout).toBe('bottom');
     expect(card._devicePopup.el.dataset.houseControlsLayout).toBe('sheet'); expect(card._stage.style.getPropertyValue('--taylors3d-navigation-height')).toBe('92px');
   });
   it.each([739, 740, 959, 960])('uses exact stage breakpoint %i and actual selected controls dimensions', (width) => {
     const { update, measure, popup } = setup({ width, height: 520 }); update(); popup({ w: 280, h: 250 }); const plan = measure();
-    expect(plan.mode).toBe(width >= 960 ? 'rail' : 'bottom'); expect(plan.sheetReserve > 0).toBe(width < 740); expect(plan.controlsReserve > 0).toBe(width >= 740);
+    expect(plan.mode).toBe(width >= 960 ? 'rail' : 'bottom'); expect(plan.sheetReserve).toBe(0); expect(plan.controlsReserve).toBe(0);
     expect(plan.scene.x + plan.scene.width + plan.controlsReserve).toBe(width); expect(plan.scene.y + plan.scene.height + plan.toolbarReserve + plan.navigationReserve + plan.sheetReserve).toBe(plan.stageHeight);
   });
   it('shrinks a closed mobile sheet to the configured base height, not the old expanded measured DOM height', () => {
     const { update, measure, popup, card, sizes } = setup({ width: 390, height: 600, summaryHeight: 80, toolbarHeight: 80, navigationHeight: 64 }); update(); const controller = popup({ h: 320 });
     const open = measure(600); sizes.height = open.stageHeight; controller.el.remove(); controller.el = null;
-    const closed = measure(600); expect(open.stageHeight).toBeGreaterThan(600); expect(closed.stageHeight).toBe(600); expect(closed.sheetReserve).toBe(0);
+    const closed = measure(600); expect(open.stageHeight).toBe(600); expect(closed).toEqual(open); expect(closed.sheetReserve).toBe(0);
     expect(card._stage.style.minHeight).toBe('600px');
   });
   it('updates a closed room controller with real header and bottom-dock reserves before reopening', () => {
@@ -150,11 +158,11 @@ describe('measured scene, desktop rail, mobile sheet and editor', () => {
     controller.update(card._hass);measure(600);
     controller.showRoom({id:'room',area_id:'kitchen',floor_id:'ground'},[{entityId:'light.kitchen',areaId:'kitchen'}]);
     controller.el.getBoundingClientRect=() => bounds(344,Number.parseFloat(controller.el.style.getPropertyValue('--taylors3d-room-sheet-height'))||300);
-    const controls=measure(600);expect(controller._roomSheet.heights).toEqual({summary:200,controls:240,details:360});
-    expect(controls.sheetReserve).toBe(256);expect(controls.scene.height).toBe(240);
-    controller._roomSheet.buttons.get('details').click();const details=measure(600);expect(details.sheetReserve).toBe(376);expect(details.stageHeight).toBe(872);
+    const controls=measure(600);expect(controller._roomSheet.heights).toEqual({summary:200,controls:240,details:328});
+    expect(controls.sheetReserve).toBe(0);expect(controls.scene.height).toBe(344);
+    controller._roomSheet.buttons.get('details').click();const details=measure(600);expect(details).toEqual(controls);expect(details.stageHeight).toBe(600);
     sizes.height=details.stageHeight;expect(measure(600)).toEqual(details);
-    controller._roomSheet.buttons.get('summary').click();const summary=measure(600);expect(summary.sheetReserve).toBe(216);expect(summary.stageHeight).toBe(712);
+    controller._roomSheet.buttons.get('summary').click();const summary=measure(600);expect(summary).toEqual(controls);expect(summary.stageHeight).toBe(600);
     controller.close();expect(measure(600).stageHeight).toBe(600);expect(card._stage.style.minHeight).toBe('600px');
     expect(card._hass.callService).not.toHaveBeenCalled();expect(card._view.setCamera).not.toHaveBeenCalled();
   });
@@ -277,9 +285,10 @@ describe('navigation held intent through actual shell context changes', () => {
     control.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: ' ' })); card._hass.states['sensor.new'] = state('sensor.new', '5'); update();
     control.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: ' ' })); control.click(); expect(onSelect).toHaveBeenCalledTimes(1);
   });
-  it('retains every supplied narrow category, including Settings, rather than replacing extras with fake More actions', () => {
+  it('keeps every supplied category in the narrow More overlay without inventing category actions', () => {
     const { update, measure, shell } = setup({ width: 320 }); const items = [...HOUSE_NAVIGATION_ITEMS, { id: 'extra', label: 'Extra room tools', icon: 'mdi:tools', action: { type: 'category', id: 'extra' } }];
-    update({ navItems: items }); measure(); expect(shell.navigation.items.children).toHaveLength(8);
-    expect([...shell.navigation.items.children].map((button) => button.textContent)).toContain('Settings'); expect(shell.navigation.items.textContent).not.toContain('More');
+    update({ navItems: items }); measure(); expect(shell.navigation.items.children).toHaveLength(4);
+    expect(shell.navigation.items.textContent).toContain('More'); expect(shell.navigation.overflow.textContent).toContain('Settings');
+    expect(shell.navigation.element.querySelectorAll('[data-house-navigation-id]')).toHaveLength(8);
   });
 });

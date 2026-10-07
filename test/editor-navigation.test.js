@@ -86,6 +86,91 @@ describe('small editor sections', () => {
   });
 });
 
+describe('deliberate draft leave review', () => {
+  const draft = (h) => { h.edit.revealTab('controls'); h.click('custom-controls-add-bar'); };
+  it('keeps a dirty draft through group navigation, Stay, and unchanged HA refreshes', () => {
+    const h = setup(); draft(h); const value = h.edit._customControlsEditor.draft;
+    h.click('editor-group', 'appearance'); expect(h.edit.tab).toBe('controls'); expect(h.edit._customControlsEditor.draft).toBe(value);
+    const stay = h.button('draft-leave-stay'); h.edit.observeSetupContext(); expect(h.button('draft-leave-stay')).toBe(stay);
+    h.click('draft-leave-stay'); expect(h.edit.tab).toBe('controls'); expect(h.edit._customControlsEditor.draft).toBe(value);
+    expect(h.card._commit).not.toHaveBeenCalled(); expect(h.card._hass.callService).not.toHaveBeenCalled();
+  });
+  it('restores the group dropdown while leaving is blocked and discards only after a deliberate choice', () => {
+    const h = setup(); draft(h); const select = h.edit.panel.querySelector('[data-field="editor-group"]'); select.value = 'house'; select.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(h.edit.tab).toBe('controls'); expect(select.value).toBe('controls'); h.click('draft-leave-discard');
+    expect(h.edit.tab).toBe('rooms'); expect(h.edit._customControlsEditor.dirty).toBe(false); expect(h.card._layout.custom_controls).toBeUndefined();
+  });
+  it('saves the actual draft and waits for current persistence before opening another section', async () => {
+    const h = setup(); draft(h); let resolve;
+    h.card._pendingLayoutSave = new Promise((done) => { resolve = done; });
+    h.click('editor-group', 'appearance'); h.click('draft-leave-save'); expect(h.edit.tab).toBe('controls');
+    expect(h.button('draft-leave-save').disabled).toBe(true); expect(h.card.commitFeatureLayout).toHaveBeenCalledOnce();
+    resolve(true); await turn(); expect(h.edit.tab).toBe('house'); expect(h.card._layout.custom_controls.bars).toHaveLength(1);
+  });
+  it('leaves invalid settings editable rather than discarding them or navigating', async () => {
+    const h = setup(); draft(h); h.click('custom-controls-add-button'); const value = h.edit._customControlsEditor.draft;
+    h.click('editor-group', 'house'); h.click('draft-leave-save'); await turn();
+    expect(h.edit.tab).toBe('controls'); expect(h.edit._customControlsEditor.draft).toBe(value); expect(h.edit._customControlsEditor.dirty).toBe(true);
+    expect(h.edit.panel.textContent).toContain('Some settings need attention'); expect(h.card._commit).not.toHaveBeenCalled();
+  });
+  it('keeps the editor open after a failed save and retries the same actual layout', async () => {
+    const h = setup(); draft(h); h.card._pendingLayoutSave = Promise.resolve(false);
+    h.click('editor-group', 'house'); h.click('draft-leave-save'); await turn();
+    expect(h.edit.tab).toBe('controls'); expect(h.edit.panel.textContent).toContain('could not be saved');
+    const current = h.card._layout; h.card._commit.mockImplementation((layout) => { expect(layout).toBe(current); return Promise.resolve(true); });
+    h.click('draft-leave-save'); await turn(); expect(h.edit.tab).toBe('rooms'); expect(h.card._commit).toHaveBeenLastCalledWith(current);
+  });
+  it('reviews closing Edit before teardown, then closes after explicit discard', async () => {
+    const h = setup(); draft(h); h.card._toggleEdit = vi.fn(() => { if (h.edit.requestClose()) { h.card._editing = false; h.edit.exit(); } });
+    expect(h.edit.requestClose()).toBe(false); expect(h.edit._customControlsEditor.dirty).toBe(true);
+    h.click('draft-leave-discard'); await turn(); expect(h.card._toggleEdit).toHaveBeenCalledOnce(); expect(h.card._editing).toBe(false);
+  });
+  it.each(['account', 'connection', 'layout', 'saved-layout', 'model', 'detach'])('never executes a pending leave after %s changes', async (change) => {
+    const h = setup(); draft(h); h.click('editor-group', 'house');
+    if (change === 'account') h.card._hass.user.id = 'other';
+    if (change === 'connection') h.card._hass.connection.connected = false;
+    if (change === 'layout') h.card._config.layout_key = 'other';
+    if (change === 'saved-layout') h.card._layout = { ...h.card._layout };
+    if (change === 'model') h.card._view.model = { root: {} };
+    if (change === 'detach') h.edit.detach();
+    await h.edit._resolveLeave('draft-leave-discard'); expect(h.edit.tab).toBe('controls'); expect(h.card._commit).not.toHaveBeenCalled(); expect(h.edit._pendingLeave).toBeNull();
+  });
+  it('rejects a cancelled native leave gesture', () => {
+    const h = setup(); draft(h); h.click('editor-group', 'house'); const discard = h.button('draft-leave-discard');
+    discard.dispatchEvent(new Event('pointerdown', { bubbles: true })); discard.dispatchEvent(new Event('pointercancel', { bubbles: true })); discard.click();
+    expect(h.edit.tab).toBe('controls'); expect(h.edit._customControlsEditor.dirty).toBe(true);
+  });
+});
+
+describe('house-file replacement review', () => {
+  function existing() { const h = setup(); h.card._layout.model = { version: 'old', name: 'old <house> & "home".glb', position: [0, 0, 0], scale: 1 }; h.card.resetHistory = vi.fn(); h.edit.revealTab('model'); return h; }
+  it('shows safely escaped old/new filenames, and keeps the old file until confirmed', async () => {
+    const h = existing(), before = h.card._layout.model; await h.edit._uploadModel(new File(['GLB'], 'new <home> & "house".glb'));
+    expect(h.card._hass.fetchWithAuth).not.toHaveBeenCalled(); expect(h.card.resetHistory).not.toHaveBeenCalled();
+    const review = h.edit.panel.querySelector('[data-model-replacement]'); expect(review.textContent).toContain(before.name); expect(review.textContent).toContain('new <home> & "house".glb');
+    expect(review.querySelector('house,home')).toBeNull(); expect(review.textContent).toContain('Undo cannot restore');
+    h.click('model-replace-cancel'); expect(h.card._layout.model).toBe(before); expect(h.edit._pendingReplacement).toBeNull();
+  });
+  it('uses the real authenticated upload and history reset once after confirmation', async () => {
+    const h = existing(); h.card._hass.fetchWithAuth.mockResolvedValue(new Response(JSON.stringify({ version: 'new', name: 'new.glb', size: 12 }), { status: 200 }));
+    await h.edit._uploadModel(new File(['GLB'], 'new.glb')); h.click('model-replace-confirm'); await turn();
+    expect(h.card._hass.fetchWithAuth).toHaveBeenCalledExactlyOnceWith('/api/taylors3d/model/setup', expect.objectContaining({ method: 'POST', body: expect.any(FormData) }));
+    expect(h.card._layout.model).toMatchObject({ version: 'new', name: 'new.glb' }); expect(h.card.resetHistory).toHaveBeenCalledOnce();
+    expect(h.card._hass.callService).not.toHaveBeenCalled();
+  });
+  it.each(['account', 'connection', 'layout', 'saved-layout', 'model', 'detach'])('does not post a pending replacement after %s changes', async (change) => {
+    const h = existing(); await h.edit._uploadModel(new File(['GLB'], 'new.glb'));
+    const held = h.button('model-replace-confirm');
+    if (change === 'account') h.card._hass.user.id = 'other';
+    if (change === 'connection') h.card._hass.connection.connected = false;
+    if (change === 'layout') h.card._config.layout_key = 'other';
+    if (change === 'saved-layout') h.card._layout = { ...h.card._layout };
+    if (change === 'model') h.card._view.model = { root: {} };
+    if (change === 'detach') h.edit.detach();
+    held.click(); await turn(); expect(h.card._hass.fetchWithAuth).not.toHaveBeenCalled(); expect(h.card._layout.model.version).toBe('old');
+  });
+});
+
 describe('current setup progress evidence', () => {
   it('uses resolved current room/floor/area data rather than raw saved outlines', () => {
     const h = setup(); expect(setupProgress(h.card).roomCount).toBe(1); h.card._roomList = []; expect(setupProgress(h.card).roomsReady).toBe(false);

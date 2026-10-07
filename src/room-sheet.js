@@ -11,9 +11,10 @@ const px = (value) => typeof value === 'number' && Number.isFinite(value) && val
 
 export function roomSheetHeights(baseHeight = 520, availableHeight) {
   const height = px(baseHeight) && baseHeight > 0 ? baseHeight : 520;
-  const available = px(availableHeight) && availableHeight > 0 ? availableHeight : height;
-  return { summary: 200, controls: Math.max(240, Math.min(ROOM_SHEET_LIMITS.controls, available * .48)),
-    details: Math.max(360, Math.min(ROOM_SHEET_LIMITS.details, available * .92)) };
+  const available = px(availableHeight) ? availableHeight : height;
+  const maximum = Math.max(0, available - 16);
+  return { summary: Math.min(200, maximum), controls: Math.min(maximum, Math.max(240, Math.min(ROOM_SHEET_LIMITS.controls, available * .48))),
+    details: Math.min(maximum, Math.max(360, Math.min(ROOM_SHEET_LIMITS.details, available * .92))) };
 }
 
 function sameContext(a, b) {
@@ -74,7 +75,9 @@ export class RoomSheet {
     const narrow = width > 0 && width < ROOM_SHEET_LIMITS.narrowBelow, heights = roomSheetHeights(baseHeight, availableHeight);
     const changed = narrow !== this.narrow || this.heights[this.mode] !== heights[this.mode];
     if (changed) { this._cancelDrag(); for (const intent of this.intents.values()) intent.poisoned = true; }
-    this.narrow = narrow; this.heights = heights; this.paint();
+    this.narrow = narrow; this.heights = heights;
+    this.popup.toggleAttribute('data-room-sheet-short', narrow && heights.details < 360);
+    this.paint();
     // Root already owns this resize. Do not request another frame here.
   }
   setMode(mode, { context = this.context() } = {}) {
@@ -125,7 +128,8 @@ export class RoomSheet {
     this.popup.dataset.roomSheetDragging = '';
     this.popup.style.setProperty('--taylors3d-room-sheet-height', `${drag.current}px`);
     // The panel remains bottom-anchored during a temporary drag preview. Root
-    // reserves the final sheet and resizes once at the snap, never per move.
+    // observes the final sheet once at the snap, never per move. The drawing
+    // rectangle stays unchanged throughout the gesture.
   }
   _release(event) {
     const target = this._target(event), intent = this.intents.get(target);
@@ -192,5 +196,6 @@ export class RoomSheet {
     this.window?.removeEventListener('pointercancel',this.outsideRelease,true);
     this.intents.clear(); this.element.remove(); this.popup.removeAttribute('data-room-sheet');
     this.popup.style.removeProperty('--taylors3d-room-sheet-height');
+    this.popup.removeAttribute('data-room-sheet-short');
   }
 }

@@ -53,6 +53,7 @@ describe('Security controls in the actual layout editor', () => {
   });
   it('discards drafts on tab exit, reset and detach while retaining the reusable editor', () => {
     const { card, edit, click, newDraft, security } = setup(); newDraft(); click('tab', '[data-id="rooms"]');
+    expect(edit.tab).toBe('security'); expect(edit._securityEditor.dirty).toBe(true); click('draft-leave-discard');
     expect(edit._securityEditor.draft).toBeNull(); expect(card._layout.security_bindings).toBeUndefined();
     newDraft(); edit.cancelHistoryGestures(); expect(edit._securityEditor.draft).toBeNull();
     security(); click('sec-add'); edit.detach(); expect(edit._securityEditor.draft).toBeNull();

@@ -67,6 +67,15 @@ async function clickPanelText(page, caption) {
     if (button) button.click(); return !!button;
   }, caption);
 }
+async function confirmHouseReplacement(page) {
+  // Initial uploads remain immediate. Existing uploaded bytes require the
+  // same deliberate native confirmation that a household user now sees.
+  const handle = await page.evaluateHandle(() => document.querySelector('taylors3d-card').shadowRoot.querySelector('[data-act="model-replace-confirm"]'));
+  try {
+    const button = handle.asElement();
+    if (button) { await button.evaluate((node) => node.scrollIntoView({ block: 'center' })); await button.click(); }
+  } finally { await handle.dispose(); }
+}
 // move the camera and wait for the occlusion pass that follows it to finish (no fixed sleeps)
 const camAndOcclusion = async (page, cam) => {
   const before = await page.evaluate(`${card}._view.stats.occDone`);
@@ -988,6 +997,7 @@ try {
   const upload = async (file) => {
     const input = await page.evaluateHandle(panel('[data-field=model-file]'));
     await input.uploadFile(file);
+    await confirmHouseReplacement(page);
   };
   const bad = path.join(root, 'screenshots', 'not-a-model.glb');
   fs.writeFileSync(bad, 'hello');
@@ -1255,6 +1265,7 @@ try {
     await clickText('Model');
     const input = await page.evaluateHandle(`${sr}.querySelector('.panel [data-field=model-file]')`);
     await input.uploadFile(file);
+    await confirmHouseReplacement(page);
   };
   const chip = async (id) => { await page.evaluate(`${sr}.querySelector('.chip[data-view=${id}]').click()`); await sleep(400); };
   const chipIds = () => page.evaluate(`[...${sr}.querySelectorAll('.chip')].map((b) => b.dataset.view)`);
@@ -1651,6 +1662,7 @@ try {
   await clickText('Model');
   const input = await page.evaluateHandle(`${sr}.querySelector('.panel [data-field=model-file]')`);
   await input.uploadFile(path.join(root, 'demo', 'house.glb'));
+  await confirmHouseReplacement(page);
   await page.waitForFunction(`${card}._view.model && ${card}._view.modelManifest().levels.length === 4`, { timeout: 10000 });
   await sleep(400);
   await page.evaluate(`${sr}.querySelector('.chip[data-view=ground]').click()`);
@@ -1833,6 +1845,7 @@ try {
   await clickEditorTab(page, 'model');
   const inp = await page.evaluateHandle(`${card}.shadowRoot.querySelector("[data-field=model-file]")`);
   await inp.uploadFile(path.join(root, 'demo/house.glb'));
+  await confirmHouseReplacement(page);
   await page.waitForFunction(`!!${card}._view.model`, { timeout: 20000 });
   await sleep(800);
   const body = `${card}.shadowRoot.querySelector(".panel .tab-body")`;
@@ -2025,6 +2038,7 @@ if (process.env.REAL_MODEL) {
     await sleep(150);
     const input = await page.evaluateHandle(`${card}.shadowRoot.querySelector('.panel [data-field=model-file]')`);
     await input.uploadFile(process.env.REAL_MODEL);
+    await confirmHouseReplacement(page);
     await page.waitForFunction(`!!${card}._view.model`, { timeout: 60000 });
     await sleep(500);
     await page.evaluate(`${card}.shadowRoot.querySelector('button.edit').click()`); // leave edit mode
@@ -2060,6 +2074,7 @@ if (process.env.USER_MODEL) {
       const input = await page.evaluateHandle(`${card}.shadowRoot.querySelector('.panel [data-field=model-file]')`);
       const t0 = Date.now();
       await input.uploadFile(process.env.USER_MODEL);
+      await confirmHouseReplacement(page);
       await page.waitForFunction(`!!${card}._view.model && !!${card}._view.mergeStats`, { timeout: 120000 });
       const ms = Date.now() - t0;
       await sleep(1500);

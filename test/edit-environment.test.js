@@ -55,9 +55,10 @@ describe('Environment controls in the actual layout editor', () => {
     expect(edit.panel.querySelector('[data-field="env-weather-intensity"]')).toBe(input); expect(document.activeElement).toBe(input);
     expect(card._commit).not.toHaveBeenCalled();
   });
-  it('leaving the tab discards weather drafts and keeps saved settings', () => {
+  it('leaving a dirty tab keeps the work until discard is chosen', () => {
     const { card, edit, click, change, environment } = setup(); environment(); change('enabled', true); change('entity', 'weather.home');
-    click('tab', '[data-id="rooms"]'); expect(edit._weatherEditor.draft).toBeNull(); expect(card._layout.weather).toBeUndefined();
+    click('tab', '[data-id="rooms"]'); expect(edit.tab).toBe('environment'); expect(edit._weatherEditor.dirty).toBe(true);
+    click('draft-leave-discard'); expect(edit._weatherEditor.draft).toBeNull(); expect(card._layout.weather).toBeUndefined();
     environment(); expect(edit.panel.querySelector('[data-field="env-weather-enabled"]').checked).toBe(false); expect(card._commit).not.toHaveBeenCalled();
   });
   it('resetting context, detach and reattach discard weather drafts without disposing the reusable editor', () => {

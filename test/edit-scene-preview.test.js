@@ -74,6 +74,7 @@ describe('Scenes in the actual layout editor', () => {
   it('removes an active draft preview on tab leave and discards only unsaved visual settings', () => {
     const original = settings(); const { card, edit, scenes, change, click, field } = setup({ layout: { scene_previews: original } }); scenes();
     change('label', 'Unfinished'); click('scene-preview-preview'); click('tab', '[data-id="rooms"]');
+    expect(edit.tab).toBe('scenes'); expect(edit._scenePreviewEditor.dirty).toBe(true); click('draft-leave-discard');
     expect(edit._scenePreviewEditor.draft).toBeNull(); expect(card.previewSceneLights.mock.lastCall[0]).toBeNull();
     scenes(); expect(field('label').value).toBe('Movie'); expect(card._layout.scene_previews).toEqual(original);
     expect(card._commit).not.toHaveBeenCalled(); expect(card._hass.callService).not.toHaveBeenCalled();

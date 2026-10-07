@@ -2,6 +2,96 @@
 // Rooms, devices, mower and model are edited on the card itself (its Edit button).
 import { ImportedSourceControls } from './imported-source-controls.js';
 import { localize, localeInfo } from './localization.js';
+import { TAYLORS3D_THEME_PALETTES } from './taylors3d-theme.js';
+import { HouseNavigationEditor } from './house-navigation-editor.js';
+
+// This editor deliberately retains its light DOM/native HA form boundary. Every
+// selector is scoped to our element; colours do not change the HA dialog or dashboard.
+const paletteDeclarations = (palette) => ['background', 'surface', 'raised', 'text', 'muted', 'divider']
+  .map((key) => `--taylors3d-editor-${key}:${palette[key]};`).join('\n');
+const EDITOR_STYLE = `
+taylors3d-card-editor {
+  --taylors3d-editor-background:var(--primary-background-color,#f4f4f5);
+  --taylors3d-editor-surface:var(--ha-card-background,var(--card-background-color,#fff));
+  --taylors3d-editor-raised:var(--secondary-background-color,#ededee);
+  --taylors3d-editor-text:var(--primary-text-color,#171719);
+  --taylors3d-editor-muted:var(--secondary-text-color,#58585e);
+  --taylors3d-editor-divider:var(--divider-color,#d3d3d6);
+  display:block; box-sizing:border-box; padding:20px; border-radius:24px;
+  background:var(--taylors3d-editor-background); color:var(--taylors3d-editor-text);
+  font:400 14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+taylors3d-card-editor[data-taylors3d-editor-scheme="dark"] {
+  ${paletteDeclarations(TAYLORS3D_THEME_PALETTES.dark)}
+  color-scheme:dark;
+}
+taylors3d-card-editor[data-taylors3d-editor-scheme="light"] {
+  ${paletteDeclarations(TAYLORS3D_THEME_PALETTES.light)}
+  color-scheme:light;
+}
+taylors3d-card-editor:is([data-taylors3d-editor-scheme="dark"],[data-taylors3d-editor-scheme="light"]) {
+  --primary-text-color:var(--taylors3d-editor-text);
+  --secondary-text-color:var(--taylors3d-editor-muted);
+  --primary-color:var(--taylors3d-editor-text);
+  --text-primary-color:var(--taylors3d-editor-background);
+  --card-background-color:var(--taylors3d-editor-surface);
+  --ha-card-background:var(--taylors3d-editor-surface);
+  --secondary-background-color:var(--taylors3d-editor-raised);
+  --divider-color:var(--taylors3d-editor-divider);
+  --mdc-theme-primary:var(--taylors3d-editor-text);
+  --mdc-theme-on-primary:var(--taylors3d-editor-background);
+  --mdc-theme-surface:var(--taylors3d-editor-surface);
+  --mdc-theme-on-surface:var(--taylors3d-editor-text);
+  --mdc-text-field-fill-color:var(--taylors3d-editor-raised);
+  --mdc-text-field-ink-color:var(--taylors3d-editor-text);
+  --mdc-text-field-label-ink-color:var(--taylors3d-editor-muted);
+}
+taylors3d-card-editor ha-form { display:block; font:inherit; }
+taylors3d-card-editor :is(.bubble-control-order,.imported-source-controls,.house-navigation-order) {
+  box-sizing:border-box; padding:16px; border:1px solid var(--taylors3d-editor-divider);
+  border-radius:20px; background:var(--taylors3d-editor-surface);
+}
+taylors3d-card-editor :is(.bubble-control-order,.imported-source-controls,.house-navigation-order) h3 {
+  color:var(--taylors3d-editor-text); font-size:15px; font-weight:600;
+}
+taylors3d-card-editor :is(.bubble-control-order,.imported-source-controls,.house-navigation-order) :is(p,span,summary) {
+  overflow-wrap:anywhere;
+}
+taylors3d-card-editor :is(.bubble-control-order,.imported-source-controls,.house-navigation-order) button {
+  box-sizing:border-box; min-height:44px; min-width:44px; max-width:100%;
+  border:1px solid var(--taylors3d-editor-text); border-radius:14px;
+  padding:10px 14px; font:inherit; font-size:13px; font-weight:600; line-height:1.35;
+  color:var(--taylors3d-editor-background); background:var(--taylors3d-editor-text);
+  white-space:normal; overflow-wrap:anywhere; cursor:pointer;
+}
+taylors3d-card-editor :is(.bubble-control-order,.imported-source-controls,.house-navigation-order) button:disabled {
+  opacity:1; color:var(--taylors3d-editor-muted); background:var(--taylors3d-editor-raised);
+  border-color:var(--taylors3d-editor-divider); border-style:dashed; cursor:default;
+}
+taylors3d-card-editor :is(button,summary):focus-visible {
+  outline:3px solid var(--taylors3d-editor-text); outline-offset:3px;
+}
+taylors3d-card-editor .imported-source-controls pre {
+  padding:12px; border-radius:12px; color:var(--taylors3d-editor-text);
+  background:var(--taylors3d-editor-raised); border:1px solid var(--taylors3d-editor-divider);
+}
+taylors3d-card-editor .house-nav-options{list-style:none;margin:12px 0;padding:0}
+taylors3d-card-editor .house-nav-options li{display:grid;grid-template-columns:minmax(0,1fr) auto 44px 44px;gap:6px;align-items:center;margin:6px 0}
+taylors3d-card-editor .house-nav-options button{padding:8px;min-width:44px}
+taylors3d-card-editor .house-navigation-order[hidden]{display:none}
+taylors3d-card-editor .house-navigation-order p{color:var(--taylors3d-editor-muted);font-size:13px}
+@media (max-width:480px) {
+  taylors3d-card-editor { padding:12px; }
+  taylors3d-card-editor :is(.bubble-control-order,.imported-source-controls) { padding:12px; }
+}
+@media (forced-colors:active) {
+  taylors3d-card-editor :is(button,summary):focus-visible { outline-color:Highlight; }
+  taylors3d-card-editor :is(.bubble-control-order,.imported-source-controls) button {
+    color:ButtonText; background:ButtonFace; border-color:ButtonText;
+  }
+  taylors3d-card-editor :is(.bubble-control-order,.imported-source-controls) button:disabled { color:GrayText; }
+}
+`;
 
 const BUBBLE_CONTROLS = ['mode', 'reset', 'section', 'daynight', 'minimap', 'edit'];
 const DEFAULTS = {
@@ -9,18 +99,21 @@ const DEFAULTS = {
   occlusion: true, lights: 'auto', merge: true, sky_bodies: true,
   show_bubble_bar: true, bubble_bar_controls: BUBBLE_CONTROLS, mini_map: true, mini_map_size: 180,
   mini_map_position: 'top-right', device_tap_action: 'popup', control_panel: 'right',
-  layout_style: 'original', house_colour_scheme: 'ha',
+  layout_style: 'original', house_colour_scheme: 'ha', marker_display: 'all',
 };
 
 export const SCHEMA = [
   { name: 'height', selector: { text: {} } },
   {
-    type: 'expandable', name: '', title: 'House appearance', schema: [
+    type: 'expandable', name: '', title: 'Appearance', schema: [
       { name: 'layout_style', selector: { select: { mode: 'dropdown', options: [
         { value: 'original', label: 'Standard card' }, { value: 'house', label: 'House with navigation and room panels' },
       ] } } },
       { name: 'house_colour_scheme', selector: { select: { mode: 'dropdown', options: [
-        { value: 'ha', label: 'Home Assistant colours' }, { value: 'dark', label: 'Dark graphite' }, { value: 'light', label: 'Light' },
+        { value: 'ha', label: 'Home Assistant colours' }, { value: 'dark', label: 'Dark glass' }, { value: 'light', label: 'Light glass' },
+      ] } } },
+      { name: 'marker_display', selector: { select: { mode: 'dropdown', options: [
+        { value: 'rooms', label: 'Rooms' }, { value: 'important', label: 'Important activity' }, { value: 'all', label: 'All devices' },
       ] } } },
     ],
   },
@@ -41,7 +134,7 @@ export const SCHEMA = [
         { value: 'popup', label: 'Open device controls' }, { value: 'toggle', label: 'Quick toggle' },
       ] } } },
       { name: 'control_panel', selector: { select: { mode: 'dropdown', options: [
-        { value: 'right', label: 'Right-hand panel' }, { value: 'popup', label: 'Popup beside the device' },
+        { value: 'right', label: 'Overlay panel' }, { value: 'popup', label: 'Popup beside the device' },
       ] } } },
     ],
   },
@@ -85,7 +178,7 @@ export const SCHEMA = [
 ];
 
 const TITLE_KEYS = new Map([
-  ['House appearance', 'house'], ['Navigation and device controls', 'navigation'],
+  ['Appearance', 'house'], ['Navigation and device controls', 'navigation'],
   ['Automation target', 'automation'], ['Model from a URL (instead of uploading in the card)', 'model'],
 ]);
 const translatedSchemas = new Map();
@@ -114,7 +207,8 @@ function schemaFor(hass) {
 const LABELS = {
   height: 'Card height',
   layout_style: 'Card layout',
-  house_colour_scheme: 'House colours',
+  house_colour_scheme: 'Card colours',
+  marker_display: 'Show on house',
   view: 'Start view',
   view_id: 'Starting named view (exact ID)',
   floor: 'Start floor',
@@ -148,8 +242,9 @@ const LABELS = {
 const HELPERS = {
   height: 'CSS height, e.g. 520px or 60vh',
   view_id: 'Use the exact view ID shown in Edit → Views, such as front-door or garden. Leave empty to use the start floor or the first available view. This chooses the opening view; its saved camera is edited under Views. Press Save in Home Assistant’s card editor to apply card settings.',
-  layout_style: 'House adds a header and navigation, right-hand room controls on wide cards and a bottom sheet on phones. Existing cards keep their standard layout until you choose House.',
-  house_colour_scheme: 'Applies to the House layout. Dark graphite uses amber lights and teal navigation. Use Settings → House in the card to choose the real weather, people and alarm sources.',
+  layout_style: 'House adds a header and navigation. Room controls float over the house; phones use a bottom sheet. Opening controls keeps the house size unchanged. Existing cards keep their standard layout until you choose House.',
+  house_colour_scheme: 'Dark glass and Light glass apply to both layouts. Home Assistant colours follow your dashboard theme. Only this card and its settings change. Choose weather, people and alarm sources in Edit → Appearance → House.',
+  marker_display: 'Rooms shows a room summary; choose a room for its devices. Important keeps active devices and alerts. All devices shows every visible device.',
   wall_height: 'Drawn walls only; a model is cut at the top of the storey',
   occlusion: 'With a 3D model: markers hidden by a wall from the current angle are shown faint',
   merge: 'With a 3D model: static parts of a room / layer with the same material are drawn as one (fewer draw calls). Turn off to keep every part separate.',
@@ -165,7 +260,7 @@ const HELPERS = {
   mini_map_size: 'Width in pixels, from 120 to 260.',
   mini_map_position: 'Place the mini-map in the top right or top left of the 3D view.',
   device_tap_action: 'Open device controls shows a popup first. All controls opens Home Assistant’s own options for that entity. Quick toggle changes supported devices with one tap; hold opens their controls.',
-  control_panel: 'A right-hand panel leaves the house visible beside the controls on wider screens.',
+  control_panel: 'Controls overlay the house. Opening a panel keeps the drawing size and camera unchanged; scroll inside it for more controls.',
   automation_panel: "A name such as kitchen-wall. Use the same panel name in the Taylor's 3D Select camera preset action. Give different screens different names.",
   automation_card_id: "Use a unique name if this panel has more than one Taylor's 3D card.",
 };
@@ -266,7 +361,7 @@ export class Taylors3dCardEditor extends HTMLElement {
         button.className = direction;
         button.textContent = text;
         button.disabled = direction === 'up' ? index === 0 : index === controls.length - 1;
-        button.style.cssText = `min-width: 58px; min-height: 44px; padding: 8px; border-radius: 8px; font: inherit; color: var(--primary-text-color); background: var(--secondary-background-color, var(--card-background-color)); border: 1px solid var(--divider-color); cursor: ${button.disabled ? 'default' : 'pointer'}; opacity: ${button.disabled ? 0.4 : 1};`;
+        button.style.cssText = 'min-width: 58px; min-height: 44px;';
         button.addEventListener('click', () => this._moveBubbleControl(id, delta));
         row.append(button);
       }
@@ -305,6 +400,11 @@ export class Taylors3dCardEditor extends HTMLElement {
       return;
     }
     if (!this._form) {
+      this.textContent = '';
+      const style = document.createElement('style');
+      style.dataset.taylors3dEditorStyle = '';
+      style.textContent = EDITOR_STYLE;
+      this.append(style);
       this._form = document.createElement('ha-form');
       this._form.computeLabel = (s) => localize(this._hass, `settings.label.${s.name}`, {}, LABELS[s.name] || s.name);
       this._form.computeHelper = (s) => localize(this._hass, `settings.helper.${s.name}`, {}, HELPERS[s.name] || '');
@@ -320,6 +420,11 @@ export class Taylors3dCardEditor extends HTMLElement {
       this._setupHint = hint;
       hint.style.cssText = 'margin: 16px 0 0; color: var(--secondary-text-color); font-size: 13px;';
       this.append(this._form, this._controlOrder, hint);
+      this._houseNavigationEditor = new HouseNavigationEditor(this, { getConfig: () => this._config, getHass: () => this._hass,
+        onChange: (config) => {
+          this._config = config; this._render();
+          this.dispatchEvent(new CustomEvent('config-changed', { detail: { config }, bubbles: true, composed: true }));
+        } });
       this._sourceControls = new ImportedSourceControls(this, { getConfig: () => this._config, getHass: () => this._hass,
         onChange: (config) => {
           // Exact deletions must not clean or adopt unrelated imported settings.
@@ -331,10 +436,12 @@ export class Taylors3dCardEditor extends HTMLElement {
     this._form.hass = this._hass;
     this._form.schema = schemaFor(this._hass);
     const data = { ...DEFAULTS, ...cleanConfig(this._config) };
+    this.setAttribute('data-taylors3d-editor-scheme', data.house_colour_scheme);
     this._form.data = { ...data, bubble_bar_controls: [...data.bubble_bar_controls],
       model_position_x: data.model_position?.[0] ?? 0, model_position_y: data.model_position?.[1] ?? 0,
       model_position_z: data.model_position?.[2] ?? 0 };
     this._renderControlOrder(data);
+    this._houseNavigationEditor.update();
     text(this._setupHint, localize(this._hass, 'settings.setup', {},
       'Rooms, devices, the mower and the 3D model are set up on the card itself: save, then use its Edit button.'));
     this._sourceControls.update();

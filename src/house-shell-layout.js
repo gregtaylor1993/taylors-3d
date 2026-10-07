@@ -1,12 +1,12 @@
-// Future photo layout geometry. Root must supply actual measured CSS pixels,
-// reserve this rectangle in the existing renderer and remeasure changed controls.
+// House layout geometry. Root supplies actual measured CSS pixels; permanent
+// navigation reserves drawing space while temporary controls overlay it.
 // This pure planner creates no DOM and does not read the browser/window size.
 export const HOUSE_SHELL_LIMITS = Object.freeze({ railAt: 960, sheetBelow: 740, rail: 88,
   gap: 16, sheet: 320, minimumSceneHeight: 240 });
 const pixels = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1e6;
 
 /** height is the configured stage height before any adaptive min-height, not a
- * previous expanded DOM height. That distinction lets a closed sheet shrink back.
+ * previous expanded DOM height. Opening controls cannot alter this baseline.
  * hidden controls contribute zero measured size. Width is the actual card stage.
  */
 export function planHouseShell({ width = 0, height = 0, summaryHeight = 0, toolbarHeight = 0,
@@ -24,10 +24,10 @@ export function planHouseShell({ width = 0, height = 0, summaryHeight = 0, toolb
   const navigationReserve = mode === 'bottom' && navigationHeight ? navigationHeight + limits.gap : 0;
   const toolbarReserve = toolbarHeight ? toolbarHeight + limits.gap : 0;
   const summaryReserve = editing ? 0 : summaryHeight;
-  const sheetReserve = controlsOpen && !editing && width < limits.sheetBelow && controlsHeight
-    ? controlsHeight + limits.gap : 0;
-  const controlsReserve = controlsOpen && !editing && width >= limits.sheetBelow && controlsWidth
-    ? Math.min(controlsWidth, width * .4) + limits.gap : 0;
+  // Room/device controls overlay the existing drawing. Opening or resizing them
+  // must never change the scene rectangle, camera framing or card height.
+  const sheetReserve = 0;
+  const controlsReserve = 0;
   const bottom = toolbarReserve + navigationReserve + sheetReserve;
   const stageHeight = Math.max(height, summaryReserve + bottom + limits.minimumSceneHeight);
   return { valid: true, mode, stageHeight, diagnostics: [], summaryReserve, railReserve, navigationReserve,

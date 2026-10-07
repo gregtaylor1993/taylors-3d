@@ -41,7 +41,7 @@ function snapshot(raw) {
     const buttons = field(rawBar, 'buttons');
     const dock = field(rawBar, 'dock'), selected = field(rawBar, 'selected');
     if (!plain(rawBar) || !id(bar.id) || barIds.has(bar.id) || !labelText(bar.label)
-      || !['pills', 'tiles'].includes(bar.style) || !['bottom', 'room'].includes(bar.placement)
+      || !['pills', 'tiles'].includes(bar.style) || !['bottom', 'left', 'room'].includes(bar.placement)
       || bar.placement === 'room' && !reference(bar.room_id)
       || !Array.isArray(buttons) || field(buttons, 'length') > 12
       || dock !== undefined && (!plain(dock) || ![4, 5].includes(field(dock, 'limit')))
@@ -101,11 +101,18 @@ export const CUSTOM_CONTROLS_VIEW_CSS = `
 [data-custom-controls-view] .custom-controls-label, [data-custom-controls-view] .custom-controls-status { overflow-wrap: anywhere; min-width: 0; }
 [data-custom-controls-view] ha-icon { flex: 0 0 20px; width: 20px; height: 20px; --mdc-icon-size: 20px; }
 [data-custom-controls-view] .custom-controls-status { margin: 4px 2px 0; max-width: 240px; font-size: 12px; line-height: 1.4; color: var(--taylors3d-ui-muted, var(--secondary-text-color, #bec8d2)); }
+[data-custom-controls-view][data-custom-controls-placement=left]{pointer-events:auto;width:fit-content;max-width:100%;max-height:100%;min-height:0;display:flex;flex-direction:column;gap:8px}
+[data-custom-controls-view][data-custom-controls-placement=left][data-drawer-open=true]{width:100%}
+[data-custom-controls-view] .custom-controls-toggle{flex:0 0 auto;min-width:44px;min-height:44px;max-width:100%;padding:10px 14px;border:1px solid var(--taylors3d-ui-border,var(--divider-color,#35424e));border-radius:14px;background:var(--taylors3d-ui-surface,var(--card-background-color,#1d2731));color:inherit;font:inherit;font-size:13px;cursor:pointer;overflow-wrap:anywhere;text-align:start;box-shadow:0 4px 16px #0002}
+[data-custom-controls-view] .custom-controls-toggle:focus-visible{outline:3px solid var(--taylors3d-ui-focus,var(--primary-color,#51d4c4));outline-offset:3px}
+[data-custom-controls-view][data-custom-controls-placement=left] .custom-controls-bars{flex:1 1 auto;min-height:0;max-height:none;padding:14px;border:1px solid var(--taylors3d-ui-border,var(--divider-color,#35424e));border-radius:16px;background:var(--taylors3d-ui-surface,var(--card-background-color,#1d2731));box-shadow:0 6px 24px #0003;scroll-padding:8px}
+[data-custom-controls-view][data-custom-controls-placement=left] .custom-controls-buttons{flex-direction:column;align-items:stretch}
+[data-custom-controls-view][data-custom-controls-placement=left] .custom-controls-item>button{width:100%}
 @media (forced-colors: active) { [data-custom-controls-view][data-taylors3d-ui] .custom-controls-item > button[data-custom-controls-button-id][data-color] { background: ButtonFace; color: ButtonText; border-color: ButtonText; } [data-custom-controls-view] .custom-controls-item > button[data-custom-controls-button-id]:focus-visible { outline-color: Highlight; } }
 `;
 
 export class CustomControlsView {
-  constructor(parent, { getContext, onAction } = {}) {
+  constructor(parent, { getContext, onAction, placement = 'bottom' } = {}) {
     this._parent = parent;
     this._document = parent.ownerDocument;
     this._getContext = getContext;
@@ -117,6 +124,7 @@ export class CustomControlsView {
     this._disposed = false;
     this._sequence = 0;
     this._viewId = ++nextView;
+    this._left = placement === 'left'; this._drawerOpen = false;
     this.el = this._document.createElement('div');
     this.el.dataset.taylors3dUi = 'custom-controls';
     this.el.dataset.customControlsView = '';
@@ -125,7 +133,16 @@ export class CustomControlsView {
     style.textContent = CUSTOM_CONTROLS_VIEW_CSS;
     this._list = this._document.createElement('div');
     this._list.className = 'custom-controls-bars';
+    this._list.id = `custom-controls-${this._viewId}-list`;
     this.el.append(style, this._list);
+    if (this._left) {
+      this.el.dataset.customControlsPlacement = 'left';
+      this._toggle = this._document.createElement('button'); this._toggle.type = 'button';
+      this._toggle.className = 'custom-controls-toggle'; this._toggle.dataset.customControlsToggle = '';
+      this._toggle.setAttribute('aria-controls', this._list.id); this.el.insertBefore(this._toggle, this._list);
+      this._listen(this._document, 'pointerdown', (event) => this._outsideDrawer(event), true);
+      for (const type of ['pointerup', 'pointercancel', 'click']) this._listen(this._document, type, (event) => this._consumeDismiss(event), true);
+    }
     parent.append(this.el);
     this._listen(this.el, 'pointerdown', (event) => this._press(event));
     this._listen(this.el, 'pointermove', (event) => this._move(event, true));
@@ -158,11 +175,59 @@ export class CustomControlsView {
     try { return snapshot(this._getContext?.()); } catch { return null; }
   }
 
+  _setDrawer(open, restoreFocus = false) {
+    if (!this._left) return;
+    const changed = this._drawerOpen !== !!open;
+    this._drawerOpen = !!open;
+    if (changed) this._cancelAll();
+    setHidden(this._list, !this._drawerOpen);
+    setAttribute(this.el, 'data-drawer-open', this._drawerOpen);
+    setAttribute(this._toggle, 'aria-expanded', this._drawerOpen);
+    setText(this._toggle, this._caption(this._drawerOpen ? 'controls.runtime.closeActions' : 'controls.runtime.openActions', {}, this._drawerOpen ? 'Close quick actions' : 'Quick actions'));
+    if (!open && restoreFocus && this.el.isConnected && !this.el.hidden) this._toggle.focus({ preventScroll: true });
+  }
+
+  closeDrawer() { this._setDrawer(false); }
+
+  _outsideDrawer(event) {
+    this._dismissPointer = null;
+    if (!this._drawerOpen || event.composedPath().includes(this.el)) return;
+    const stage = this._parent.closest?.('.stage'), path = event.composedPath();
+    // An outside house tap dismisses only. Deliberate toolbar/menu/editor
+    // controls remain usable, and no new gesture reaches the 3D canvas.
+    const houseSurface = stage && path.includes(stage) && !path.some((node) => node.matches?.('button,input,select,textarea,summary,a,.toolbar,[data-house-navigation],[data-custom-controls-view]'));
+    this._setDrawer(false);
+    if (houseSurface) {
+      this._dismissPointer = { id: event.pointerId, stage };
+      event.preventDefault(); event.stopImmediatePropagation();
+    }
+  }
+
+  _consumeDismiss(event) {
+    const dismissed = this._dismissPointer;
+    if (!dismissed || !event.composedPath().includes(dismissed.stage)
+      || event.type === 'click' && event.detail === 0
+      || event.pointerId !== undefined && event.pointerId !== dismissed.id) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    if (event.type === 'click' || event.type === 'pointercancel') this._dismissPointer = null;
+  }
+
   update() {
     if (this._disposed) return;
     const context = this._read();
+    const previousContext = this._context;
     this._context = context;
+    if (this._left && (context?.contextKey !== previousContext?.contextKey || context?.suspended || !context)) this._setDrawer(false);
     const focused = this.el.getRootNode().activeElement;
+    const focusable = (node) => {
+      if (!node?.isConnected || node.disabled || !this.el.contains(node)) return false;
+      for (let ancestor = node; ancestor; ancestor = ancestor.parentElement || ancestor.getRootNode().host) {
+        if (ancestor.hidden || ancestor.inert) return false;
+      }
+      return true;
+    };
+    const previousButtons = context && !context.suspended && context.contextKey === previousContext?.contextKey && focusable(focused)
+      ? [...this.el.querySelectorAll('button')].filter(focusable) : [];
     const bars = context?.bars ?? [];
     const keepBars = new Set(), keepRows = new Set();
     for (const [barIndex, bar] of bars.entries()) {
@@ -250,7 +315,29 @@ export class CustomControlsView {
     this._order(this._list, bars.map((bar) => this._bars.get(bar.id).el));
     setAttribute(this.el, 'aria-label', this._caption('controls.runtime.aria', {}, 'Custom controls'));
     setHidden(this.el, bars.every((bar) => bar.buttons.every((button) => button.visible === false)) || !!context?.suspended);
-    if (focused && this.el.contains(focused) && !focused.disabled && focused !== this.el.getRootNode().activeElement) focused.focus({ preventScroll: true });
+    if (this._left) {
+      setText(this._toggle, this._caption(this._drawerOpen ? 'controls.runtime.closeActions' : 'controls.runtime.openActions', {}, this._drawerOpen ? 'Close quick actions' : 'Quick actions'));
+      this._toggle.disabled = !!context?.suspended;
+      this._setDrawer(this._drawerOpen);
+    }
+    if (previousButtons.includes(focused) && !this.el.hidden && this.el.isConnected) {
+      const root = this.el.getRootNode(), current = root.activeElement, documentFocus = this._document.activeElement;
+      // A removed/hidden action can leave focus on the document. Recover only
+      // our own same-context focus; an outside control may have claimed it.
+      const lostFocus = (!current || current === this._document.body)
+        && (!documentFocus || documentFocus === this._document.body || documentFocus === root.host);
+      if (current === focused || lostFocus) {
+        const actions = [...this.el.querySelectorAll('button[data-custom-controls-button-id]')].filter(focusable);
+        const index = previousButtons.indexOf(focused);
+        const nearby = [];
+        for (let distance = 1; distance < previousButtons.length; distance++) nearby.push(previousButtons[index + distance], previousButtons[index - distance]);
+        const target = focusable(focused) ? focused
+          : nearby.find((node) => actions.includes(node)) || actions[0]
+            || [...this.el.querySelectorAll('[data-custom-controls-more]')].find(focusable)
+            || (focusable(this._toggle) ? this._toggle : null);
+        if (target && target !== current) target.focus({ preventScroll: true });
+      }
+    }
   }
 
   _order(parent, nodes) {
@@ -290,7 +377,7 @@ export class CustomControlsView {
 
   _current(row) {
     if (this._disposed || !this._context || this._context.suspended || !this.el.isConnected || this.el.parentNode !== this._parent
-      || this.el.hidden || row.el.hidden || row.section.el.hidden || this._document.hidden || row.button.disabled || !row.data.available || row.pending) return false;
+      || this.el.hidden || this._list.hidden || row.el.hidden || row.section.el.hidden || this._document.hidden || row.button.disabled || !row.data.available || row.pending) return false;
     let ancestor = this.el;
     while (ancestor) {
       if (ancestor.hidden) return false;
@@ -318,7 +405,7 @@ export class CustomControlsView {
   }
 
   _key(event) {
-    if (event.key === 'Escape') { this._cancelAll(); for (const section of this._bars.values()) if (section.open) { section.open = false; section.more?.focus({ preventScroll: true }); } this.update(); return; }
+    if (event.key === 'Escape') { this._cancelAll(); if (this._left && this._drawerOpen) { event.stopPropagation(); this._setDrawer(false, true); return; } for (const section of this._bars.values()) if (section.open) { section.open = false; section.more?.focus({ preventScroll: true }); } this.update(); return; }
     event.stopPropagation();
     this.update();
     const row = this._eventRow(event);
@@ -355,8 +442,12 @@ export class CustomControlsView {
   _click(event) {
     event.stopPropagation();
     this.update();
+    if (this._left && event.target.closest?.('[data-custom-controls-toggle]') === this._toggle) {
+      if (!this._toggle.disabled && this.el.isConnected && this.el.parentNode === this._parent && !this.el.hidden) this._setDrawer(!this._drawerOpen);
+      return;
+    }
     const nativeMore = event.target.closest?.('button[data-custom-controls-more]'), section = nativeMore && this._bars.get(nativeMore.dataset.customControlsMore);
-    if (section?.more === nativeMore && !nativeMore.disabled && this.el.isConnected && !this.el.hidden && !section.el.hidden && !nativeMore.hidden) {
+    if (section?.more === nativeMore && !nativeMore.disabled && this.el.isConnected && !this.el.hidden && !this._list.hidden && !section.el.hidden && !nativeMore.hidden) {
       section.open = !section.open; this._cancelAll(); this.update(); return;
     }
     const row = this._eventRow(event);

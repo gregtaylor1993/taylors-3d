@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parse, walk, generate } from 'css-tree';
-import { HouseNavigation, HOUSE_NAVIGATION_ITEMS, HOUSE_NAVIGATION_CSS, isHouseNavigationPath } from '../src/house-navigation.js';
+import { HouseNavigation, HOUSE_NAVIGATION_ITEMS, HOUSE_NAVIGATION_CSS, isHouseNavigationPath, resolveHouseNavigationItems } from '../src/house-navigation.js';
 
 const instances = [];
 const item = (id = 'lights', patch = {}) => ({ id, label: `Actual ${id} controls`, icon: 'mdi:lightbulb', action: { type: 'category', id }, ...patch });
@@ -219,6 +219,53 @@ describe('scoped responsive/accessibility CSS contract (not a browser geometry p
     expect(HOUSE_NAVIGATION_CSS).toContain('overflow-x:auto'); expect(HOUSE_NAVIGATION_CSS).toContain('data-house-navigation-layout="rail"');
     expect(HOUSE_NAVIGATION_CSS).toContain('button:focus-visible'); expect(HOUSE_NAVIGATION_CSS).toContain('forced-colors:active');
     expect(HOUSE_NAVIGATION_CSS).toContain('[hidden]{display:none!important}');
-    expect(HOUSE_NAVIGATION_CSS).not.toMatch(/url\(|@import|@media\s*\([^)]*width|position:absolute|[;{]\s*content:/);
+    expect(HOUSE_NAVIGATION_CSS).not.toMatch(/url\(|@import|@media\s*\([^)]*width|[;{]\s*content:/);
+    expect(HOUSE_NAVIGATION_CSS).toContain('[data-house-navigation-overflow]{position:absolute');
+  });
+});
+
+describe('compact House menu and saved ordering', () => {
+  it('reads known sections without executing or mutating imported extras, and always retains House and Settings', () => {
+    const raw = { order: ['cars', 'future', 'lights', 'cars'], hidden: ['house', 'settings', 'security'], future: { action: 'never' } };
+    const original = JSON.stringify(raw), items = resolveHouseNavigationItems(raw, { language: 'en' });
+    expect(items.map((item) => item.id)).toEqual(['house', 'cars', 'lights', 'security', 'media', 'climate', 'settings']);
+    expect(items.filter((item) => item.hidden).map((item) => item.id)).toEqual(['security']);
+    expect(JSON.stringify(raw)).toBe(original);
+  });
+  it.each([320, 390])('keeps 3/4 favourite sections and a labelled More at %spx, preserving every category', (width) => {
+    const f = fixture(); f.nav.setLayout('bottom', width);
+    expect(f.nav.items.querySelectorAll('[data-house-navigation-id]')).toHaveLength(width < 390 ? 3 : 4);
+    expect(f.nav.more.textContent).toBe('More'); expect(f.nav.overflow.hidden).toBe(true);
+    const house = f.nav.items.querySelector('[data-house-navigation-id="house"]');
+    expect(house.textContent).toBe('House'); expect(house.getAttribute('aria-label')).toBe('House / 3D');
+    expect(f.nav.element.querySelectorAll('[data-house-navigation-id]')).toHaveLength(7);
+    f.nav.more.click(); expect(f.nav.overflow.hidden).toBe(false);
+    const settings = f.nav.overflow.querySelector('[data-house-navigation-id="settings"]'); settings.click();
+    expect(f.callback).toHaveBeenCalledExactlyOnceWith({ type: 'category', id: 'settings' }, expect.objectContaining({ id: 'settings' }));
+    expect(f.nav.overflow.hidden).toBe(true); expect(document.activeElement).toBe(f.nav.more);
+  });
+  it('retains an open menu and its focused button on ordinary readings, and closes with Escape or a new layout', () => {
+    const f = fixture(); f.nav.setLayout('bottom', 320); f.nav.more.click();
+    const focused = document.activeElement;
+    f.nav.update({ items: HOUSE_NAVIGATION_ITEMS.map((item) => ({ ...item })) }); f.nav.setLayout('bottom', 320);
+    expect(f.nav._open).toBe(true); expect(document.activeElement).toBe(focused);
+    key(focused, 'keydown', 'Escape'); expect(f.nav._open).toBe(false); expect(document.activeElement).toBe(f.nav.more);
+    f.nav.more.click(); f.nav.setLayout('rail', 1200); expect(f.nav._open).toBe(false);
+    expect(f.nav.items.querySelectorAll('[data-house-navigation-id]')).toHaveLength(7); expect(f.nav.more.hidden).toBe(true);
+  });
+  it('dismisses an outside tap over the house without forwarding its pointer or click to a device', () => {
+    const f = fixture(); const device = document.createElement('button'); f.host.append(device);
+    const action = vi.fn(); device.addEventListener('pointerdown', action); device.addEventListener('click', action);
+    f.nav.setLayout('bottom', 320); f.nav.more.click(); pointer(device, 'pointerdown'); device.click();
+    expect(f.nav._open).toBe(false); expect(action).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(f.nav.more);
+    pointer(device, 'pointerdown'); device.click(); expect(action).toHaveBeenCalledTimes(2);
+  });
+  it('does not let a closed overflow or old held gesture act after a resize', () => {
+    const f = fixture(); f.nav.setLayout('bottom', 320);
+    const climate = f.nav.overflow.querySelector('[data-house-navigation-id="climate"]'); climate.click(); expect(f.callback).not.toHaveBeenCalled();
+    f.nav.more.click(); pointer(climate, 'pointerdown'); f.nav.setLayout('rail', 1200); pointer(climate, 'pointerup'); climate.click();
+    expect(f.callback).not.toHaveBeenCalled();
+    press(climate); expect(f.callback).toHaveBeenCalledOnce();
   });
 });

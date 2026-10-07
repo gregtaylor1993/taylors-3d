@@ -80,6 +80,11 @@ export const EDITOR_NAVIGATION_STYLES = `
   .panel .editor-setup a { display:inline-flex; align-items:center; min-height:44px; color:var(--primary-text-color); text-decoration:underline; }
   .panel :is(.editor-nav,.editor-advanced) :is(button,summary):focus-visible, .panel .editor-setup :is(button,a):focus-visible { outline:3px solid var(--primary-color); outline-offset:2px; }
   .panel .editor-setup button:disabled { opacity:1; color:var(--secondary-text-color); border-style:dashed; }
+  .panel .editor-leave-review { flex:none; border:1px solid var(--divider-color); border-radius:12px; margin:8px 12px; padding:12px; color:var(--primary-text-color); background:var(--card-background-color); }
+  .panel .editor-leave-review p { font-size:13px; line-height:1.45; margin:8px 0; overflow-wrap:anywhere; }
+  .panel .editor-leave-review .row { display:flex; flex-wrap:wrap; gap:8px; }
+  .panel .editor-leave-review button { min-height:44px; white-space:normal; overflow-wrap:anywhere; }
+  .panel .editor-leave-review button:focus-visible { outline:3px solid var(--primary-color); outline-offset:2px; }
   .panel [data-setup-upload] { box-sizing:border-box; min-height:44px; display:inline-flex; align-items:center; cursor:pointer; }
   .panel [data-setup-upload]:focus-visible { outline:3px solid var(--primary-color); outline-offset:2px; }
   @container (max-width:640px) {
@@ -156,7 +161,7 @@ export class EditorNavigation {
       && token.context.every((value, index) => value === this.context()[index]) && [token.layout, token.next].includes(this.card._layout)
       && (state.modelReady || this.skippedModel) && state.roomsReady && (state.controlsReady || this.skippedControls) && !state.draftsOpen;
   }
-  press(button) { if (!button?.dataset?.act?.startsWith('setup-') && !button?.dataset?.act?.startsWith('editor-')) return;
+  press(button) { if (!/^(setup-|editor-|draft-leave-|model-replace-)/.test(button?.dataset?.act || '')) return;
     this.observe(); this._held.set(button, { epoch: this._epoch, context: this.context(), layout: this.card._layout }); this._poisoned.delete(button); }
   cancelPress(button) { if (button && this._held.has(button)) this._poisoned.add(button); }
   allowed(button) {
@@ -244,6 +249,7 @@ export class EditorNavigation {
   }
   update(root) {
     this.observe();
+    this.edit._reviewCurrent?.(); this.edit._syncLeavePrompt?.();
     for (const node of root.querySelectorAll('[data-editor-text]')) node.textContent = this.text(node.dataset.editorText);
     for (const node of root.querySelectorAll('[data-editor-option]')) node.textContent = this.text(node.dataset.editorOption);
     const start = root.querySelector('[data-act="setup-start"]'); if (start) start.disabled = !this.canEdit() || this.saveBusy;

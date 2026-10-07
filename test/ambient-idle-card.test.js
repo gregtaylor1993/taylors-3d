@@ -126,7 +126,7 @@ describe('idle mode in the actual card', () => {
     f.tick(11000); expect(f.view.beginAmbientCamera).toHaveBeenCalledOnce();
   });
 
-  it.each(['editing', 'offscreen', 'page hidden', 'loading', 'popup', 'room panel', 'scene preview', 'alerts', 'top', 'section',
+  it.each(['editing', 'offscreen', 'page hidden', 'loading', 'popup', 'room panel', 'quick actions', 'scene preview', 'alerts', 'top', 'section',
     'flight', 'model motion', 'reduced motion', 'focus lost', 'disconnected'])('stops immediately for %s and requires a full delay on recovery', (kind) => {
     const f = fixture(); const active = f.start();
     const change = (value) => {
@@ -137,6 +137,7 @@ describe('idle mode in the actual card', () => {
         case 'loading': f.card._loading = value; break;
         case 'popup': f.card._popup.isOpen = value; break;
         case 'room panel': f.card._devicePopup.isOpen = value; break;
+        case 'quick actions': f.card._customControlsLeftView = { _drawerOpen: value }; break;
         case 'scene preview': f.card._lightPreview = value ? new Map() : null; break;
         case 'alerts': f.card._alertData = { stats: { active: value ? 1 : 0, unplaced: value ? 1 : 0 } }; break;
         case 'top': f.card._mode = f.view.mode = value ? 'top' : '3d'; break;

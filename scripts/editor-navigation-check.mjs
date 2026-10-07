@@ -40,7 +40,7 @@ const snapshot = (page) => page.evaluate(() => {
 async function geometry(page, name) {
   const data = await page.evaluate(() => {
     const card = document.querySelector('taylors3d-card'), panel = card._edit.panel;
-    const controls = [...panel.querySelectorAll('[data-editor-navigation] button,[data-editor-navigation] select,[data-editor-advanced] button,[data-editor-advanced] summary,[data-editor-setup] button,[data-editor-setup] a,[data-setup-upload]')]
+    const controls = [...panel.querySelectorAll('[data-editor-navigation] button,[data-editor-navigation] select,[data-editor-advanced] button,[data-editor-advanced] summary,[data-editor-setup] button,[data-editor-setup] a,[data-setup-upload],[data-editor-leave] button,[data-model-replacement] button')]
       .filter((node) => node.getClientRects().length && (!node.closest('details:not([open])') || node.tagName === 'SUMMARY'));
     return { width: innerWidth, document: document.documentElement.scrollWidth, panelWidth: panel.clientWidth, panelScroll: panel.scrollWidth,
       controls: controls.length, tooSmall: controls.filter((node) => { const rect = node.getBoundingClientRect(); return rect.width < 43.9 || rect.height < 43.9; }).map((node) => ({ id: node.dataset.act || node.textContent, width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height })),
@@ -94,6 +94,29 @@ try {
       const quiet = await snapshot(page);
       check('group and disclosure navigation never calls devices or writes the layout', quiet.calls === before.calls && quiet.commits === before.commits && quiet.writes === before.writes && quiet.renderer);
 
+      // Normal editing now reviews unfinished drafts before any deliberate
+      // leave. Use native dropdown, keyboard and pointer paths in both builds.
+      await click(page, action('custom-controls-add-bar')); await click(page, action('custom-controls-add-button'));
+      const draftBefore = await snapshot(page); await select(page, '[data-field="editor-group"]', 'appearance'); state = await snapshot(page);
+      check('native group change keeps a dirty draft and offers Save, Discard and Stay', state.tab === 'controls' && state.setup.draftsOpen
+        && await page.evaluate(() => !!document.querySelector('taylors3d-card').shadowRoot.querySelector('[data-editor-leave]'))
+        && state.commits === draftBefore.commits && state.writes === draftBefore.writes && state.calls === draftBefore.calls);
+      await geometry(page, '320px draft leave review'); await keyboard(page, action('draft-leave-save')); state = await snapshot(page);
+      check('invalid quick-action settings remain editable after Save and continue', state.tab === 'controls' && state.setup.draftsOpen && state.commits === draftBefore.commits
+        && await page.evaluate(() => document.querySelector('taylors3d-card').shadowRoot.querySelector('[data-editor-leave]').textContent.includes('Some settings need attention')));
+      await keyboard(page, action('draft-leave-stay')); state = await snapshot(page);
+      check('Stay keeps the actual unfinished builder without saving or operating a device', state.tab === 'controls' && state.setup.draftsOpen && state.writes === draftBefore.writes && state.calls === draftBefore.calls);
+      await select(page, '[data-field="editor-group"]', 'appearance'); await click(page, action('draft-leave-discard')); state = await snapshot(page);
+      check('deliberate Discard reaches Appearance and preserves the previously saved layout', state.tab === 'house' && equal(state.layout, draftBefore.layout) && state.calls === draftBefore.calls);
+      await select(page, '[data-field="editor-group"]', 'controls'); await click(page, action('custom-controls-add-bar'));
+      await click(page, '[data-bubble="edit"]'); state = await snapshot(page);
+      check('Done reviews a dirty draft before editor teardown', state.editing && state.tab === 'controls' && state.setup.draftsOpen);
+      await keyboard(page, action('draft-leave-save'));
+      await page.waitForFunction(() => document.querySelector('taylors3d-card')._editing === false, { timeout: 10000 }); state = await snapshot(page);
+      check('Save and continue persists the real layout once before closing Edit', !state.editing && state.layout.custom_controls?.bars.length === 1
+        && state.saved.custom_controls?.bars.length === 1 && state.commits === draftBefore.commits + 1 && state.writes === draftBefore.writes + 1 && state.calls === draftBefore.calls);
+      await click(page, '[data-bubble="edit"]');
+
       // First-run layout: use the real root commit/model-loader, not fake DOM.
       await click(page, '[data-bubble="edit"]'); await page.evaluate(() => {
         const card = document.querySelector('taylors3d-card'), fixture = window.roomActionsFixture;
@@ -104,7 +127,7 @@ try {
             fixture.uploadPosts++; const file = options.body.get('file'), bytes = await file.arrayBuffer();
             const header = new Uint8Array(bytes, 0, Math.min(8, bytes.byteLength));
             if (String.fromCharCode(...header.slice(0, 4)) !== 'glTF' || header[4] !== 2) return new Response(JSON.stringify({ message: 'Simulated invalid GLB' }), { status: 400 });
-            return new Response(JSON.stringify({ version: 'guided-native', name: file.name, size: bytes.byteLength }), { status: 200 });
+            return new Response(JSON.stringify({ version: `guided-native-${fixture.uploadPosts}`, name: file.name, size: bytes.byteLength }), { status: 200 });
           }
           return original(url, options);
         } };
@@ -131,6 +154,37 @@ try {
       const chooser = await chooserWait; await chooser.accept([file]);
       await page.waitForFunction(() => document.querySelector('taylors3d-card')._view?.model && !document.querySelector('taylors3d-card')._customControlsModelLoad, { timeout: 30000 }); await ready(page);
       state = await snapshot(page); check('native keyboard file choice uploads one real GLB and loads actual geometry', state.model && state.uploadPosts === uploadBefore + 1 && state.layout.model.name === 'editor-navigation-simulated.glb' && state.setup.modelReady);
+      const originalHouse = await snapshot(page);
+      const replacementChooserWait = page.waitForFileChooser(); await keyboard(page, '[data-setup-upload]', 'Enter'); await (await replacementChooserWait).accept([file]); await frames(page);
+      state = await snapshot(page);
+      check('choosing a replacement opens readable review before any upload or layout write', state.uploadPosts === originalHouse.uploadPosts && equal(state.layout, originalHouse.layout)
+        && state.commits === originalHouse.commits && state.calls === originalHouse.calls
+        && await page.evaluate(() => document.querySelector('taylors3d-card').shadowRoot.querySelector('[data-model-replacement]')?.textContent.includes('Undo cannot restore')));
+      await geometry(page, '320px model replacement review'); await keyboard(page, action('model-replace-cancel')); state = await snapshot(page);
+      check('Keep current house leaves its exact model and saved settings alone', state.uploadPosts === originalHouse.uploadPosts && equal(state.layout, originalHouse.layout) && state.commits === originalHouse.commits);
+      await page.evaluate(() => {
+        const card = document.querySelector('taylors3d-card'), fixture = window.roomActionsFixture, edit = card._edit;
+        fixture.replacementRoot = card._view.model.root; fixture.replacementKnownCalls = 0; fixture.originalSnapshotKnown = edit._snapshotKnown;
+        edit._snapshotKnown = function () { fixture.replacementKnownCalls++; return fixture.originalSnapshotKnown.call(this); };
+      });
+      const confirmChooserWait = page.waitForFileChooser(); await keyboard(page, '[data-setup-upload]', 'Enter'); await (await confirmChooserWait).accept([file]); await frames(page);
+      await click(page, action('model-replace-confirm'));
+      await page.waitForFunction((version) => { const card = document.querySelector('taylors3d-card'); return card._layout.model?.version !== version && !!card._view?.model && !card._loading && !card._edit.uploading && !card._edit._freshModel; }, { timeout: 30000 }, originalHouse.layout.model.version);
+      const replacementSaved = await page.evaluate(async () => await document.querySelector('taylors3d-card')._pendingLayoutSave);
+      state = await snapshot(page);
+      const replacement = await page.evaluate(() => {
+        const card = document.querySelector('taylors3d-card'), fixture = window.roomActionsFixture, manifest = card.modelBindings().manifest;
+        card._edit._snapshotKnown = fixture.originalSnapshotKnown;
+        return { knownCalls: fixture.replacementKnownCalls, newRoot: card._view.model.root !== fixture.replacementRoot,
+          known: { levels: manifest.levels.map((level) => level.id), rooms: manifest.rooms.map((room) => room.id) } };
+      });
+      check('native Replace uploads and loads the deliberate GLB once without device calls', state.uploadPosts === originalHouse.uploadPosts + 1 && state.layout.model.version !== originalHouse.layout.model.version
+        && state.model && state.calls === originalHouse.calls && replacement.newRoot && replacement.knownCalls === 1
+        && equal(state.layout.model.known, replacement.known) && state.commits === originalHouse.commits + 2
+        // LayoutStore can coalesce the upload and known-ID commits. Prove its
+        // final actual reply and exact persisted layout, not a timer-dependent count.
+        && replacementSaved === true && equal(state.saved, state.layout) && state.writes >= originalHouse.writes + 1 && state.writes <= originalHouse.writes + 2,
+        { uploadDelta: state.uploadPosts - originalHouse.uploadPosts, commitDelta: state.commits - originalHouse.commits, writeDelta: state.writes - originalHouse.writes, ...replacement });
       await keyboard(page, action('setup-next')); state = await snapshot(page);
       check('room step uses the real model floor and area pickers', state.setup.step === 1 && state.tab === 'model'
         && await page.evaluate(() => !!document.querySelector('taylors3d-card').shadowRoot.querySelector('[data-field="md-level"]') && !!document.querySelector('taylors3d-card').shadowRoot.querySelector('[data-field="md-room"]')));

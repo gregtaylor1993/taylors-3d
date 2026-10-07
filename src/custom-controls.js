@@ -114,7 +114,7 @@ export function readCustomControls(settings, hass) {
   for (const bar of bars) {
     const barId = field(bar, 'id'), buttons = field(bar, 'buttons'), placement = field(bar, 'placement');
     const detail = identifier(barId) ? { barId } : {};
-    if (!plain(bar) || !identifier(barId) || !label(field(bar, 'label')) || !['bottom', 'room'].includes(placement)
+    if (!plain(bar) || !identifier(barId) || !label(field(bar, 'label')) || !['bottom', 'left', 'room'].includes(placement)
       || placement === 'room' && !reference(field(bar, 'room_id')) || !['pills', 'tiles'].includes(field(bar, 'style')) || !Array.isArray(buttons)) {
       diagnostics.push(diagnostic(hass, 'bar', detail)); continue;
     }
@@ -243,7 +243,7 @@ const sourceIdentity = (hass, entity) => {
 export function resolveCustomControls({ hass, settings, views = [], rooms = [], placement = 'bottom', roomId = null,
   editing = false, loading = false, contextKey = '', selectedViewId, selectedRoomId } = {}) {
   const parsed = readCustomControls(settings, hass), diagnostics = [...parsed.diagnostics], current = session(hass);
-  const validContext = ['bottom', 'room'].includes(placement) && (roomId === null || reference(roomId)) && (placement !== 'room' || reference(roomId))
+  const validContext = ['bottom', 'left', 'room'].includes(placement) && (roomId === null || reference(roomId)) && (placement !== 'room' || reference(roomId))
     && typeof editing === 'boolean' && typeof loading === 'boolean' && typeof contextKey === 'string';
   if (!validContext) diagnostics.push(diagnostic(hass, 'context'));
   const selectedRoom = placement === 'room' && validContext ? exactEntry(rooms, roomId) : null;

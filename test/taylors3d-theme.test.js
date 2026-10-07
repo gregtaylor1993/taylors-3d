@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parse, walk, generate } from 'css-tree';
 import { TAYLORS3D_THEME_CSS, TAYLORS3D_THEME_PALETTES } from '../src/taylors3d-theme.js';
+const sharedHost = ':host(:is([data-taylors3d-theme="house"],[data-taylors3d-theme="glass"]))';
 
 // These tests certify the supplied paired palette and stylesheet isolation.
 // They do not claim browser geometry, native range colours, or arbitrary user
@@ -15,7 +16,7 @@ function contrast(a, b) {
   return (Math.max(first, second) + .05) / (Math.min(first, second) + .05);
 }
 
-describe.each(Object.entries(TAYLORS3D_THEME_PALETTES))('%s house palette', (_name, palette) => {
+describe.each(Object.entries(TAYLORS3D_THEME_PALETTES))('%s glass palette', (_name, palette) => {
   const textPairs = [
     ...['background', 'surface', 'raised'].flatMap((background) => [['text', background], ['muted', background]]),
     ['on-amber', 'amber'], ['amber-ink', 'amber-soft'], ['amber-ink', 'surface'],
@@ -28,6 +29,14 @@ describe.each(Object.entries(TAYLORS3D_THEME_PALETTES))('%s house palette', (_na
     expect(contrast(palette.focus, palette[background])).toBeGreaterThanOrEqual(3);
     expect(contrast(palette.border, palette[background])).toBeGreaterThanOrEqual(3);
   });
+  it.each(['#000000', '#ffffff'])('keeps frosted panel text readable over a %s scene', (scene) => {
+    const channels = palette['glass-translucent'].match(/[\d.]+/g).map(Number);
+    const backdrop = scene.slice(1).match(/../g).map((value) => parseInt(value, 16));
+    const alpha = channels[3] / 100;
+    const composited = '#' + channels.slice(0, 3).map((value, index) => Math.round(value * alpha + backdrop[index] * (1 - alpha)).toString(16).padStart(2, '0')).join('');
+    expect(contrast(palette.text, composited)).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(palette.muted, composited)).toBeGreaterThanOrEqual(4.5);
+  });
 });
 
 describe('opt-in theme stylesheet', () => {
@@ -37,7 +46,8 @@ describe('opt-in theme stylesheet', () => {
     let selectors = 0;
     walk(tree, { visit: 'Rule', enter(node) {
       for (const selector of node.prelude.children) {
-        expect(generate(selector).startsWith(':host([data-taylors3d-theme="house"]')).toBe(true); selectors++;
+        const value = generate(selector);
+        expect(value.startsWith(':host(:is([data-taylors3d-theme="house"],[data-taylors3d-theme="glass"])') || value.startsWith(':host([data-taylors3d-theme="house"])')).toBe(true); selectors++;
       }
     } });
     expect(selectors).toBeGreaterThan(20);
@@ -59,7 +69,7 @@ describe('opt-in theme stylesheet', () => {
     walk(tree, { visit: 'Rule', enter(node) {
       for (const entry of node.block.children) if (entry.type === 'Declaration' && entry.property === '--mdc-icon-size') native.push({ selector: generate(node.prelude), value: generate(entry.value) });
     } });
-    expect(native).toEqual([{ selector: ':host([data-taylors3d-theme="house"]) .fp-marker .fp-dot', value: '22px' }]);
+    expect(native).toEqual([{ selector: `${sharedHost} .fp-marker .fp-dot`, value: '22px' }]);
   });
   it('keeps room labels backed and disabled controls readable without changing their native disabled state', () => {
     const tree = parse(TAYLORS3D_THEME_CSS), properties = (selectorEnd) => {
@@ -94,5 +104,31 @@ describe('opt-in theme stylesheet', () => {
     const declarations = rule.block.children.toArray();
     expect(generate(declarations.find((entry) => entry.property === '--taylors3d-ui-text').value).trim()).toBe('CanvasText');
     expect(generate(declarations.find((entry) => entry.property === '--taylors3d-ui-focus').value).trim()).toBe('Highlight');
+    expect(generate(declarations.find((entry) => entry.property === '--taylors3d-ui-glass').value).trim()).toBe('Canvas');
+    expect(generate(declarations.find((entry) => entry.property === '--taylors3d-ui-blur').value).trim()).toBe('none');
+  });
+  it('shares presentation without applying measured House geometry to the standard card', () => {
+    const tree = parse(TAYLORS3D_THEME_CSS), layoutRules = [], sharedRules = [];
+    walk(tree, { visit: 'Rule', enter(node) {
+      const value = generate(node.prelude);
+      if (/data-taylors3d-shell(?:=|-mode|-size)/.test(value)) layoutRules.push(value);
+      if (value.startsWith(sharedHost)) sharedRules.push(value);
+    } });
+    expect(layoutRules.length).toBeGreaterThan(8);
+    expect(layoutRules.every((value) => value.startsWith(':host([data-taylors3d-theme="house"])') && !value.includes('data-taylors3d-theme="glass"'))).toBe(true);
+    expect(sharedRules.some((value) => value.includes('.toolbar'))).toBe(true);
+    expect(sharedRules.some((value) => value.includes('.panel'))).toBe(true);
+    expect(sharedRules.some((value) => value.includes('[data-custom-controls-view]'))).toBe(true);
+  });
+  it('provides an opaque no-blur fallback at the same specificity as explicit colour modes', () => {
+    const tree = parse(TAYLORS3D_THEME_CSS), overrides = [];
+    walk(tree, { visit: 'Atrule', enter(node) {
+      if (node.name === 'media' && generate(node.prelude).includes('prefers-reduced-transparency:reduce')) overrides.push(node);
+    } });
+    expect(overrides).toHaveLength(1);
+    const rule = overrides[0].block.children.first;
+    expect(generate(rule.prelude)).toContain('[data-taylors3d-scheme]');
+    const declarations = Object.fromEntries(rule.block.children.toArray().map((entry) => [entry.property, generate(entry.value).trim()]));
+    expect(declarations).toMatchObject({ '--taylors3d-ui-glass': 'var(--taylors3d-ui-surface)', '--taylors3d-ui-blur': 'none', '--taylors3d-ui-shadow': 'none' });
   });
 });

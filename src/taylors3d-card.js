@@ -46,9 +46,13 @@ import { AmbientIdleController } from './ambient-idle.js';
 import { wallKeepSelectors } from './wall-presentation.js';
 import { readFloorPresentation } from './floor-presentation.js';
 import { HouseShell } from './house-shell.js';
+import { TAYLORS3D_THEME_CSS, TAYLORS3D_THEME_PALETTES } from './taylors3d-theme.js';
 import { FurnitureCoordinator } from './furniture-coordinator.js';
 import { FurnitureLayer } from './furniture-rendering.js';
-import { localizeHouseNavigationItems } from './house-navigation.js';
+import { resolveHouseNavigationItems } from './house-navigation.js';
+import { GlobalSearch, globalSearchText } from './global-search.js';
+import { houseSearchItems } from './house-search-data.js';
+import { buildMarkerOverview, markerDisplayMode, markerOverviewText, MARKER_OVERVIEW_CSS } from './marker-overview.js';
 import { localize, localeKey } from './localization.js';
 import { ownedRuntimeError, ownedRuntimeDetails, runtimeNoticeText } from './runtime-notices.js';
 import { buildHouseCategory, ownedHouseCategoryPresentation } from './house-categories.js';
@@ -82,12 +86,8 @@ const STYLE = `
   .feedback-host[hidden] { display: none; }
   .stage canvas { display: block; }
   .scene { position: absolute; inset: 0 var(--taylors3d-controls-width, 0px) var(--taylors3d-bar-height, 0px) 0; }
-  .stage[data-taylors3d-standard-sheet] .scene { bottom:calc(var(--taylors3d-bar-height,0px) + var(--taylors3d-standard-sheet-height,0px)); }
   .stage[data-taylors3d-standard-sheet] .taylors3d-device-popup[data-placement="right"] {
     left:8px;right:8px;top:auto;bottom:calc(var(--taylors3d-bar-height,0px) + 8px);width:auto;
-  }
-  @container (min-width: 740px) {
-    .stage.controls-open { --taylors3d-controls-width: 332px; }
   }
   .toolbar { position: absolute; bottom: 8px; left: 8px; right: 8px; display: flex; flex-direction: column;
     gap: 6px; padding: 6px; align-items: stretch; z-index: 2; box-sizing: border-box;
@@ -98,9 +98,15 @@ const STYLE = `
   .scene-presets { min-width: 0; max-width: 100%; }
   .custom-controls-host { flex-basis: 100%; width: 100%; min-width: 0; }
   .custom-controls-host[hidden] { display: none; }
+  .custom-controls-left-host { position:absolute; z-index:28; top:calc(var(--taylors3d-summary-height,0px) + 8px); left:calc(var(--taylors3d-rail-width,0px) + 8px); bottom:calc(var(--taylors3d-bar-height,0px) + var(--taylors3d-navigation-height,0px) + 8px); width:min(300px,calc(100% - var(--taylors3d-rail-width,0px) - 16px)); min-height:0; pointer-events:none; }
+  .custom-controls-left-host[hidden] { display:none; }
   .scene-presets:has(> [hidden]) { display: none; }
   .chips { display: flex; flex-wrap: nowrap; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
   .chips:empty { display: none; }
+  .overview-tools { display:flex; gap:8px; align-items:center; min-width:0; }
+  .overview-tools select { min-width:0; max-width:210px; flex:1; font:inherit; }
+  .overview-tools .house-search-toggle { display:flex; align-items:center; justify-content:center; gap:6px; flex:1; }
+  .overview-tools[hidden] { display:none; }
   .bubble-actions { display: flex; gap: 6px; align-items: center; overflow-x: auto; scrollbar-width: thin; }
   .toolbar button, .toolbar .seg { flex: none; }
   .toolbar button { min-height: 44px; min-width: 44px; }
@@ -507,7 +513,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   static getStubConfig() {
-    return { layout_style: 'house', house_colour_scheme: 'dark' };
+    return { layout_style: 'house', house_colour_scheme: 'dark', marker_display: 'rooms' };
   }
 
   // sections view: span the whole section by default
@@ -521,13 +527,15 @@ class Taylors3dCard extends HTMLElement {
 
   setConfig(config) {
     const previous = this._config;
+    this._search?.close({ restoreFocus: false });
+    this._markerDisplayChoice = null;
     if (previous) this._edit?._dashboardBackupEditor?.reset();
     if (previous) this._suspendAmbient('card settings changed');
     if (previous) this.finishWallSelectionPreparation({ reload: false });
     if (previous) this._wallLifecycleGeneration++;
     this._config = { layout_key: 'default', height: '520px', group_by: 'device', wall_height: 1.0, view: '3d',
       show_bubble_bar: true, mini_map: true, mini_map_size: 180, mini_map_position: 'top-right', device_tap_action: 'popup',
-      control_panel: 'right', layout_style: 'original', house_colour_scheme: 'ha', ...config };
+      control_panel: 'right', layout_style: 'original', house_colour_scheme: 'ha', marker_display: 'all', ...config };
     this._syncScenePreviews();
     this._syncCustomControls();
     if (!previous || previous.mini_map !== this._config.mini_map) this._miniMapVisible = this._config.mini_map !== false;
@@ -762,6 +770,7 @@ class Taylors3dCard extends HTMLElement {
       // A native input draft belongs to the account/connection that opened it.
       // Closing synchronously prevents its late change event acting as a new user.
       this._devicePopup?.close({ restoreFocus: false });
+      this._search?.close({ restoreFocus: false });
       this._popup?.close();
       this._suspendAmbient('Home Assistant session changed');
       this.finishWallSelectionPreparation({ reload: false });
@@ -774,6 +783,7 @@ class Taylors3dCard extends HTMLElement {
       this._trackingInputKey = null;
     }
     this._hass = hass;
+    this._syncSearch();
     this._syncCustomControls();
     this._devicePopup?.observeContexts?.(hass);
     this._popup?.observeContexts?.(hass);
@@ -857,6 +867,7 @@ class Taylors3dCard extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this._search?.close({ restoreFocus: false });
     this._restoreStandardSheetMinimum();
     this._syncCustomControls();
     this._edit?._customControlsEditor?.observe?.();
@@ -956,6 +967,8 @@ class Taylors3dCard extends HTMLElement {
     this._unbindAmbientInput();
     this._scenePreviewBar?.dispose();
     this._customControlsView?.dispose();
+    this._customControlsLeftView?.dispose();
+    this._search?.dispose();
     this._customControlsModelLoad = null;
     this._stopScenePreview('renderer replaced');
     this._securityLayer?.dispose();
@@ -973,13 +986,17 @@ class Taylors3dCard extends HTMLElement {
     this._weatherScene = null;
     this._weatherView = null;
     const root = this.shadowRoot;
-    root.innerHTML = `<style>${STYLE}</style>
+    root.innerHTML = `<style>${STYLE}\n${TAYLORS3D_THEME_CSS}\n${MARKER_OVERVIEW_CSS}</style>
       <ha-card>
         <div class="body">
           <div class="stage">
             <div class="scene"></div>
             <nav class="toolbar" data-taylors3d-ui aria-label="House views and controls">
               <div class="chips"></div>
+              <div class="overview-tools">
+                <select class="marker-display" aria-label="Show on house"><option value="rooms">Rooms</option><option value="important">Important activity</option><option value="all">All devices</option></select>
+                <button class="house-search-toggle" type="button"><ha-icon icon="mdi:magnify"></ha-icon><span>Search</span></button>
+              </div>
               <div class="bubble-actions">
                 <div class="seg" data-bubble="mode" role="group" aria-label="Viewing mode"><button data-mode="3d">3D</button><button data-mode="top">Top</button></div>
                 <button class="reset" data-bubble="reset" title="Reset view" aria-label="Reset view"><ha-icon icon="mdi:crosshairs-gps"></ha-icon></button>
@@ -991,6 +1008,7 @@ class Taylors3dCard extends HTMLElement {
               <div class="scene-presets"></div>
               <div class="custom-controls-host" hidden></div>
             </nav>
+            <div class="custom-controls-left-host" data-taylors3d-ui hidden></div>
             <div class="empty" hidden></div>
             <div class="notice" hidden></div>
             <div class="status-legend" data-taylors3d-ui role="status" aria-live="polite" hidden><strong></strong><div class="scale"></div><span></span></div>
@@ -1002,6 +1020,30 @@ class Taylors3dCard extends HTMLElement {
     this._stage.tabIndex = -1; // Return keyboard focus when a tracked label disappears.
     this._scene = root.querySelector('.scene');
     this._toolbar = root.querySelector('.toolbar');
+    this._markerDisplaySelect = root.querySelector('.marker-display');
+    this._markerDisplaySelect.addEventListener('change', () => {
+      if (this._editing || this._loading || !this._layout) return;
+      this._markerDisplayChoice = markerDisplayMode(this._markerDisplaySelect.value);
+      this._syncMarkerOverview();
+    });
+    this._searchButton = root.querySelector('.house-search-toggle');
+    this._search = new GlobalSearch(this._stage, {
+      getContext: () => this._searchContext(), onSelect: (item) => this._selectSearchResult(item),
+      onOpenChange: (open) => {
+        this._searchButton?.setAttribute('aria-expanded', String(open));
+        if (open) {
+          this._suspendAmbient('search opened'); this._stopScenePreview('search opened');
+          this._popup?.close(); this._devicePopup?.close(); this._customControlsLeftView?.closeDrawer();
+          this._view?._roomOverviewChooser?.close(false);
+        }
+      },
+    });
+    this._searchButton.addEventListener('click', () => this._search.open(this._searchButton));
+    this._stage.addEventListener('keydown', (event) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k' && !this._editing) {
+        event.preventDefault(); event.stopPropagation(); this._search.open(this._searchButton);
+      }
+    });
     this._feedbackHost = root.querySelector('.feedback-host');
     this._ensureFeedback();
     this._stage.style.height = this._config.height;
@@ -1038,6 +1080,10 @@ class Taylors3dCard extends HTMLElement {
       this._syncToolbar();
     });
     this._view = new FloorplanView(this._scene);
+    this._view.onRoomOverview = (id, anchor) => {
+      const room = this._navigationRooms().find((entry) => entry.room.id === id);
+      if (room && !this._editing && !this._loading && this._houseSessionActive()) this._showRoomControls(room, anchor);
+    };
     this._syncModelRendering();
     this._ensureWeatherLayer();
     this._statusOverlays = new StatusOverlays(this._view.scene, { onInvalidate: () => { this._view.dirty = true; } });
@@ -1085,12 +1131,14 @@ class Taylors3dCard extends HTMLElement {
       onMoreInfo: (entityId) => this._moreInfo(entityId),
       placement: this._houseLayoutEnabled() ? 'right' : this._config.control_panel,
       onVisibilityChange: (open, placement) => {
+        if (open) this._customControlsLeftView?.closeDrawer();
         if (open) this._suspendAmbient('device controls opened');
         if (open) this._stopScenePreview('device controls opened');
         this._stage.classList.toggle('controls-open', open && placement === 'right');
         if (!open) this._houseSelection = 'house';
         this._syncFeedback();
         this._syncHouseShell();
+        this._syncMarkerOverview();
         requestAnimationFrame(() => this.isConnected && this._resize());
       },
     });
@@ -1130,6 +1178,12 @@ class Taylors3dCard extends HTMLElement {
       getContext: () => this._customControlContext('bottom'),
       onAction: (barId, buttonId) => this._runCustomControl(barId, buttonId),
     });
+    this._customControlsLeftHost = root.querySelector('.custom-controls-left-host');
+    this._customControlsLeftView = new CustomControlsView(this._customControlsLeftHost, {
+      placement: 'left',
+      getContext: () => this._customControlContext('left'),
+      onAction: (barId, buttonId) => this._runCustomControl(barId, buttonId, 'left'),
+    });
     const canvas = this._view.renderer.domElement;
     this._bindAmbientInput();
     this._stage.addEventListener('pointerdown', (e) => {
@@ -1166,6 +1220,8 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _toggleEdit() {
+    if (this._editing && this._edit?.requestClose?.() === false) return;
+    this._search?.close({ restoreFocus: false });
     this._suspendAmbient('editing changed');
     this._stopScenePreview('editing changed');
     this._presetEvents.interrupt();
@@ -2166,8 +2222,9 @@ class Taylors3dCard extends HTMLElement {
 
   _syncHouseShell() {
     if (!this._stage) return;
+    this._syncHaAppearanceContrast();
     const enabled = this._houseLayoutEnabled() && this.isConnected === true;
-    if (!enabled && !this._houseShell) return;
+    if (!enabled && !this._houseShell) { this._syncStandardAppearance(); return; }
     if (!this._houseShell) this._houseShell = new HouseShell(this, {
       onSelect: (action) => this._selectHouseNavigation(action),
       onNeedsResize: () => { if (this.isConnected && this._view) this._resize(); },
@@ -2177,14 +2234,34 @@ class Taylors3dCard extends HTMLElement {
       this._devicePopup.setPlacement(placement);
     this._houseShell.setData({ enabled, scheme: this._config.house_colour_scheme || 'ha',
       summaryRaw: this._layout?.house_summary ?? this._config.house_summary, selected: this._houseSelection || 'house', editing: !!this._editing,
-      navItems: localizeHouseNavigationItems(this._hass).map((item) => item.id === 'settings'
+      navItems: resolveHouseNavigationItems(this._config.house_navigation, this._hass).map((item) => item.id === 'settings'
         ? { ...item, disabled: this._hass?.user?.is_admin !== true || !this._layout || !!this._loading } : item),
     });
+    if (!enabled) this._syncStandardAppearance();
     if (!this._ro || !this._houseObserved) return;
     const current = new Set(enabled ? [this._houseShell.header?.element, this._houseShell.navigation?.element, this._devicePopup?.el].filter(Boolean) : []);
     for (const node of this._houseObserved) if (!current.has(node)) this._ro.unobserve(node);
     for (const node of current) if (!this._houseObserved.has(node)) this._ro.observe(node);
     this._houseObserved = current;
+  }
+
+  _syncHaAppearanceContrast() {
+    // HA can supply a dark surface without an error colour. Keep our fallback
+    // readable in that case; explicit glass schemes retain their own palettes.
+    const reported = this._hass?.themes?.darkMode;
+    const dark = typeof reported === 'boolean' ? reported : luminance(cssColor(this, '--card-background-color', '#ffffff')) < 0.4;
+    const value = TAYLORS3D_THEME_PALETTES[dark ? 'dark' : 'light'].danger;
+    if (this.style.getPropertyValue('--taylors3d-ui-ha-danger') !== value) this.style.setProperty('--taylors3d-ui-ha-danger', value);
+  }
+
+  _syncStandardAppearance() {
+    // The colour scheme belongs to the card, independently of the optional
+    // measured House navigation. Changing layout retains the chosen scheme.
+    if (this.getAttribute('data-taylors3d-theme') !== 'glass') this.setAttribute('data-taylors3d-theme', 'glass');
+    const scheme = this._config?.house_colour_scheme;
+    if (scheme === 'dark' || scheme === 'light') {
+      if (this.getAttribute('data-taylors3d-scheme') !== scheme) this.setAttribute('data-taylors3d-scheme', scheme);
+    } else if (this.hasAttribute('data-taylors3d-scheme')) this.removeAttribute('data-taylors3d-scheme');
   }
 
   _selectHouseNavigation(action) {
@@ -2232,6 +2309,7 @@ class Taylors3dCard extends HTMLElement {
     if (!r.width || !r.height) return;
     if (this._houseShell?.enabled) {
       this._restoreStandardSheetMinimum();
+      this._stage.removeAttribute('data-taylors3d-standard-sheet');
       this._houseShell.measure({ baseHeight: houseBaseHeight(this._stage) });
     }
     else {
@@ -2243,18 +2321,9 @@ class Taylors3dCard extends HTMLElement {
       const sheet = !this._editing && this._devicePopup?.isOpen && popup?.dataset.roomSheet
         && popup.dataset.roomSheet !== 'desktop' && this._devicePopup.placement === 'right';
       this._stage.toggleAttribute('data-taylors3d-standard-sheet', !!sheet);
-      const sheetHeight = sheet ? popup.getBoundingClientRect().height + 16 : 0;
-      this._stage.style.setProperty('--taylors3d-standard-sheet-height', `${sheetHeight}px`);
-      if (sheet) {
-        this._standardSheetMinimum ??= { stage:this._stage, value:this._stage.style.getPropertyValue('min-height'), priority:this._stage.style.getPropertyPriority('min-height') };
-        const height = `${Math.max(baseHeight,barHeight+sheetHeight+240)}px`;
-        this._stage.style.setProperty('min-height',height);
-        this._standardSheetMinimum.last = height;
-        this._standardSheetMinimum.lastPriority = '';
-        this._standardSheetMinimum.sheetHeight = `${sheetHeight}px`;
-      } else if (this._standardSheetMinimum) {
-        this._restoreStandardSheetMinimum();
-      }
+      // The sheet overlays the drawing; its size never becomes renderer space.
+      this._stage.style.setProperty('--taylors3d-standard-sheet-height', '0px');
+      if (this._standardSheetMinimum) this._restoreStandardSheetMinimum();
     }
     const scene = this._scene.getBoundingClientRect();
     this._view.resize(scene.width, scene.height);
@@ -2346,6 +2415,8 @@ class Taylors3dCard extends HTMLElement {
     this._devicePopup.update(h);
     this._syncMiniMap();
     this._syncStatus();
+    this._syncMarkerOverview();
+    if (this._search?.isOpen) this._search.update();
     this._syncAmbient();
     this._syncWallPresentation();
     this._syncFurniture();
@@ -3066,7 +3137,8 @@ class Taylors3dCard extends HTMLElement {
         && this._mode === '3d' && view.mode === '3d' && view.controls?.enabled !== false && settled
         && !view._tween && !view._modelMotionMoving && !this._gesture && !this._ambientControlsGesture && !labelFocused
         && !this._ambientPointers.size && !this._ambientKeys.size && !this._lightPreview
-        && !this._popup?.isOpen && !this._devicePopup?.isOpen && !(this._alertData?.stats?.active > 0)),
+        && !this._popup?.isOpen && !this._devicePopup?.isOpen && !this._search?.isOpen && !this._houseShell?.navigation?._open && !this._view?._roomOverviewChooser?.open && !this._customControlsLeftView?._drawerOpen
+        && !(this._alertData?.stats?.active > 0)),
       sun: sun.status === 'ready' ? { status: 'ready', nightFactor: nightFactor(sun.elevation) } : { status: sun.status },
       wallTime: Date.now(), timeZone: this._hass?.config?.time_zone };
   }
@@ -4060,12 +4132,18 @@ class Taylors3dCard extends HTMLElement {
   }
 
   _syncCustomControls() {
+    this._syncSearch?.();
     this._syncFeedback?.();
     this._edit?.observeSetupContext?.();
     this._customControlsView?.update();
+    this._customControlsLeftView?.update();
     if (this._customControlsHost && this._customControlsView?.el) {
       const hidden = this._customControlsView.el.hidden === true;
       if (this._customControlsHost.hidden !== hidden) this._customControlsHost.hidden = hidden;
+    }
+    if (this._customControlsLeftHost && this._customControlsLeftView?.el) {
+      const hidden = this._customControlsLeftView.el.hidden === true;
+      if (this._customControlsLeftHost.hidden !== hidden) this._customControlsLeftHost.hidden = hidden;
     }
     this._devicePopup?.updateCustomControls?.();
   }
@@ -4084,6 +4162,61 @@ class Taylors3dCard extends HTMLElement {
     const label = context.bars?.find((bar) => bar.id === barId)?.buttons?.find((button) => button.id === buttonId)?.label;
     return this._requestService ? this._requestService(command.domain, command.service, command.data, label)
       : this._hass.callService(command.domain, command.service, command.data);
+  }
+
+  _syncMarkerOverview() {
+    if (!this._view?.setMarkerDisplay) return;
+    const selection = this._devicePopup?.isOpen ? this._devicePopup._selection : null;
+    const mode = markerDisplayMode(this._markerDisplayChoice ?? this._config?.marker_display);
+    this._view.setMarkerDisplay(buildMarkerOverview({
+      hass: this._hass, mode,
+      editing: !!this._editing, selectedRoomId: selection?.kind === 'room' ? selection.room.id : null,
+      markers: this._markers || [], positions: this._positions || new Map(), rooms: this._navigationRooms(), allRooms: this._roomList || [],
+      summaryMarkers: mode === 'rooms' && !this._editing && this._hass && this._layout ? buildMarkers(this._hass, this._layout, { group_by: this._config?.group_by }) : [],
+      alerts: this._alertData?.alerts || [],
+    }));
+  }
+
+  _syncSearch() {
+    if (this._searchButton) this._searchButton.disabled = !this._houseSessionActive() || !this._layout || !this._view
+      || !!this._editing || !!this._loading || !!this._customControlsModelLoad;
+    if (this._search?.isOpen) this._search.update();
+  }
+
+  _searchContext() {
+    const suspended = !this._houseSessionActive() || !this._layout || !this._view || !!this._editing
+      || !!this._loading || !!this._customControlsModelLoad;
+    const refs = [this._hass?.connection, this._hass?.auth, this._hass?.user?.id, this._hass?.user?.is_admin,
+      this._hass?.user?.is_active, this._store, this._layout, this._config?.layout_key, this._view?.model?.root, suspended];
+    if (!this._searchScope || refs.some((value, index) => value !== this._searchScope.refs[index]))
+      this._searchScope = { refs, epoch: (this._searchScope?.epoch || 0) + 1 };
+    return { contextKey: `search:${this._searchScope.epoch}`, hass: this._hass, suspended,
+      items: suspended ? [] : houseSearchItems({ hass: this._hass, rooms: this._roomList || [], floors: this._floors || [],
+        views: this._views || [], layoutStyle: this._config?.layout_style, hasObjects: !!this._edit?._hasObjects?.() }) };
+  }
+
+  _selectSearchResult(result) {
+    const context = this._searchContext();
+    const item = !context.suspended && context.items.find((entry) => entry.id === result?.id
+      && entry.kind === result.kind && entry.target === result.target);
+    if (!item) return false;
+    this._suspendAmbient('search result selected'); this._stopScenePreview('search result selected');
+    if (item.kind === 'room') {
+      const room = this._roomList.find((entry) => entry.room.id === item.target);
+      if (!room) return false;
+      this._showRoomControls(room);
+    } else if (item.kind === 'device' || item.kind === 'scene') {
+      // Always open controls, including when the ordinary marker tap is Toggle.
+      this._popup?.close(); this._devicePopup.update(this._hass);
+      this._devicePopup.showMarker({ id: item.id, entityId: item.target, name: item.label, entities: [{ eid: item.target }] });
+    } else if (item.kind === 'view') this._setView(item.target);
+    else if (item.kind === 'setting') {
+      if (this._hass?.user?.is_admin !== true) return false;
+      this._toggleEdit();
+      if (!this._editing) return false;
+      return this._edit.revealTab(item.target);
+    } else return false;
+    return true;
   }
 
   _openRoomAt(x, y) {
@@ -4116,14 +4249,20 @@ class Taylors3dCard extends HTMLElement {
       }
     }
     if (!selected) return;
+    this._showRoomControls(selected, [x, y]);
+  }
+
+  _showRoomControls(selected, anchor) {
+    if (!selected || this._editing || this._loading || !this._layout) return;
     this._stopScenePreview('room selected');
     this._selectedRoomId = selected.room.id;
     this._popup.close();
     this._devicePopup.update(this._hass);
     // Include devices represented by bound model objects as well as standalone markers.
     this._devicePopup.showRoom({ ...selected.room, name: selected.name },
-      buildMarkers(this._hass, this._layout, { group_by: this._config.group_by }), [x, y]);
+      buildMarkers(this._hass, this._layout, { group_by: this._config.group_by }), anchor);
     this._syncMiniMap();
+    this._syncMarkerOverview?.();
   }
 
   _focusPlan(point) {
@@ -4348,6 +4487,18 @@ class Taylors3dCard extends HTMLElement {
 
   _syncToolbar() {
     this._syncToolbarLabels();
+    if (this._markerDisplaySelect) {
+      this._markerDisplaySelect.value = markerDisplayMode(this._markerDisplayChoice ?? this._config.marker_display);
+      this._markerDisplaySelect.setAttribute('aria-label', markerOverviewText(this._hass, 'markerOverview.label'));
+      for (const option of this._markerDisplaySelect.options) option.textContent = markerOverviewText(this._hass, `markerOverview.${option.value}`);
+      this._markerDisplaySelect.disabled = !!this._loading || !this._layout;
+      this._markerDisplaySelect.parentElement.hidden = !!this._editing;
+    }
+    if (this._searchButton) {
+      this._searchButton.querySelector('span').textContent = globalSearchText(this._hass, 'trigger');
+      this._searchButton.setAttribute('aria-label', globalSearchText(this._hass, 'trigger'));
+      this._searchButton.disabled = !this._houseSessionActive() || !this._layout || !!this._loading || !!this._customControlsModelLoad;
+    }
     const hasModel = !!(this._view && this._view.model);
     // without a model: one chip per floor plus All (not while editing), shown with 2+ floors
     const views = this._views.filter((v) => !v.hidden && (hasModel || !this._editing || v.id !== 'all'));
@@ -4405,6 +4556,7 @@ class Taylors3dCard extends HTMLElement {
     this._syncCustomControls();
     this._syncMiniMap();
     this._syncHouseShell();
+    this._syncMarkerOverview();
     requestAnimationFrame(() => this.isConnected && this._resize());
     if (this._empty && this._editing) this._empty.hidden = true;
   }

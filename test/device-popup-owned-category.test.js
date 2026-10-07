@@ -10,31 +10,31 @@ const expected = {
   en: { titles: ['Lights', 'Security', 'Media', 'Climate', 'Cars'], empty: [
     'No current visible lights are available.', 'No current visible security entities are available.',
     'No current visible media players are available.', 'No current visible climate, weather, temperature or humidity entities are available.',
-    'No current vehicle sources are selected. Choose your sources in Edit → Tracking.'],
+    'No current vehicle sources are selected. Choose your sources in Edit → Devices → Advanced tools → Tracking → Driveway vehicles.'],
   unreadable: 'Current Home Assistant entities could not be read. Refresh the connection and try again.',
   limit: 'More than 512 current lights entities are selected. Reduce the list to open this category.',
-  vehicles: 'Vehicle settings need review in Edit → Tracking.', connect: 'Connect to Home Assistant to read this category.' },
+  vehicles: 'Vehicle settings need review in Edit → Devices → Advanced tools → Tracking → Driveway vehicles.', connect: 'Connect to Home Assistant to read this category.' },
   de: { titles: ['Lichter', 'Sicherheit', 'Medien', 'Klima', 'Autos'], empty: [
     'Derzeit sind keine sichtbaren Lichter verfügbar.', 'Derzeit sind keine sichtbaren Sicherheitsentitäten verfügbar.',
     'Derzeit sind keine sichtbaren Medienplayer verfügbar.', 'Derzeit sind keine sichtbaren Klima-, Wetter-, Temperatur- oder Luftfeuchtigkeitsentitäten verfügbar.',
-    'Derzeit sind keine Fahrzeugquellen ausgewählt. Wähle deine Quellen unter Bearbeiten → Ortung.'],
+    'Derzeit sind keine Fahrzeugquellen ausgewählt. Wähle deine Quellen unter Bearbeiten → Geräte → Erweiterte Werkzeuge → Ortung → Fahrzeuge auf der Einfahrt.'],
   unreadable: 'Aktuelle Home Assistant-Entitäten konnten nicht gelesen werden. Aktualisiere die Verbindung und versuche es erneut.',
   limit: 'Mehr als 512 aktuelle Lichtentitäten sind ausgewählt. Verkleinere die Liste, um diese Kategorie zu öffnen.',
-  vehicles: 'Prüfe die Fahrzeugeinstellungen unter Bearbeiten → Ortung.', connect: 'Verbinde dich mit Home Assistant, um diese Kategorie zu lesen.' },
+  vehicles: 'Prüfe die Fahrzeugeinstellungen unter Bearbeiten → Geräte → Erweiterte Werkzeuge → Ortung → Fahrzeuge auf der Einfahrt.', connect: 'Verbinde dich mit Home Assistant, um diese Kategorie zu lesen.' },
   fr: { titles: ['Lumières', 'Sécurité', 'Médias', 'Climat', 'Voitures'], empty: [
     'Aucune lumière visible n’est actuellement disponible.', 'Aucune entité de sécurité visible n’est actuellement disponible.',
     'Aucun lecteur multimédia visible n’est actuellement disponible.', 'Aucune entité visible de climat, de météo, de température ou d’humidité n’est actuellement disponible.',
-    'Aucune source de véhicule n’est actuellement sélectionnée. Choisissez vos sources dans Modifier → Suivi.'],
+    'Aucune source de véhicule n’est actuellement sélectionnée. Choisissez vos sources dans Modifier → Appareils → Outils avancés → Suivi → Véhicules dans l’allée.'],
   unreadable: 'Les entités Home Assistant actuelles n’ont pas pu être lues. Actualisez la connexion et réessayez.',
   limit: 'Plus de 512 entités de lumière actuelles sont sélectionnées. Réduisez la liste pour ouvrir cette catégorie.',
-  vehicles: 'Vérifiez les paramètres des véhicules dans Modifier → Suivi.', connect: 'Connectez-vous à Home Assistant pour lire cette catégorie.' },
+  vehicles: 'Vérifiez les paramètres des véhicules dans Modifier → Appareils → Outils avancés → Suivi → Véhicules dans l’allée.', connect: 'Connectez-vous à Home Assistant pour lire cette catégorie.' },
   es: { titles: ['Luces', 'Seguridad', 'Multimedia', 'Clima', 'Coches'], empty: [
     'No hay luces visibles disponibles actualmente.', 'No hay entidades de seguridad visibles disponibles actualmente.',
     'No hay reproductores multimedia visibles disponibles actualmente.', 'No hay entidades visibles de clima, tiempo, temperatura o humedad disponibles actualmente.',
-    'No hay fuentes de vehículos seleccionadas actualmente. Elige tus fuentes en Editar → Seguimiento.'],
+    'No hay fuentes de vehículos seleccionadas actualmente. Elige tus fuentes en Editar → Dispositivos → Herramientas avanzadas → Seguimiento → Vehículos en la entrada.'],
   unreadable: 'No se pudieron leer las entidades actuales de Home Assistant. Actualiza la conexión y vuelve a intentarlo.',
   limit: 'Se han seleccionado más de 512 entidades de luz actuales. Reduce la lista para abrir esta categoría.',
-  vehicles: 'Revisa los ajustes de los vehículos en Editar → Seguimiento.', connect: 'Conéctate a Home Assistant para leer esta categoría.' },
+  vehicles: 'Revisa los ajustes de los vehículos en Editar → Dispositivos → Herramientas avanzadas → Seguimiento → Vehículos en la entrada.', connect: 'Conéctate a Home Assistant para leer esta categoría.' },
 };
 const ids = ['lights', 'security', 'media', 'climate', 'cars'], cleanup = [];
 function fixture(language = 'en') {
@@ -56,7 +56,11 @@ describe('explicit ownership of actual Root category captions', () => {
     'translates actual Root %s %s title and empty guidance without changing its English data API', (language, id, index) => {
     const f = fixture(language), raw = buildHouseCategory({ hass: f.h, layout: f.card._layout, id });
     expect(Object.keys(raw)).toEqual(['id', 'title', 'entityIds', 'emptyText']);
-    expect(raw.title).toBe(expected.en.titles[index]); expect(raw.emptyText).toBe(expected.en.empty[index]);
+    expect(raw.title).toBe(expected.en.titles[index]);
+    // Literal data guidance is separate from card-owned translated captions.
+    // Both remain independently asserted rather than reading the app dictionary.
+    expect(raw.emptyText).toBe(id === 'cars'
+      ? 'No current vehicle sources are selected. Choose your sources in Edit → Devices → Advanced → Tracking.' : expected.en.empty[index]);
     f.select(id); expect(f.popup.el.querySelector('h3').textContent).toBe(expected[language].titles[index]);
     expect(f.popup.el.getAttribute('aria-label')).toBe(expected[language].titles[index]);
     expect(f.popup._empty.textContent).toBe(expected[language].empty[index]);

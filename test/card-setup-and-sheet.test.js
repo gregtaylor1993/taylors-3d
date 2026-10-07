@@ -80,10 +80,11 @@ describe('root setup Save and finish authority', () => {
   });
 });
 
-describe('root standard-sheet temporary minimum height ownership', () => {
+describe('root standard room overlay preserves drawing geometry', () => {
   it('restores the exact authored minimum and priority when a standard sheet closes', () => {
-    const f = sheet(); f.card._resize(); expect(parseFloat(f.stage.style.minHeight)).toBeGreaterThan(340);
-    expect(f.stage.style.getPropertyPriority('min-height')).toBe(''); f.close();
+    const f = sheet(); f.card._resize(); expect(f.stage.style.minHeight).toBe('120px');
+    expect(f.stage.style.getPropertyPriority('min-height')).toBe('important');
+    const opened = f.card._scene.getBoundingClientRect(); f.close(); expect(f.card._scene.getBoundingClientRect()).toEqual(opened);
     expect(f.stage.style.minHeight).toBe('120px'); expect(f.stage.style.getPropertyPriority('min-height')).toBe('important');
     expect(f.stage.hasAttribute('data-taylors3d-standard-sheet')).toBe(false);
   });
@@ -107,7 +108,7 @@ describe('root standard-sheet temporary minimum height ownership', () => {
   });
   it('releases standard ownership before House measures, and style-off restores the original authored baseline', () => {
     const f = sheet(); f.card._resize(); f.house(); f.card._resize();
-    expect(f.card._standardSheetMinimum).toBeNull(); expect(f.stage.hasAttribute('data-taylors3d-standard-sheet')).toBe(false);
+    expect(f.card._standardSheetMinimum).toBeFalsy(); expect(f.stage.hasAttribute('data-taylors3d-standard-sheet')).toBe(false);
     f.card._devicePopup.isOpen = false; f.popup.hidden = true; f.shell.setData({ enabled: false }); f.card._resize();
     expect(f.stage.style.minHeight).toBe('120px'); expect(f.stage.style.getPropertyPriority('min-height')).toBe('important');
   });

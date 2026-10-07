@@ -169,9 +169,11 @@ describe('floor panel settings are normal saved layout edits', () => {
     ctx.edit.panel.querySelector('[data-act="history-redo"]').click(); expect(ctx.card._layout.floor_presentation).toEqual({ ...original, panels: true }); expect(ctx.field('panels').checked).toBe(true);
     expect(ctx.card.commitFeatureLayout).toHaveBeenCalledOnce(); expect(ctx.card._hass.callService).not.toHaveBeenCalled(); expect(ctx.card._hass.callWS).not.toHaveBeenCalled();
   });
-  it('clears an actual Model-tab draft when leaving without Save', () => {
+  it('keeps the actual Model draft until Discard is chosen when leaving without Save', () => {
     const ctx = fixture({ raw: policy(), full: true }); ctx.toggle();
     ctx.edit.panel.querySelector('[data-act="tab"][data-id="rooms"]').click();
+    expect(ctx.edit.tab).toBe('model'); expect(ctx.editor.dirty).toBe(true); expect(ctx.field('panels').checked).toBe(true);
+    ctx.edit.panel.querySelector('[data-act="draft-leave-discard"]').click(); expect(ctx.edit.tab).toBe('rooms');
     ctx.edit.panel.querySelector('[data-act="tab"][data-id="model"]').click();
     expect(ctx.field('panels').checked).toBe(false); expect(ctx.card.commitFeatureLayout).not.toHaveBeenCalled(); expect(ctx.card._history.size).toBe(0);
   });

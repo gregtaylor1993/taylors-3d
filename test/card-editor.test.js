@@ -245,4 +245,70 @@ describe('card editor', () => {
     expect(el.querySelector('[data-control="minimap"] .up')).toBe(button);
     expect(document.activeElement).toBe(button);
   });
+
+  it('changes local appearance in either layout without saving, remounting focused controls or theming the dashboard', () => {
+    const el = document.createElement('taylors3d-card-editor');
+    const outside = document.createElement('div');
+    outside.style.setProperty('--primary-color', '#123456');
+    document.body.append(outside, el);
+    const base = { type: 'custom:taylors3d-card', custom_future_option: 'keep me', bubble_bar_controls: ['reset', 'minimap'] };
+    el.setConfig({ ...base, layout_style: 'original', house_colour_scheme: 'dark' });
+    const form = el.querySelector('ha-form'), button = el.querySelector('[data-control="minimap"] .up');
+    const changes = [];
+    el.addEventListener('config-changed', (event) => changes.push(event.detail.config));
+    button.focus();
+    for (const layout of ['original', 'house']) {
+      for (const scheme of ['dark', 'light', 'ha']) {
+        el.setConfig({ ...base, layout_style: layout, house_colour_scheme: scheme });
+        expect(el.getAttribute('data-taylors3d-editor-scheme')).toBe(scheme);
+        expect(el.querySelector('ha-form')).toBe(form);
+        expect(el.querySelector('[data-control="minimap"] .up')).toBe(button);
+        expect(document.activeElement).toBe(button);
+        expect(outside.style.getPropertyValue('--primary-color')).toBe('#123456');
+      }
+    }
+    expect(changes).toHaveLength(0);
+    expect(el.querySelectorAll('[data-taylors3d-editor-style]')).toHaveLength(1);
+    form.dispatchEvent(new CustomEvent('value-changed', { detail: { value: { ...form.data, house_colour_scheme: 'light' } } }));
+    expect(changes).toEqual([{ ...base, layout_style: 'house', house_colour_scheme: 'light' }]);
+    el.remove(); outside.remove();
+  });
+
+  it('offers the three marker displays with a compatible all-device default', () => {
+    const field = mod.SCHEMA.flatMap((x) => x.schema || [x]).find((x) => x.name === 'marker_display');
+    expect(field.selector.select.options.map((option) => option.value)).toEqual(['rooms', 'important', 'all']);
+    expect(mod.cleanConfig({ marker_display: 'all' })).toEqual({});
+    expect(mod.cleanConfig({ marker_display: 'rooms' })).toEqual({ marker_display: 'rooms' });
+  });
+
+  it('orders and hides House sections while preserving imported extras and unrelated configuration exactly', () => {
+    const el = document.createElement('taylors3d-card-editor'); document.body.append(el);
+    const extra = { type: 'custom:taylors3d-card', layout_style: 'house', untouched: ['exact'], mini_map_size: 'legacy',
+      house_navigation: { order: ['cars', 'future'], hidden: ['future-category'], future_option: { enabled: true } } };
+    el.setConfig(extra); const changes = []; el.addEventListener('config-changed', (event) => changes.push(event.detail.config));
+    const row = (id) => el.querySelector(`[data-house-nav-option="${id}"]`);
+    expect(row('house').querySelector('[data-nav-edit-action="show"]').disabled).toBe(true);
+    expect(row('settings').querySelector('[data-nav-edit-action="show"]').disabled).toBe(true);
+    row('cars').querySelector('[data-nav-edit-action="down"]').click();
+    expect(changes.at(-1).house_navigation.order).toEqual(['house', 'lights', 'cars', 'security', 'media', 'climate', 'settings', 'future']);
+    row('cars').querySelector('[data-nav-edit-action="show"]').click();
+    expect(changes.at(-1).house_navigation.hidden).toEqual(['future-category', 'cars']);
+    expect(changes.at(-1)).toMatchObject({ mini_map_size: 'legacy', untouched: ['exact'], house_navigation: { future_option: { enabled: true } } });
+    el.querySelector('[data-nav-reset]').click();
+    expect(changes.at(-1).house_navigation).toEqual({ order: ['future'], hidden: ['future-category'], future_option: { enabled: true } });
+    expect(extra.house_navigation.order).toEqual(['cars', 'future']); el.remove();
+  });
+
+  it('keeps House menu keyboard focus on readings and supports an explicit reset of malformed menu data', () => {
+    const el = document.createElement('taylors3d-card-editor'); document.body.append(el);
+    el.setConfig({ type: 'custom:taylors3d-card', layout_style: 'house' });
+    const button = el.querySelector('[data-house-nav-option="cars"] [data-nav-edit-action="show"]'); button.focus();
+    el.hass = { states: { 'sensor.example': { state: '1' } } };
+    expect(document.activeElement).toBe(button); expect(el.querySelector('[data-house-nav-option="cars"] [data-nav-edit-action="show"]')).toBe(button);
+    el.setConfig({ type: 'custom:taylors3d-card', layout_style: 'house', house_navigation: 'future-format', untouched: 42 });
+    expect(el.querySelector('[data-house-nav-option="cars"] button').disabled).toBe(true);
+    let got; el.addEventListener('config-changed', (event) => { got = event.detail.config; });
+    el.querySelector('[data-nav-reset]').click(); expect(got).toEqual({ type: 'custom:taylors3d-card', layout_style: 'house', untouched: 42 });
+    el.remove();
+  });
 });

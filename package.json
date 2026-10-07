@@ -50,7 +50,11 @@
     "check:editor-navigation": "node scripts/editor-navigation-check.mjs",
     "check:custom-controls-polish": "node scripts/custom-controls-polish-check.mjs",
     "check:ui-feedback": "node scripts/ui-feedback-check.mjs",
-    "check:visual-polish": "node scripts/visual-polish-check.mjs"
+    "check:visual-polish": "node scripts/visual-polish-check.mjs",
+    "check:glass-theme": "node scripts/glass-theme-check.mjs",
+    "check:overview": "node scripts/marker-overview-check.mjs && node scripts/marker-overview-check.mjs --bundle",
+    "check:house-menu": "node scripts/house-menu-check.mjs && node scripts/house-menu-integration-check.mjs",
+    "check:search": "node scripts/global-search-check.mjs"
   },
   "license": "MIT",
   "dependencies": {

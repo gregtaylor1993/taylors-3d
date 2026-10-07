@@ -1,12 +1,105 @@
 # Taylor's 3D — requirements and features
 
+## 7 October 2026: approved room overview, House menu and search
+
+Taylor asked to implement the three final-review recommendations, test them and
+push the changes. All three are now implemented and locally verified. They remain
+**Testing** until real-home acceptance is complete. See the
+[plain-language guide](docs/SMART-NAVIGATION-GUIDE.md).
+
+| Feature | Current behaviour | How to use it |
+|---|---|---|
+| F28 — Cleaner house overview | Rooms shows current light/media summaries and reveals the selected room's devices; a compact Rooms chooser handles crowded views. Important activity and All devices remain available, with alerts retained within existing filters. | Use Show on house; save the starting choice in the HA card editor → Appearance. New cards start in Rooms; existing cards retain All devices. |
+| F29 — Personal House menu | Hide/reorder built-in sections; phones show three/four sections and More, while wide cards retain a rail. House stays first and Settings retains its admin permission. | Open House menu in the HA visual card editor. Custom bottom/left/room action bars keep their separate builder. |
+| F30 — Search | Search current rooms, devices, scenes, saved views and in-card settings by name or ID; grouped results open controls or the existing destination. | Choose Search or Ctrl+K/⌘K. Selecting a result never switches a device or activates a scene. |
+
+The menu editor preserves unknown imported options. Search rechecks the current
+account, session and destination before opening it; non-admin users do not see
+settings results. Menus, room controls and search overlay the drawing without
+resizing it. Existing model geometry, lighting, automation targets and saved
+custom actions retain their meaning.
+
+**Local verification:** all 6,813 JavaScript tests in 212 files pass, along with
+lint, build and source/bundle freshness. Native browser checks pass for overview
+(27 source + 27 bundle), menu (81 component + 39 actual-card), search (175 across
+source/bundle), House regression (545) and built-card glass appearance (776).
+These use simulated Home Assistant data, not physical devices.
+
+The final frontend SHA-256 is
+`02f6b02ae7aeb43d6698804be5d685727f7a37f8f0860e07a70977d47ca182ab`.
+The last change removes two default pixels of horizontal slider margin; eight
+new narrow Details-panel browser assertions verify the resulting content fits.
+The overview/menu/search receipts and House source half precede this CSS-only
+fix; their relevant implementation is unchanged. The House bundle half and all
+776 final glass checks use the final build. Earlier failed diagnostics are
+retained locally: missing search stubs in partial test fixtures, one stale
+helper count, and two superseded pre-glass House colour expectations were
+corrected without relaxing geometry, device-action or resource checks.
+
+This delivery includes the earlier usability/glass work and the three new
+features. The requested Git destination is the repository's main branch; use
+this document's Git history for the delivery revision. Source delivery does not
+create a HACS release or install Home Assistant. Actual device/model/wall-panel
+acceptance is still required; earlier installation ZIPs do not contain this work.
+Recent activity and a separate Automatic/Reduced/Solid Glass effects setting
+remain deferred ideas.
+
+## 7 October 2026: final design review
+
+The [final design review](docs/FINAL-DESIGN-REVIEW.md) fixes a duplicate popup
+divider, clipped toolbar keyboard outlines and lost focus when a custom action
+disappears. Targeted tests (350), built-card appearance checks (768), build,
+lint and bundle freshness pass. The matching local package is
+`taylors3d-final-design-review-local-candidate.zip`. Real-home testing remains open;
+at that checkpoint, the review had not committed, pushed, released or installed anything.
+
+At this checkpoint, a cleaner room-first display, customisable built-in navigation
+and one search were proposals. Taylor subsequently approved their implementation;
+the newer section above records that work. Recent activity and an explicit Glass
+effects setting remain deferred.
+
+The preceding glass-appearance candidate passed 6,662 unit tests, 1,535 focused
+source/bundle browser checks and 5,282 broad built-card visual checks. Build,
+lint, bundle freshness and exact installation-ZIP comparison also passed.
+These use simulated HA; real-home acceptance remains Testing. See the preceding
+[glass guide](docs/GLASS-APPEARANCE-GUIDE.md#preceding-verified-local-candidate--7-october-2026)
+for exact build/package identity and retained failed diagnostic runs. This work
+was local and uncommitted at that checkpoint, with no push, release or installation.
+
+## 7 October 2026: minimal glass appearance
+
+Taylor approved dark frosted glass with a matching light option across the whole
+app. The current source shares monochrome navigation, rounded controls, readable
+system typography, restrained glass on floating surfaces and solid settings in
+both House and standard layouts. Actual light colours, warning/alert colours and
+deliberately chosen custom button colours remain. Room controls overlay the house
+without changing its size or camera. See the [glass appearance guide](docs/GLASS-APPEARANCE-GUIDE.md)
+for selection and household checks. Saved `dark`, `light` and `ha` configuration
+values remain compatible; this styles Taylor's 3D rather than the whole HA dashboard.
+Earlier validation/package results below are historical and predate this visual
+follow-up. Final build verification belongs to the new checkpoint; this section
+does not claim a new published, installed or physical-device-tested release.
+
+## 7 October 2026: usability review follow-up
+
+Taylor requested room/device overlays that preserve the house picture, custom
+bottom and left-menu actions, clear settings and a complete usability review.
+The actionable review covers viewport preservation, optional left actions,
+unfinished-draft navigation, model replacement, reachable Save/Cancel and
+plain-language button settings. See [the review report](docs/UI-REVIEW.md) for
+findings, implementation and current validation. Phase 22 evidence below is
+historical and is not a rerun of this follow-up source. At that checkpoint, no
+push, release or installation was part of the review. The latest approved
+source delivery is recorded at the top of this log.
+
 ## Phase 22: 0.4.0 UI polish
 
 **F27 — Testing.** This development version brings the six agreed polish
 improvements together. It builds on the tested `0.3.0` custom-controls source.
 Earlier packages and results below remain historical checkpoints. This work
-has not committed, pushed, published, installed or tested a new version on
-Taylor's actual Home Assistant.
+was later saved locally as commit `162175b`. At that checkpoint it was not
+pushed, published, installed or tested on Taylor's actual Home Assistant. The
+7 October follow-up is included in the newer source delivery recorded above.
 
 | Change | What Taylor can do |
 |---|---|
@@ -325,6 +418,9 @@ For each implementation, update its status, record the changed behavior, link it
 | F25 | Translations, preview, screenshots and bundle checks | Four-language controls, simulated preview/screenshots and bundle matching pass local checks; documented English prose, current CI/release and household gates remain | Testing |
 | F26 | Custom buttons, bars and drag-and-drop builder | Inside-card bottom/room bars, pictured icons/friendly source search, duplication/starters, optional explicit favourites/conditions, drafts, ordering and backups; actual HA pending | Testing |
 | F27 | UI polish across the card | Six connected changes: room sheets, visual builder, grouped/guided editing, favourites, appearance and truthful feedback; local unit/qualified browser/package checks pass, actual HA/panel and current CI acceptance remain | Testing |
+| F28 | Cleaner room-first overview | Rooms/Important activity/All devices, current room summaries, collision-free chooser and retained alerts; combined checks and actual HA/panel acceptance remain | Testing |
+| F29 | Customisable built-in House menu | Visual hide/reorder/reset, protected House/Settings, responsive three/four-section dock and More; custom action bars remain separate | Testing |
+| F30 | Search across the card | Current rooms/devices/scenes/views and admin settings, friendly names/IDs, grouped results and session ownership; opening results sends no device command | Testing |
 
 ## Proposed build order
 

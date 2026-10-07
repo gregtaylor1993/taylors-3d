@@ -165,7 +165,8 @@ describe('House summary in the actual editor', () => {
   });
   it('discards draft on tab leave, context reset and detach, reuses on reattach and disposes only at teardown', () => {
     const { card, edit, house, change, click, field } = setup({ layout: { house_summary: saved() } }); house(); change('title', 'Draft');
-    click('tab', '[data-id="rooms"]'); expect(edit._houseSummaryEditor.draft).toBeNull(); house(); expect(field('title').value).toBe('Our home');
+    click('tab', '[data-id="rooms"]'); expect(edit.tab).toBe('house'); expect(edit._houseSummaryEditor.dirty).toBe(true);
+    click('draft-leave-discard'); expect(edit._houseSummaryEditor.draft).toBeNull(); house(); expect(field('title').value).toBe('Our home');
     change('title', 'Other draft'); edit.cancelHistoryGestures(); expect(edit._houseSummaryEditor.draft).toBeNull(); edit.render();
     change('title', 'Detached draft'); edit.detach(); expect(edit._houseSummaryEditor.draft).toBeNull(); expect(edit._houseSummaryEditor.disposed).toBe(false);
     edit.attach(); edit.render(); expect(field('title').value).toBe('Our home'); change('title', 'Saved'); click('house-summary-save'); expect(card._commit).toHaveBeenCalledOnce();

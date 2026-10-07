@@ -17,6 +17,16 @@ export const HOUSE_NAVIGATION_ITEMS = Object.freeze([
 export function localizeHouseNavigationItems(hass) {
   return HOUSE_NAVIGATION_ITEMS.map((item) => ({ ...item, label: localize(hass, `house.nav.${item.id}`, {}, item.label) }));
 }
+/** Read known presentation options only. Imported extras are never actions. */
+export function resolveHouseNavigationItems(raw, hass) {
+  const defaults = localizeHouseNavigationItems(hass);
+  const options = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const known = new Map(defaults.map((item) => [item.id, item]));
+  const order = Array.isArray(options.order) ? options.order.filter((id) => known.has(id)) : [];
+  const ids = [...new Set(['house', ...order.filter((id) => id !== 'house'), ...known.keys()])];
+  const hidden = new Set(Array.isArray(options.hidden) ? options.hidden : []);
+  return ids.map((id) => ({ ...known.get(id), hidden: !['house', 'settings'].includes(id) && hidden.has(id) }));
+}
 const plain = (value) => !!value && typeof value === 'object'
   && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 const validId = (value) => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(value);
@@ -56,9 +66,9 @@ function readItem(raw) {
   } catch { return null; }
 }
 
-// Root sets data-house-navigation-layout="rail" only from its actual card width.
-// Bottom layout keeps every supplied option reachable by native horizontal scroll.
-// No absolute positioning or scene rectangle is claimed by this standalone CSS.
+// Root calls setLayout with its actual card width. Compact navigation exposes
+// overflow in a temporary menu; its absolute surface claims no scene rectangle.
+let navigationSequence = 0;
 export const HOUSE_NAVIGATION_CSS = `
 [data-house-navigation][data-taylors3d-nav-rail][data-house-navigation-layout]{display:block;box-sizing:border-box;min-width:0;max-width:100%;background:var(--taylors3d-ui-surface,var(--ha-card-background,var(--card-background-color,#fff)));color:var(--taylors3d-ui-text,var(--primary-text-color,#212121));border:1px solid var(--taylors3d-ui-divider,var(--divider-color,#888));border-radius:18px;padding:8px;font:inherit}
 [data-house-navigation] [data-house-navigation-items]{display:flex;flex-direction:row;gap:8px;max-width:100%;overflow-x:auto;overflow-y:hidden;overscroll-behavior:contain;scroll-padding:6px;padding:6px;scrollbar-width:thin}
@@ -71,6 +81,10 @@ export const HOUSE_NAVIGATION_CSS = `
 [data-house-navigation][data-house-navigation-layout="rail"] [data-house-navigation-items]{flex-direction:column;overflow-x:hidden;overflow-y:auto;padding:4px 0}
 [data-house-navigation][data-house-navigation-layout="rail"] button{width:100%;max-width:100%;padding-inline:4px;min-height:56px}
 [data-house-navigation][hidden],[data-house-navigation] [hidden]{display:none!important}
+[data-house-navigation][data-house-navigation-compact] [data-house-navigation-items]{display:grid;grid-template-columns:repeat(var(--house-navigation-columns,4),minmax(0,1fr));gap:4px;overflow:visible;padding:4px}
+[data-house-navigation][data-house-navigation-compact] [data-house-navigation-items]>button{width:100%;max-width:none;min-width:44px;padding:8px 2px;font-size:11px}
+[data-house-navigation] [data-house-navigation-overflow]{position:absolute;bottom:calc(100% + 8px);left:0;right:0;z-index:2;max-height:min(300px,60vh);overflow-y:auto;box-sizing:border-box;padding:10px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;background:var(--taylors3d-ui-surface,var(--card-background-color,#fff));border:1px solid var(--taylors3d-ui-border,var(--divider-color,#888));border-radius:18px;box-shadow:0 12px 36px #0004}
+[data-house-navigation] [data-house-navigation-overflow]>button{width:100%;max-width:none;min-height:52px}
 @media(forced-colors:active){[data-house-navigation] button{color:ButtonText;background:ButtonFace;border-color:ButtonText}[data-house-navigation] button[aria-pressed="true"]{color:HighlightText;background:Highlight;border-color:Highlight}[data-house-navigation] button:focus-visible,[data-house-navigation]:focus-visible{outline-color:Highlight}}
 `;
 
@@ -78,7 +92,7 @@ export const HOUSE_NAVIGATION_CSS = `
  * Actions are exactly {type:'category'|'control',id} or {type:'route',path}.
  * Only onSelect(action,{id,label,icon}) runs, once per deliberate native click.
  * Selection changes only when root updates it. Detached/stale controls cannot act.
- * Set element.dataset.houseNavigationLayout='rail'|'bottom' from actual card size;
+ * Call setLayout('rail'|'bottom', width) from actual card size;
  * root owns positioning/reserved space and real category/route implementation.
  */
 export class HouseNavigation {
@@ -91,11 +105,40 @@ export class HouseNavigation {
     this.element.dataset.houseNavigationLayout = 'bottom'; this.element.setAttribute('aria-label', 'House navigation'); this.element.tabIndex = -1;
     const style = document.createElement('style'); style.textContent = HOUSE_NAVIGATION_CSS;
     this.items = document.createElement('div'); this.items.dataset.houseNavigationItems = '';
-    this.element.append(style, this.items); parent.append(this.element);
+    this.overflow = document.createElement('div'); this.overflow.dataset.houseNavigationOverflow = ''; this.overflow.hidden = true;
+    this.overflow.id = `taylors3d-house-menu-${++navigationSequence}`;
+    this.overflow.setAttribute('role', 'group');
+    this.more = document.createElement('button'); this.more.type = 'button'; this.more.dataset.houseNavigationMore = '';
+    this.more.setAttribute('aria-expanded', 'false'); this.more.hidden = true;
+    this.more.setAttribute('aria-controls', this.overflow.id);
+    const moreIcon = document.createElement('ha-icon'); moreIcon.setAttribute('icon', 'mdi:dots-horizontal'); moreIcon.setAttribute('aria-hidden', 'true');
+    this.moreLabel = document.createElement('span'); this.more.append(moreIcon, this.moreLabel);
+    this.element.append(style, this.items, this.overflow); parent.append(this.element);
+    this._outside = (event) => {
+      if (event.type === 'pointerdown') this._dismissClick = false;
+      const path = event.composedPath?.() || [];
+      if (path.includes(this.element)) return;
+      const insideStage = path.includes(this.parent);
+      if (this._dismissClick && event.type === 'click') {
+        this._dismissClick = false;
+        if (insideStage) { event.preventDefault(); event.stopImmediatePropagation(); }
+        return;
+      }
+      if (!this._open) return;
+      this.closeMore(insideStage);
+      if (insideStage) {
+        this._dismissClick = event.type === 'pointerdown';
+        event.preventDefault(); event.stopImmediatePropagation();
+      }
+    };
+    document.addEventListener('pointerdown', this._outside, true); document.addEventListener('click', this._outside, true);
     this._handlers = new Map([
       ['pointerdown', (event) => this._press(event)], ['pointerup', (event) => this._release(event)],
       ['pointercancel', (event) => this._cancel(event)], ['keydown', (event) => this._key(event)],
-      ['keyup', (event) => this._release(event)], ['focusout', (event) => this._cancel(event, true)],
+      ['keyup', (event) => this._release(event)], ['focusout', (event) => {
+        this._cancel(event, true);
+        if (event.relatedTarget && !this.element.contains(event.relatedTarget)) this.closeMore(false);
+      }],
       ['click', (event) => this._click(event)], ['wheel', (event) => event.stopPropagation()],
     ]);
     for (const [type, handler] of this._handlers) this.element.addEventListener(type, handler);
@@ -104,7 +147,37 @@ export class HouseNavigation {
   _button(event) { return event.target?.closest?.('button[data-house-navigation-id]'); }
   _live(button) {
     return !this._disposed && this.parent.isConnected && this.element.isConnected && this.element.parentNode === this.parent
-      && button?.parentNode === this.items && this.items.parentNode === this.element;
+      && (button?.parentNode === this.items || button?.parentNode === this.overflow && this._open)
+      && this.items.parentNode === this.element;
+  }
+  setLayout(mode, width = 390) {
+    const rail = mode === 'rail', limit = width < 390 ? 3 : 4;
+    const changed = this._compact !== !rail || this._limit !== limit;
+    this.element.dataset.houseNavigationLayout = rail ? 'rail' : 'bottom';
+    this._compact = !rail; this._limit = limit;
+    this.element.toggleAttribute('data-house-navigation-compact', !rail);
+    if (changed) {
+      const hidden = this.element.hidden;
+      this.closeMore(false); this.update(); this.element.hidden = hidden;
+    }
+  }
+  closeMore(restoreFocus = true) {
+    if (!this._open) return;
+    this._open = false; this.overflow.hidden = true; this.more.setAttribute('aria-expanded', 'false');
+    if (this.element.style.zIndex === '40') {
+      if (this._beforeMoreZ?.value) this.element.style.setProperty('z-index', this._beforeMoreZ.value, this._beforeMoreZ.priority);
+      else this.element.style.removeProperty('z-index');
+    }
+    for (const [button, gesture] of this._gestures) if (button.parentNode === this.overflow) gesture.poisoned = true;
+    if (restoreFocus && !this.more.hidden && this.more.isConnected) this.more.focus();
+  }
+  _toggleMore() {
+    if (this.more.hidden || !this.element.isConnected || this._disposed) return;
+    if (this._open) { this.closeMore(); return; }
+    this._open = true; this.overflow.hidden = false; this.more.setAttribute('aria-expanded', 'true');
+    this._beforeMoreZ = { value: this.element.style.getPropertyValue('z-index'), priority: this.element.style.getPropertyPriority('z-index') };
+    this.element.style.setProperty('z-index', '40');
+    [...this.overflow.children].find((button) => this._current(button))?.focus();
   }
   _current(button) {
     if (!this._live(button) || !Array.isArray(this._rawItems) || this._rawItems.length > HOUSE_NAVIGATION_LIMITS.items) return null;
@@ -117,6 +190,9 @@ export class HouseNavigation {
   update({ selected = this.selected, items = this._rawItems, hass = this._hass } = {}) {
     if (this._disposed) return { valid: false, diagnostics: [{ code: 'disposed', message: 'Navigation has been disposed.' }] };
     this._hass = hass;
+    this.moreLabel.textContent = localize(hass, 'settings.nav.more', {}, 'More');
+    this.more.setAttribute('aria-label', this.moreLabel.textContent);
+    this.overflow.setAttribute('aria-label', localize(hass, 'settings.nav.moreSections', {}, 'More house sections'));
     const aria = localize(hass, 'house.nav.aria', {}, 'House navigation');
     if (this.element.getAttribute('aria-label') !== aria) this.element.setAttribute('aria-label', aria);
     this.selected = validId(selected) ? selected : null; this._rawItems = items;
@@ -135,7 +211,9 @@ export class HouseNavigation {
     for (const id of duplicates) next.delete(id);
     const focused = this.element.getRootNode().activeElement;
     for (const [id, row] of this._rows) if (!next.has(id)) { this._gestures.delete(row.button); row.button.remove(); this._rows.delete(id); }
-    for (const [index, item] of [...next.values()].entries()) {
+    let visibleIndex = 0;
+    const primary = [], overflow = [];
+    for (const item of next.values()) {
       let row = this._rows.get(item.id);
       if (!row) {
         const button = this.parent.ownerDocument.createElement('button'); button.type = 'button'; button.dataset.houseNavigationId = item.id;
@@ -144,23 +222,36 @@ export class HouseNavigation {
         button.append(icon, label); row = { button, icon, label, intent: ++this._nextIntent }; this._rows.set(item.id, row);
       } else if (row.item.key !== item.key || row.item.hidden !== item.hidden || row.item.disabled !== item.disabled) row.intent = ++this._nextIntent;
       row.item = item;
-      if (row.label.textContent !== item.label) row.label.textContent = item.label;
+      const label = this._compact && item.id === 'house' && item.action.type === 'control' && item.action.id === '3d'
+        && item.label === localize(hass, 'house.nav.house', {}, 'House / 3D')
+        ? localize(hass, 'settings.nav.houseShort', {}, 'House') : item.label;
+      if (row.label.textContent !== label) row.label.textContent = label;
       row.icon.setAttribute('icon', item.icon); row.button.setAttribute('aria-label', item.label); row.button.title = item.label;
       row.button.hidden = item.hidden; row.button.disabled = item.disabled || typeof this.onSelect !== 'function';
       row.button.dataset.houseNavigationAction = item.action.type;
       const active = this.selected === item.id && !item.hidden;
       row.button.setAttribute('aria-pressed', String(active));
       if (active) row.button.setAttribute('aria-current', item.action.type === 'route' ? 'page' : 'true'); else row.button.removeAttribute('aria-current');
-      if (this.items.children[index] !== row.button) this.items.insertBefore(row.button, this.items.children[index] || null);
+      const inOverflow = this._compact && !item.hidden && visibleIndex++ >= this._limit;
+      (inOverflow ? overflow : primary).push(row.button);
     }
+    const arrange = (parent, buttons) => buttons.forEach((button, index) => {
+      if (parent.children[index] !== button) parent.insertBefore(button, parent.children[index] || null);
+    });
+    this.more.hidden = overflow.length === 0;
+    if (this.more.hidden) { this.closeMore(false); this.more.remove(); }
+    else primary.push(this.more);
+    arrange(this.items, primary); arrange(this.overflow, overflow);
+    this.element.style.setProperty('--house-navigation-columns', String(Math.min(this._limit || 4, visibleIndex) + (overflow.length ? 1 : 0)));
+    this.more.setAttribute('aria-pressed', String(overflow.some((button) => button.dataset.houseNavigationId === this.selected)));
     this.element.hidden = ![...next.values()].some((item) => !item.hidden);
     for (const [button, gesture] of this._gestures) {
       const row = this._current(button);
       if (!row || row.intent !== gesture.intent) gesture.poisoned = true;
     }
-    if (focused && this.element.contains(focused) && !focused.hidden && !focused.disabled && this.parent.isConnected
+    if (focused && this.element.contains(focused) && !focused.hidden && !focused.disabled && (focused.parentNode !== this.overflow || this._open) && this.parent.isConnected
       && this.element.getRootNode().activeElement !== focused) focused.focus();
-    else if (focused?.dataset?.houseNavigationId && (!this.element.contains(focused) || focused.hidden || focused.disabled)
+    else if (focused?.dataset?.houseNavigationId && (!this.element.contains(focused) || focused.hidden || focused.disabled || focused.parentNode === this.overflow && !this._open)
       && !this.element.hidden && this.parent.isConnected) {
       const available = [...this.items.children].find((button) => this._current(button));
       (available || this.element).focus();
@@ -186,11 +277,13 @@ export class HouseNavigation {
     if (!heldOnly) event.stopPropagation();
   }
   _key(event) {
+    if (event.key === 'Escape' && this._open) { event.preventDefault(); event.stopPropagation(); this.closeMore(); return; }
     if (['Enter', ' '].includes(event.key)) {
       if (event.repeat) { event.stopPropagation(); event.preventDefault(); return; }
       this._press(event); return; // The browser's native button click is the action.
     }
-    const button = this._button(event), visible = [...this.items.children].filter((node) => this._current(node));
+    const button = event.target?.closest?.('button'), group = button?.parentNode === this.overflow ? this.overflow : this.items;
+    const visible = [...group.children].filter((node) => node === this.more && !node.hidden || this._current(node));
     const index = visible.indexOf(button), delta = ['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : ['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 0;
     if (index < 0 || !delta && !['Home', 'End'].includes(event.key)) return;
     event.stopPropagation(); event.preventDefault();
@@ -200,15 +293,19 @@ export class HouseNavigation {
   _click(event) {
     event.stopPropagation(); const button = this._button(event), row = this._current(button), gesture = this._gestures.get(button);
     if (event.button !== undefined && event.button !== 0) return;
+    if (event.target?.closest?.('[data-house-navigation-more]') === this.more) { this._toggleMore(); return; }
     if (!row) { if (gesture) gesture.poisoned = true; return; }
     if (gesture && (gesture.poisoned || gesture.consumed || gesture.intent !== row.intent)) return;
     if (gesture) { gesture.consumed = true; if (!gesture.held) this._gestures.delete(button); }
-    this.onSelect(row.item.action, { id: row.item.id, label: row.item.label, icon: row.item.icon });
+    const action = row.item.action, details = { id: row.item.id, label: row.item.label, icon: row.item.icon };
+    if (button.parentNode === this.overflow) this.closeMore();
+    this.onSelect(action, details);
   }
   dispose() {
     if (this._disposed) return;
     this._disposed = true;
     for (const [type, handler] of this._handlers) this.element.removeEventListener(type, handler);
+    this.parent.ownerDocument.removeEventListener('pointerdown', this._outside, true); this.parent.ownerDocument.removeEventListener('click', this._outside, true);
     this._gestures.clear(); this._rows.clear(); this._rawItems = []; this.onSelect = null; this.element.remove();
   }
 }

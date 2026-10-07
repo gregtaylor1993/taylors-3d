@@ -59,6 +59,7 @@ function setup({ admin = true } = {}) {
     _config: { layout_key: 'home' }, _layout: { rooms: [], pins: {}, unknown: 'unchanged' }, _built: {}, _floor: 'ground', _mode: 'top',
     _floors: floors, _roomList: [], _markers: [], _positions: new Map(), _stage: document.createElement('div'),
     _store: { backend: 'shared' }, _history: new EditHistory(), _applyMarkerSelection: vi.fn(), modelBindings: () => null,
+    _syncSearch: vi.fn(), // This backup fixture does not mount the unrelated search overlay.
     _syncCustomControls: vi.fn(), // This backup fixture does not mount a custom bar.
     _hass: { user: { id: 'current', is_active: true, is_admin: admin }, connection: Object.assign(new EventTarget(), { connected: true, options: { auth: {} } }),
       auth: {}, callWS: h.ws, fetchWithAuth: h.fetch, callService: vi.fn(), states: {}, entities: {}, devices: {}, areas: {}, floors: {} },

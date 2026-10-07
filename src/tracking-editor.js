@@ -106,6 +106,8 @@ export class TrackingEditor {
       ['focusout', (event) => this._cancelPress(event)], ['focusin', (event) => { if (event.target?.dataset?.field?.startsWith('trk-')) { this.observe(); this._fields.set(event.target, { epoch: this._epoch, draft: this.draft }); } }]]);
   }
   get hass() { return this.card._hass || {}; }
+  _draftSnapshot() { return JSON.stringify([this.draft, this.maps, this.locationMode, [...this.styleEdits], this.relinking]); }
+  get dirty() { return !!this.draft && (this.editingIndex === null || this._draftBaseline !== this._draftSnapshot()); }
   get canEdit() { const user = this.hass.user; return !this.disposed && this.card.isConnected === true && this.card._editing === true
     && this.card._edit?.tab === 'tracking' && !!this.card._layout && !this.card._loading && this.hass.connection?.connected === true
     && typeof user?.id === 'string' && !!user.id.trim() && user.is_admin === true && (!Object.hasOwn(user, 'is_active') || user.is_active === true); }
@@ -152,6 +154,7 @@ export class TrackingEditor {
     return list(this.card._layout?.[key] ?? this.card._config?.[key]);
   }
   reset() {
+    this._draftBaseline = null;
     this._unbind(); this._epoch++; this.stale = false; this._draftContext = null; this._observed = null;
     this._clearCalibration();
     this.draft = null; this.maps = []; this.message = null; this.relinking = false; this.previewContainer = null; this.editingIndex = null;
@@ -287,6 +290,7 @@ export class TrackingEditor {
     this.locationMode = this.draft.position_key ? 'anchor' : this.draft.position ? 'position' : 'room';
     const source = this.draft.room_source;
     this.maps = plain(source?.room_map) ? Object.entries(source.room_map).flatMap(([value, roomId]) => list(roomId).length ? roomId.map((id) => ({ value, roomId: id })) : [{ value, roomId }]) : [];
+    this._draftBaseline = this._draftSnapshot();
     this.onRender();
   }
   _new() {

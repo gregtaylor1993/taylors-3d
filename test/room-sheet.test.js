@@ -21,7 +21,8 @@ afterEach(() => { sheet.dispose(); popup.remove(); });
 describe('room sheet presentation and native gesture ownership', () => {
   it('uses actual available card space, bounded controls/details, and a separate desktop presentation', () => {
     expect(roomSheetHeights(900,600)).toEqual({summary:200,controls:288,details:552});
-    expect(roomSheetHeights(900,200)).toEqual({summary:200,controls:240,details:360});
+    expect(roomSheetHeights(900,200)).toEqual({summary:184,controls:184,details:184});
+    expect(roomSheetHeights(900,0)).toEqual({summary:0,controls:0,details:0});
     expect(roomSheetHeights(10000,10000)).toEqual({summary:200,controls:320,details:560});
     expect(popup.dataset.roomSheet).toBe('controls'); expect(popup.style.getPropertyValue('--taylors3d-room-sheet-height')).toBe('288px');
     sheet.buttons.get('summary').click(); expect(popup.dataset.roomSheet).toBe('summary');
@@ -36,6 +37,15 @@ describe('room sheet presentation and native gesture ownership', () => {
     expect(onChange).toHaveBeenCalledExactlyOnceWith('details'); expect(context.callService).not.toHaveBeenCalled();
     pointer(sheet.handle,'pointerdown',230); pointer(sheet.handle,'pointermove',700); pointer(sheet.handle,'pointerup',700); sheet.handle.click();
     expect(sheet.mode).toBe('summary'); expect(onChange).toHaveBeenCalledTimes(2);
+  });
+  it('caps every mode to short existing scene space without changing its selected content mode', () => {
+    sheet.buttons.get('details').click();sheet.updateGeometry({width:320,baseHeight:340,availableHeight:224});
+    expect(sheet.heights).toEqual({summary:200,controls:208,details:208});expect(sheet.mode).toBe('details');
+    expect(popup.style.getPropertyValue('--taylors3d-room-sheet-height')).toBe('208px');
+    expect(popup.hasAttribute('data-room-sheet-short')).toBe(true);expect(sheet.handle.disabled).toBe(false);
+    expect(sheet.buttons.get('details').getAttribute('aria-pressed')).toBe('true');expect(context.callService).not.toHaveBeenCalled();
+    sheet.updateGeometry({width:320,baseHeight:900,availableHeight:600});
+    expect(popup.hasAttribute('data-room-sheet-short')).toBe(false);expect(sheet.mode).toBe('details');
   });
   it('has explicit keyboard size controls and bounded single key presses', () => {
     keyboard(sheet.handle,'keydown','End'); expect(sheet.mode).toBe('details');

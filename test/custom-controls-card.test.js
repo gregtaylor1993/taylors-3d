@@ -49,6 +49,29 @@ function editingFixture() {
 }
 
 describe('custom buttons in the actual card adapter', () => {
+  it('routes left-menu actions through the saved source and hides the menu while editing or loading', async () => {
+    const c = fixture(); c._layout.custom_controls.bars[0].placement = 'left';
+    const host = document.createElement('div'); document.body.append(host);
+    c._customControlsLeftHost = host;
+    c._customControlsLeftView = new CustomControlsView(host, {
+      placement: 'left', getContext: () => c._customControlContext('left'),
+      onAction: (bar, button) => c._runCustomControl(bar, button, 'left'),
+    }); views.push(c._customControlsLeftView);
+    c._syncCustomControls();
+    expect(c._customControlsHost.hidden).toBe(true); expect(host.hidden).toBe(false);
+    expect(c._runCustomControl('evening', 'movie', 'bottom').ok).toBe(false);
+    expect(c._hass.callService).not.toHaveBeenCalled();
+    await c._runCustomControl('evening', 'movie', 'left');
+    expect(c._hass.callService).toHaveBeenCalledExactlyOnceWith('scene', 'turn_on', { entity_id: 'scene.movie' });
+    for (const field of ['_editing', '_loading']) {
+      c[field] = true; c._syncCustomControls(); expect(host.hidden).toBe(true);
+      expect(c._runCustomControl('evening', 'movie', 'left').ok).toBe(false);
+      c[field] = false; c._syncCustomControls(); expect(host.hidden).toBe(false);
+    }
+    c._hass.connection.connected = false; c._syncCustomControls();
+    expect(c._runCustomControl('evening', 'movie', 'left').ok).toBe(false);
+    expect(c._hass.callService).toHaveBeenCalledTimes(1);
+  });
   it('uses own shared settings without calling an accessor or reviving an inactive config', () => {
     const c = fixture(), getter = vi.fn(() => undefined);
     c._config.custom_controls = c._layout.custom_controls; c._layout = { custom_controls: null };

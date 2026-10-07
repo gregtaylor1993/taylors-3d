@@ -78,7 +78,8 @@ describe('Furniture in the actual editor', () => {
   });
   it('cancels preview on tab leave without changing saved furniture', () => {
     const { card, edit, furniture, change, click } = setup({ instances: [row()] }); furniture(); change('x', '4');
-    click('tab', '[data-id="rooms"]'); expect(edit._furnitureEditor.draft).toBeNull();
+    click('tab', '[data-id="rooms"]'); expect(edit.tab).toBe('furniture'); expect(edit._furnitureEditor.dirty).toBe(true);
+    click('draft-leave-discard'); expect(edit._furnitureEditor.draft).toBeNull();
     expect(card.furniturePreviewDraft).toHaveBeenLastCalledWith(null); expect(card._layout.furniture.instances[0].x).toBe(1);
     expect(card._commit).not.toHaveBeenCalled();
   });

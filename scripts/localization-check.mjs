@@ -193,6 +193,11 @@ async function ready(page) {
 }
 async function control(page, selector, callback) {
   await revealEditorTab(page, selector);
+  const needsMore = await page.evaluate((selector) => {
+    const node = document.querySelector('taylors3d-card').shadowRoot.querySelector(selector);
+    return node?.parentElement?.hasAttribute('data-house-navigation-overflow') && node.parentElement.hidden;
+  }, selector);
+  if (needsMore) await control(page, '[data-house-navigation-more]', (element) => element.click());
   context = `native control ${selector}`;
   const handle = await page.evaluateHandle((selector) => document.querySelector('taylors3d-card').shadowRoot.querySelector(selector), selector);
   try {
@@ -1286,8 +1291,8 @@ async function readabilityAndIdle(page, mode) {
     const nav = shadow.querySelector('[data-house-navigation]'), items = nav.querySelector('[data-house-navigation-items]');
     const rect = (node) => { const r = node.getBoundingClientRect(); return { x: r.x, right: r.right, y: r.y, bottom: r.bottom, width: r.width, height: r.height }; };
     return { stage: rect(card._stage), scene: rect(card._scene), popup: rect(popup), popupMode: popup.dataset.houseControlsLayout,
-      nav: rect(nav), scrollable: items.scrollWidth > items.clientWidth,
-      targets: [...shadow.querySelectorAll('[data-house-navigation-id],.t3d-popup-close,.t3d-entity-actions button')]
+      nav: rect(nav), scrollable: items.scrollWidth > items.clientWidth, more: !nav.querySelector('[data-house-navigation-more]').hidden,
+      targets: [...shadow.querySelectorAll('[data-house-navigation-id],[data-house-navigation-more],.t3d-popup-close,.t3d-entity-actions button')]
         .filter((node) => !node.hidden && node.getClientRects().length).map((node) => ({ label: node.getAttribute('aria-label') || node.textContent, ...rect(node) })),
       overflow: [...popup.querySelectorAll('.t3d-entity-name,.t3d-entity-value,.t3d-entity-actions button,.t3d-popup-kind,.t3d-popup-head h3')]
         .filter((node) => node.scrollWidth > node.clientWidth + 1).map((node) => ({ label: node.textContent, width: node.clientWidth, scroll: node.scrollWidth })),
@@ -1297,7 +1302,7 @@ async function readabilityAndIdle(page, mode) {
   });
   check('Spanish room controls use actual320px bottom sheet with no horizontal clipping', Math.abs(layout.actualWidth - 320) < .1
     && layout.popupMode === 'sheet' && !layout.outside && layout.overflow.length === 0 && layout.enoughScene, layout);
-  check('translated narrow navigation keeps every supplied action reachable via native horizontal scrolling', layout.scrollable
+  check('translated narrow navigation fits its favourites and exposes the remaining actions through More', !layout.scrollable && layout.more
     && layout.targets.filter((target) => target.label).every((target) => target.width >= 44 && target.height >= 44), layout.targets);
   await screenshot(page, `localization-${mode}-es-320-room.png`); await escape(page);
   await focus(page, nav('settings')); await page.keyboard.press('End');

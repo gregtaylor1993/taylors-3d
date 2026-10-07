@@ -52,6 +52,29 @@ function pointer(node, type, id = 1) { const event = new Event(type, { bubbles: 
 afterEach(() => { owners.splice(0).forEach((editor) => editor.dispose()); document.body.replaceChildren(); delete document.elementFromPoint; vi.restoreAllMocks(); });
 
 describe('visual catalogue, templates and deliberate favourites', () => {
+  it('moves a named bar to the left menu through one Save and Undo without changing actions or extensions', () => {
+    const raw = settings([bar('evening', [button()], { extension: { kept: true } })]), before = structuredClone(raw), h = setup({ raw });
+    h.change('placement', 'left'); expect(h.editor.draft.bars[0].placement).toBe('left'); h.click('save');
+    expect(h.card._layout.custom_controls.bars[0]).toEqual({ ...before.bars[0], placement: 'left' });
+    expect(h.history.undo().layout.custom_controls).toEqual(before); expect(raw).toEqual(before); expect(h.card._hass.callService).not.toHaveBeenCalled();
+  });
+  it('requires readable new or changed names while retaining untouched imported blank names', () => {
+    const h = setup({ raw: settings([bar('evening', [button()], { label: '' })]) });
+    h.change('button-label', 'Cinema', 'evening', 'movie', 'input'); expect(h.action('save').disabled).toBe(false);
+    h.change('button-label', '  ', 'evening', 'movie', 'input'); expect(h.action('save').disabled).toBe(true);
+    expect(h.host.querySelector('[data-cc-status]').textContent).toContain('clear name');
+    h.change('button-label', 'Cinema', 'evening', 'movie', 'input'); h.change('bar-label', ' ', 'evening', undefined, 'input');
+    expect(h.action('save').disabled).toBe(true); h.change('bar-label', 'Evening', 'evening', undefined, 'input'); expect(h.action('save').disabled).toBe(false);
+  });
+  it('offers friendly exact vacuum states and current match feedback without running a command', () => {
+    const raw = settings([bar('evening', [button('movie', undefined, { visibility: { type: 'state', entity: 'vacuum.house', state: 'cleaning', future: 'keep' } })])]);
+    const h = setup({ raw }); h.card._hass.states['vacuum.house'] = state('vacuum.house', 'cleaning'); h.editor.updatePreviews(h.host);
+    const choice = h.field('condition-choice', 'evening', 'movie'); expect(choice.selectedOptions[0].textContent).toBe('Cleaning · current reading');
+    expect(h.host.querySelector('[data-cc-condition-status]').textContent).toContain('Shown now');
+    h.change('condition-choice', 'docked', 'evening', 'movie'); expect(h.editor.draft.bars[0].buttons[0].visibility).toEqual({ type: 'state', entity: 'vacuum.house', state: 'docked', future: 'keep' });
+    expect(h.field('condition-state', 'evening', 'movie').value).toBe('docked'); expect(h.host.querySelector('[data-cc-condition-status]').textContent).toContain('Hidden now');
+    h.click('cancel'); expect(h.card._layout.custom_controls).toEqual(raw); expect(h.card._hass.callService).not.toHaveBeenCalled();
+  });
   it('preserves a future visibility envelope through review and Cancel, and changes it only after explicit replacement Save', () => {
     const raw = settings([bar('evening', [button('movie', { type: 'scene', entity: 'scene.movie' }, {
       visibility: { type: 'future-rule', entity: 'vacuum.literal_future', state: 'cleaning', unknown: { keep: 'raw' } } })])]);

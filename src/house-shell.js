@@ -55,10 +55,13 @@ export class HouseShell {
   _property(node, key, value) {
     let records = this._styles.get(node); if (!records) this._styles.set(node, records = new Map());
     if (!records.has(key)) records.set(key, { value: node.style.getPropertyValue(key), priority: node.style.getPropertyPriority(key), last: value });
-    records.get(key).last = value;
     if (node.style.getPropertyValue(key) !== value || node.style.getPropertyPriority(key)) {
       if (value === '') node.style.removeProperty(key); else node.style.setProperty(key, value);
     }
+    // Chromium may serialise fractional CSS pixels to fewer decimals. Record
+    // the actual owned CSSOM value so normalisation is not mistaken for a
+    // foreign edit when leaving House mode.
+    records.get(key).last = node.style.getPropertyValue(key);
   }
   _restore(node) {
     for (const [key, record] of this._attributes.get(node) || []) if (sameAttribute(node, key, record.last)) {
@@ -150,7 +153,7 @@ export class HouseShell {
     const mode = this.editing ? 'editor' : width >= HOUSE_SHELL_LIMITS.railAt ? 'rail' : 'bottom';
     this._attribute(this._stage, 'data-taylors3d-shell-mode', mode);
     this._attribute(this._stage, 'data-taylors3d-shell-size', width < HOUSE_SHELL_LIMITS.sheetBelow ? 'compact' : 'comfortable');
-    this.navigation.element.dataset.houseNavigationLayout = mode === 'rail' ? 'rail' : 'bottom';
+    this.navigation.setLayout(mode === 'rail' ? 'rail' : 'bottom', width);
     const popup = this._currentPopup(); if (this._popup && this._popup !== popup) this._restore(this._popup); this._popup = popup;
     if (popup) { this._attribute(popup, 'data-taylors3d-controls', 'adaptive');
       this._attribute(popup, 'data-house-controls-layout', this.editing ? 'hidden' : width < HOUSE_SHELL_LIMITS.sheetBelow ? 'sheet' : 'right');
@@ -171,7 +174,7 @@ export class HouseShell {
     // previously expanded stage height. Update a closed controller as well so
     // reopening after a phone/desktop resize cannot reuse old wide geometry.
     this.card._devicePopup?.updateRoomSheetGeometry?.({ width, baseHeight,
-      availableHeight:Math.max(0,baseHeight-withoutControls.summaryReserve-withoutControls.toolbarReserve-withoutControls.navigationReserve) });
+      availableHeight:withoutControls.scene.height });
     controlSize = this.editing ? { width: 0, height: 0 } : this._dimensions(popup);
     controlsOpen = controlSize.width > 0 && controlSize.height > 0;
     const plan = planHouseShell({ ...readings,controlsWidth:controlSize.width,controlsHeight:controlSize.height,controlsOpen });

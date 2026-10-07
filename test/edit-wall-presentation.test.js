@@ -195,7 +195,8 @@ describe('wall presentation in the actual Model editor', () => {
   });
   it('cleans pending/draft state on tab leave, history cancellation, detach and permanent dispose', () => {
     const { card, edit, model, click } = setup(); model(); click('wall-presentation-add'); click('wall-presentation-pick');
-    click('tab', '[data-id="rooms"]'); expect(edit._wallPresentationEditor.draft).toBeNull(); expect(edit._wallPresentationEditor.pendingSurfacePick).toBeNull();
+    click('tab', '[data-id="rooms"]'); expect(edit.tab).toBe('model'); expect(edit._wallPresentationEditor.dirty).toBe(true);
+    click('draft-leave-discard'); expect(edit._wallPresentationEditor.draft).toBeNull(); expect(edit._wallPresentationEditor.pendingSurfacePick).toBeNull();
     model(); click('wall-presentation-add'); click('wall-presentation-pick'); edit.cancelHistoryGestures(); expect(edit._wallPresentationEditor.draft).toBeNull();
     edit.render(); click('wall-presentation-add'); click('wall-presentation-pick'); edit.detach(); expect(edit._wallPresentationEditor.draft).toBeNull();
     expect(edit._wallPresentationEditor.disposed).toBe(false); edit.attach(); edit.render(); edit.dispose(); expect(edit._wallPresentationEditor.disposed).toBe(true);

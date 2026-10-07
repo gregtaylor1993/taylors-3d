@@ -73,6 +73,7 @@ describe('Model shading in the actual layout editor', () => {
   it('discards only the unsaved display draft on Cancel, tab leave, context reset and detach', () => {
     const { card, edit, model, choose, select, click } = setup(); model(); choose('authored'); click('model-rendering-cancel');
     expect(select().value).toBe('normal'); choose('authored'); click('tab', '[data-id="rooms"]');
+    expect(edit.tab).toBe('model'); expect(edit._modelRenderingEditor.dirty).toBe(true); click('draft-leave-discard');
     expect(edit._modelRenderingEditor.draft).toBeNull(); model(); expect(select().value).toBe('normal');
     choose('authored'); edit.cancelHistoryGestures(); expect(edit._modelRenderingEditor.draft).toBeNull();
     edit.render(); choose('authored'); edit.detach(); expect(edit._modelRenderingEditor.draft).toBeNull();

@@ -11,6 +11,9 @@ import { roomActionEntities as entities, roomActionLayoutKey as key, prepareRoom
 const checks = [], browserErrors = [];
 let mode = '', context = 'setup';
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// OrbitControls re-expresses an idle camera within machine roundoff each frame.
+// Keep exact pixel rectangles; bound every camera component to one nanometre.
+const sameCamera = (a,b) => a.length===b.length && a.every((value,index)=>Number.isFinite(value)&&Number.isFinite(b[index])&&Math.abs(value-b[index])<=1e-9);
 const check = (name, pass, detail) => { checks.push(!!pass); console.log(`${pass ? 'ok  ' : 'FAIL'} ${mode} ${name}${detail === undefined ? '' : ' — ' + JSON.stringify(detail)}`); };
 const action = (kind, button) => `[data-act="custom-controls-${kind}"][data-cc-bar="daily"]${button ? `[data-cc-button="${button}"]` : ''}`;
 const field = (kind, button) => `[data-field="custom-controls-${kind}"][data-cc-bar="daily"]${button ? `[data-cc-button="${button}"]` : ''}`;
@@ -183,6 +186,59 @@ async function futureVisibility(page, fixture, saved) {
     && current.writes === 1 && current.commits === 1 && current.calls.length === 0);
 }
 
+async function leftMenu(page, fixture) {
+  const leftNative = (id) => `.custom-controls-left-host [data-custom-controls-button-id="${id}"]`;
+  const toggle = '.custom-controls-left-host [data-custom-controls-toggle]';
+  const snapshot = () => page.evaluate(() => {
+    const c = document.querySelector('taylors3d-card'), r = c._scene.getBoundingClientRect(), s = c._stage.getBoundingClientRect();
+    return { rect: [r.x-s.x,r.y-s.y,r.width,r.height], position: c._view.camera.position.toArray(), target: c._view.controls.target.toArray(),
+      calls: window.roomActionsFixture.calls.length, popup: c._devicePopup.isOpen };
+  });
+  for (const width of [1440,320]) {
+    await page.setViewport({ width, height: 1100, deviceScaleFactor: 1, hasTouch: true, isMobile: true });
+    await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForFunction(() => window.roomActionsModuleReady);
+    const payload = data(fixture); payload.layout.custom_controls.bars[0].placement = 'left';
+    await page.evaluate(prepareRoomActionsFixture, payload); await settle(page);
+    const before = await snapshot();
+    await click(page, toggle, width === 320); const opened = await snapshot();
+    check(`${width}px left drawer opens without changing house rectangle or camera`, same(before.rect,opened.rect) && sameCamera(before.position,opened.position) && sameCamera(before.target,opened.target),{before,opened});
+    await geometry(page, `${width}px left action menu`);
+    const favourites = await page.evaluate(() => [...document.querySelector('taylors3d-card').shadowRoot.querySelectorAll('.custom-controls-left-host [data-custom-controls-button-id]')].filter((node) => node.getClientRects().length).map((node) => node.dataset.customControlsButtonId));
+    check(`${width}px left drawer retains four named favourites`, same(favourites,['movie','bedtime','lamp','view']));
+    await click(page, '.custom-controls-left-host [data-custom-controls-more="daily"]', width === 320);
+    await keyboard(page, leftNative('return'), 'Space');
+    check(`${width}px left overflow runs exactly the saved script`, same((await state(page)).calls,[['script','turn_on',{entity_id:entities.script}]]));
+    fs.mkdirSync(path.join(root,'screenshots'),{recursive:true});
+    await page.screenshot({path:path.join(root,'screenshots',`custom-controls-left-${mode}-${width}.png`),fullPage:true});
+    await page.evaluate(() => { const c=document.querySelector('taylors3d-card'); window.leftHouseEvents=0;
+      for(const type of ['pointerdown','pointerup','click']) c._stage.addEventListener(type,()=>window.leftHouseEvents++); });
+    const house = await page.evaluate(() => {const c=document.querySelector('taylors3d-card'),r=c._view.renderer.domElement.getBoundingClientRect();
+      const point=[r.right-3,r.top+r.height/2];return {point,canvas:c.shadowRoot.elementFromPoint(...point)===c._view.renderer.domElement};});
+    check(`${width}px dismissal uses a native exposed house surface`,house.canvas);
+    const prior = await snapshot(); await page.mouse.click(...house.point); await settle(page); const dismissed = await snapshot();
+    check(`${width}px first outside house tap dismisses without scene events or actions`, await page.evaluate(()=>window.leftHouseEvents===0)
+      && dismissed.calls===prior.calls && !dismissed.popup && sameCamera(prior.position,dismissed.position) && sameCamera(prior.target,dismissed.target),{prior,dismissed,events:await page.evaluate(()=>window.leftHouseEvents),drawer:await page.evaluate(()=>document.querySelector('taylors3d-card')._customControlsLeftView._drawerOpen)});
+    await click(page,toggle,width===320); await keyboard(page,leftNative('movie'),'Escape');
+    check(`${width}px Escape returns focus to named toggle`,await page.evaluate(()=>{const s=document.querySelector('taylors3d-card').shadowRoot;return s.activeElement===s.querySelector('.custom-controls-left-host [data-custom-controls-toggle]')
+      &&s.activeElement.getAttribute('aria-expanded')==='false';}));
+    await click(page,'[data-bubble="edit"]'); await clickEditorTab(page,'controls');
+    await choose(page,field('placement'),'bottom'); await click(page,'[data-act="custom-controls-cancel"]');
+    check(`${width}px cancelling placement move retains left data without writes`,(await state(page)).layout.custom_controls.bars[0].placement==='left'&&(await state(page)).writes===0);
+    await choose(page,field('placement'),'bottom'); await click(page,'[data-act="custom-controls-save"]'); await savedWrite(page,1);
+    const saved = await state(page);
+    check(`${width}px saving placement move preserves every action and imported extra`,same(saved.layout.custom_controls,{...payload.layout.custom_controls,bars:[{...payload.layout.custom_controls.bars[0],placement:'bottom'}]})&&saved.commits===1);
+    await click(page,'[data-act="history-undo"]'); await savedWrite(page,2);
+    check(`${width}px Undo restores complete left menu`,same((await state(page)).layout.custom_controls,payload.layout.custom_controls));
+    await type(page,field('button-label','movie'),'Simulated edited Movie');
+    await control(page,'[data-act="custom-controls-save"]',async()=>{});
+    const footer = await page.evaluate(()=>{const c=document.querySelector('taylors3d-card'),s=c.shadowRoot.querySelector('.cc-save-actions'),r=s.getBoundingClientRect(),b=c.shadowRoot.querySelector('.tab-body').getBoundingClientRect();
+      return {sticky:getComputedStyle(s).position==='sticky',visible:r.top>=b.top-1&&r.bottom<=b.bottom+1,save:s.querySelector('[data-act="custom-controls-save"]').disabled===false,count:c.shadowRoot.querySelectorAll('[data-act="custom-controls-save"]').length};});
+    check(`${width}px one sticky Save/Cancel footer remains reachable for a changed draft`,footer.sticky&&footer.visible&&footer.save&&footer.count===1,footer);
+    await page.screenshot({path:path.join(root,'screenshots',`custom-controls-sticky-${mode}-${width}.png`),fullPage:true});
+    await click(page,'[data-act="custom-controls-cancel"]');
+  }
+}
+
 async function run() {
   console.log('Scope: actual native source/bundle UI, simulated anonymous HA data/services/storage; no physical household proof.');
   if (fs.existsSync(path.join(root, 'dist/taylors3d-card.js'))) console.log('Bundle SHA256: ' + createHash('sha256').update(fs.readFileSync(path.join(root, 'dist/taylors3d-card.js'))).digest('hex'));
@@ -194,11 +250,13 @@ async function run() {
       const external = []; page.on('request', (request) => { const url = new URL(request.url()); if (/^https?:$/.test(url.protocol) && url.hostname !== '127.0.0.1') external.push(url.href); });
       await page.goto(fixture.base + '/demo/room-actions-fixture.html', { waitUntil: 'domcontentloaded' }); await page.waitForFunction(() => window.roomActionsModuleReady);
       await page.bringToFront(); await page.evaluate(prepareRoomActionsFixture, data(fixture)); await settle(page);
-      await runtime(page); const saved = await editor(page);
+      if (process.argv.includes('--left-only')) { await leftMenu(page,fixture); }
+      else { await runtime(page); const saved = await editor(page);
       await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForFunction(() => window.roomActionsModuleReady);
       await page.evaluate(prepareRoomActionsFixture, data(fixture, saved)); await settle(page); const restored = await state(page);
       check('a real page reload recovers complete saved dock/templates/rules without automatic actions', same(restored.layout.custom_controls, saved.custom_controls) && !restored.calls.length && !restored.writes && restored.renderer);
       await futureVisibility(page, fixture, saved);
+      await leftMenu(page,fixture); }
       check('no external assets, unexpected routes or browser errors', !external.length && !fixture.unexpected.length && !errors.length, { external, unexpected: fixture.unexpected, errors }); browserErrors.push(...errors);
       await page.close(); await browser.close(); browser = null; await fixture.close(); fixture = null; console.log(`Cleanup ${mode}: page, Chrome and fixture closed.`);
     }

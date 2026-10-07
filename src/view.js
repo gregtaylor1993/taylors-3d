@@ -18,6 +18,7 @@ import { WallPresentationLayer } from './wall-presentation-rendering.js';
 import { wallTargetReport } from './wall-presentation.js';
 import { FloorPresentationLayer } from './floor-presentation-rendering.js';
 import { FloorPanelView } from './floor-panel-view.js';
+import { RoomOverviewChooser, overviewLabelsOverlap } from './room-overview-chooser.js';
 import { readFloorPresentation, compileFloorPresentation, sourceWorldToDisplay as floorToDisplay,
   displayWorldToSource as floorToSource } from './floor-presentation.js';
 import {
@@ -325,6 +326,8 @@ export class FloorplanView {
     this._cutOverride = undefined;
     this.cssObjects = []; // { obj, floorId }
     this.markerObjects = new Map(); // id -> { obj, floorId }
+    this._roomOverviewObjects = new Map(); // room id -> current CSS2D summary
+    this._markerDisplay = null;
     this.glows = new Map(); // id -> { mesh, floorId }
     this.theme = { dark: false };
     this.wallHeight = 1.0;
@@ -822,6 +825,7 @@ export class FloorplanView {
     };
     for (const group of this.staticGroup?.children || []) place(group, group.userData.floorId);
     for (const entry of this.markerObjects?.values() || []) place(entry.obj, entry.floorId);
+    for (const entry of this._roomOverviewObjects?.values() || []) place(entry.obj, entry.floorId);
     for (const entry of this.glows?.values() || []) place(entry.mesh, entry.floorId);
     for (const node of this.overlayGroup?.children || []) if (!node.isCSS2DObject) place(node, node.userData.floorId);
     for (const entry of this.cssObjects || []) if (entry.kind === 'handle') place(entry.obj, entry.floorId);
@@ -1554,7 +1558,7 @@ export class FloorplanView {
           obj.position.set(cx, 0.02, -cy);
           obj.center.set(0.5, 0.5);
           group.add(obj);
-          this.cssObjects.push({ obj, floorId: f.id, kind: 'label' });
+          this.cssObjects.push({ obj, floorId: f.id, kind: 'label', roomId: room.id });
         }
       }
       for (const w of walls ? wallSegments(own.map((r) => r.room)) : []) {
@@ -1589,6 +1593,95 @@ export class FloorplanView {
     this._occSig = null; // new elements carry no occlusion state yet
     this._applyFloorVisibility();
     this.dirty = true;
+  }
+
+  // A second, display-only visibility gate. It can narrow the existing authored
+  // view/floor/section rules, never widen them or move a source marker. Current
+  // room chips live in the existing CSS renderer and exact floor-pane registry.
+  setMarkerDisplay(snapshot = null) {
+    const original = !snapshot || snapshot.editing || snapshot.mode === 'all';
+    const signature = original ? 'all' : JSON.stringify([snapshot.mode, snapshot.selectedRoomId,
+      [...(snapshot.markers || new Map())].filter(([id]) => this.markerObjects.has(id)).map(([id, row]) => [id, row.keep]), snapshot.rooms,
+      (snapshot.rooms || []).map((row) => this.floorElevation(row.floorId))]);
+    this._markerDisplay = snapshot;
+    if (signature === this._markerDisplaySignature) return false;
+    if (original && this._markerDisplaySignature === undefined) { this._markerDisplaySignature = signature; return false; }
+    this._markerDisplaySignature = signature;
+    this._roomOverviewObjects ||= new Map();
+    const wanted = new Map((snapshot?.rooms || []).map((row) => [row.roomId, row]));
+    for (const [id, entry] of this._roomOverviewObjects) if (!wanted.has(id)) {
+      this._removeCss(entry.obj); this._roomOverviewObjects.delete(id);
+    }
+    this.cssObjects = this.cssObjects.filter((entry) => entry.kind !== 'room-overview' || this._roomOverviewObjects.has(entry.id));
+    for (const [id, row] of wanted) {
+      if (![row.x, row.y].every(Number.isFinite)) continue;
+      let entry = this._roomOverviewObjects.get(id);
+      if (!entry) {
+        const element = document.createElement('button'); element.type = 'button';
+        element.className = 'taylors3d-room-overview'; element.dataset.taylors3dUi = '';
+        const name = document.createElement('strong'), summary = document.createElement('span');
+        element.append(name, summary);
+        const obj = new CSS2DObject(element); obj.center.set(0.5, 0.5);
+        entry = { obj, name, summary, floorId: row.floorId, row };
+        this._roomOverviewObjects.set(id, entry); this.markerGroup.add(obj);
+        this.cssObjects.push({ obj, floorId: row.floorId, kind: 'room-overview', id });
+        element.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (this._disposed || !element.isConnected || !obj.visible || this._roomOverviewObjects.get(id) !== entry
+            || this._markerDisplay?.editing || this._markerDisplay?.mode !== 'rooms') return;
+          const rect = element.getBoundingClientRect();
+          this.onRoomOverview?.(id, [rect.left + rect.width / 2, rect.top + rect.height / 2]);
+        });
+      }
+      entry.row = row; entry.floorId = row.floorId;
+      const css = this.cssObjects.find((item) => item.kind === 'room-overview' && item.id === id);
+      if (css) css.floorId = row.floorId;
+      this._placeFloorObject(entry.obj, planToWorld(row.x, row.y, 0.16, this.floorElevation(row.floorId)), row.floorId);
+      entry.name.textContent = row.name; entry.summary.textContent = row.summary;
+      entry.obj.element.title = `${row.name}: ${row.detail || row.summary}`;
+      entry.obj.element.setAttribute('aria-label', `${row.name}: ${row.summary}`);
+      entry.obj.element.setAttribute('aria-pressed', String(row.selected === true));
+    }
+    // Display-only chips must not rerun model visibility, shadow allocation or
+    // floor transforms. Only changed marker visibility invalidates occlusion.
+    let markerVisibilityChanged = false;
+    for (const item of this.cssObjects) {
+      const visible = this._markerVisible(item);
+      if (item.obj.visible !== visible && item.kind === 'marker') markerVisibilityChanged = true;
+      item.obj.visible = visible;
+    }
+    for (const [id, stem] of this.stems || []) {
+      const shown = this.markerObjects.get(id)?.obj.visible === true;
+      stem.disc.visible = shown; stem.line.visible = shown && stem.line.userData.height > 0.01;
+    }
+    if (markerVisibilityChanged) { this._occSig = null; this._scheduleOcclusion(0); }
+    this._updateRoomOverviewChooser();
+    this.dirty = true;
+    return true;
+  }
+
+  _updateRoomOverviewChooser() {
+    if (!this.container || !this.renderer?.domElement || !this._roomOverviewObjects) return;
+    if (!this._roomOverviewObjects.size && (!this._roomOverviewChooser || this._roomOverviewChooser.el.hidden)) return;
+    const snapshot = this._markerDisplay, rect = this.renderer.domElement.getBoundingClientRect();
+    const current = snapshot?.mode === 'rooms' && !snapshot.editing
+      ? [...this._roomOverviewObjects.values()].filter((entry) => entry.obj.visible) : [];
+    const visible = current.filter((entry) => {
+      const point = this.projectWorld(entry.obj.position, entry.floorId);
+      return point && point[0] >= rect.left && point[0] <= rect.right && point[1] >= rect.top && point[1] <= rect.bottom;
+    });
+    const grouped = visible.length > 0 && (rect.width < 600 || this._roomOverviewChooser?.open
+      || overviewLabelsOverlap(visible.map((entry) => this.projectWorld(entry.obj.position, entry.floorId))));
+    for (const entry of this._roomOverviewObjects.values()) {
+      entry.obj.element.style.visibility = grouped ? 'hidden' : '';
+      entry.obj.element.tabIndex = grouped ? -1 : 0;
+      if (grouped) entry.obj.element.setAttribute('aria-hidden', 'true'); else entry.obj.element.removeAttribute('aria-hidden');
+    }
+    if (!this._roomOverviewChooser && grouped) this._roomOverviewChooser = new RoomOverviewChooser(this.container, {
+      onSelect: (id, anchor) => this.onRoomOverview?.(id, anchor), onInvalidate: () => { this.dirty = true; },
+    });
+    this._roomOverviewChooser?.update(visible.map((entry) => entry.row), { label: snapshot?.chooserLabel,
+      title: snapshot?.chooserTitle, width: rect.width, height: rect.height }, grouped);
   }
 
   // Edit mode: a thin vertical line from every shown marker down to its floor plus a small disc
@@ -2143,7 +2236,12 @@ export class FloorplanView {
   // css object (marker, label, handle) visibility: marker state, else its floor; section cut
   _markerVisible(c) {
     const st = c.kind === 'marker' && this._markerStates && c.id !== undefined ? this._markerStates.get(c.id) : null;
-    return (st ? !!st.shown : this._shows(c.floorId)) && !(c.kind !== 'handle' && this._cutAway(c.obj.position));
+    if (!(st ? !!st.shown : this._shows(c.floorId)) || c.kind !== 'handle' && this._cutAway(c.obj.position)) return false;
+    const display = this._markerDisplay;
+    if (!display || display.editing || display.mode === 'all') return c.kind !== 'room-overview';
+    if (c.kind === 'marker') return display.markers?.get(c.id)?.keep !== false;
+    if (c.kind === 'label' && display.mode === 'rooms' && this._roomOverviewObjects?.has(c.roomId)) return false;
+    return c.kind !== 'room-overview' || display.mode === 'rooms' && this._roomOverviewObjects?.has(c.id);
   }
 
   _glowVisible(id, g) {
@@ -2655,6 +2753,7 @@ export class FloorplanView {
         if (this._ambientCamera) this._ambientCamera.labelsSkipped = true; // the owned label root is hidden
         else this.labelRenderer.render(this.scene, this.camera);
       }
+      this._updateRoomOverviewChooser();
       if (this.onRender) this.onRender(paneFrame); // e.g. the object popup follows its anchor
     };
     this._raf = requestAnimationFrame(loop);
@@ -2721,6 +2820,8 @@ export class FloorplanView {
     }
     this.skyRing = null;
     this.markerObjects.clear();
+    this._roomOverviewObjects?.clear(); this._markerDisplay = null; this.onRoomOverview = null;
+    this._roomOverviewChooser?.dispose(); this._roomOverviewChooser = null;
     this.glows.clear();
     this.cssObjects = [];
     this.renderer.dispose();

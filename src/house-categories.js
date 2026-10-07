@@ -18,7 +18,7 @@ const categories = Object.freeze({
   security: { title: 'Security', emptyText: 'No current visible security entities are available.' },
   media: { title: 'Media', emptyText: 'No current visible media players are available.' },
   climate: { title: 'Climate', emptyText: 'No current visible climate, weather, temperature or humidity entities are available.' },
-  cars: { title: 'Cars', emptyText: 'No current vehicle sources are selected. Choose your sources in Edit → Tracking.' },
+  cars: { title: 'Cars', emptyText: 'No current vehicle sources are selected. Choose your sources in Edit → Devices → Advanced → Tracking.' },
 });
 const unreadable = 'Current Home Assistant entities could not be read. Refresh the connection and try again.';
 const ownedPresentation = new WeakMap();
@@ -122,11 +122,11 @@ export function buildHouseCategory(options = {}) {
   let candidates = stateIds;
   if (id === 'cars') {
     const layout = own(options, 'layout') ? field(options, 'layout') : {};
-    if (!plain(layout)) return result([], 'Vehicle settings need review in Edit → Tracking.', 'house.categories.vehicleReview');
+    if (!plain(layout)) return result([], 'Vehicle settings need review in Edit → Devices → Advanced → Tracking.', 'house.categories.vehicleReview');
     const bindings = field(layout, 'vehicle_bindings');
     if (bindings === undefined && !own(layout, 'vehicle_bindings')) return result();
-    if (!Array.isArray(bindings)) return result([], 'Vehicle settings need review in Edit → Tracking.', 'house.categories.vehicleReview');
-    if (bindings.length > HOUSE_CATEGORY_LIMITS.vehicleBindings) return result([], 'Too many saved vehicle bindings. Reduce the list in Edit → Tracking.', 'house.categories.vehicleLimit');
+    if (!Array.isArray(bindings)) return result([], 'Vehicle settings need review in Edit → Devices → Advanced → Tracking.', 'house.categories.vehicleReview');
+    if (bindings.length > HOUSE_CATEGORY_LIMITS.vehicleBindings) return result([], 'Too many saved vehicle bindings. Reduce the list in Edit → Devices → Advanced → Tracking.', 'house.categories.vehicleLimit');
     candidates = [];
     for (let index = 0; index < bindings.length; index++) {
       const binding = field(bindings, String(index));

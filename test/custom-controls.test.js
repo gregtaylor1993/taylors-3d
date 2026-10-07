@@ -24,6 +24,15 @@ const actionSetting = (action) => ({ version: 1, bars: [bar('evening', [button('
 const defineGetter = (value, key, getter, enumerable = true) => Object.defineProperty(value, key, { get: getter, enumerable, configurable: true });
 
 describe('explicit compact docks and visibility', () => {
+  it('resolves a left bar separately and preserves saved actions, extras and dispatch gates', () => {
+    const raw = settings(), h = hass(); raw.bars[0].placement = 'left'; const before = structuredClone(raw);
+    expect(readCustomControls(raw).valid).toBe(true);
+    expect(resolveCustomControls({ ...options(raw, h), placement: 'bottom' }).bars.map((row) => row.id)).toEqual(['empty']);
+    expect(resolveCustomControls({ ...options(raw, h), placement: 'left' }).bars[0]).toMatchObject(before.bars[0]);
+    expect(command({ placement: 'left' }, raw, h)).toMatchObject({ available: true, domain: 'scene', service: 'turn_on', data: { entity_id: 'scene.movie' } });
+    expect(command({}, raw, h).available).toBe(false); h.connection.connected = false;
+    expect(command({ placement: 'left' }, raw, h).available).toBe(false); expect(raw).toEqual(before); expect(h.callService).not.toHaveBeenCalled();
+  });
   const condition = { type: 'state', entity: 'vacuum.house', state: 'cleaning' };
   const conditional = () => { const raw = settings(); raw.bars[0].dock = { limit: 4, extra: 'kept' }; Object.assign(raw.bars[0].buttons[0], { pinned: true, visibility: { ...condition, extra: ['kept'] } }); return raw; };
   const readings = () => { const h = hass(); h.states['vacuum.house'] = { entity_id: 'vacuum.house', state: 'cleaning', attributes: { friendly_name: 'Vacuum' } }; return h; };
