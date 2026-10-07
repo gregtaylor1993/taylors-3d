@@ -1,10 +1,11 @@
 # Taylor's 3D 0.4.0-beta.1 — testing release
 
-**Publication status:** the beta tag is pushed and its complete release unit
-suite, build and bundle checks passed. GitHub returned HTTP 500 while creating
-the release, including direct publication retries. The verified manual package
-is available as `taylors3d-v0.4.0-beta.1.zip`, supplied separately. Use the manual
-section below for now; HACS instructions apply after GitHub assets are published.
+**Published:** [v0.4.0-beta.1](https://github.com/gregtaylor1993/taylors-3d/releases/tag/v0.4.0-beta.1)
+has both `taylors3d.zip` and `taylors3d-card.js` assets. All release unit tests,
+version checks, build and bundle checks passed. GitHub initially returned
+HTTP 500 during publication; an unchanged retry succeeded. The downloaded
+published ZIP matches the verified manual package exactly. Use HACS below or
+download the install ZIP directly from the release.
 
 This package includes the current 0.4 UI: dark/light glass styling, room and
 device controls that overlay the house, custom bottom/left/room bars, guided
@@ -44,9 +45,9 @@ physical-device or wall-panel acceptance.
 
 ## Manual ZIP installation
 
-Use the supplied **taylors3d-v0.4.0-beta.1.zip**, or the asset named
-**taylors3d.zip** once the GitHub release is published. GitHub's Source code ZIP
-is not the install package. Extract the testing ZIP's contents directly into
+Use the release asset named **taylors3d.zip**, or the equivalent supplied
+**taylors3d-v0.4.0-beta.1.zip**. GitHub's Source code ZIP is not the install
+package. Extract the testing ZIP's contents directly into
 `/config/custom_components/taylors3d/`. The resulting folder must directly contain
 `__init__.py`, `manifest.json` and `frontend/taylors3d-card.js`; do not create a
 second nested taylors3d folder. Then restart and follow steps 3–5 above.

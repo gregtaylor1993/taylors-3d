@@ -21,10 +21,17 @@ bundle freshness. The frontend SHA-256 is
 `3a83174729d85f3c7920ef82defe650e35e4071e543491d10c1df36e4886cc92`.
 The independent manual ZIP has 20 byte-verified files, no enclosing folder, and
 SHA-256 `ec89a660826a3ec0a1d430c230a59381ff434bf7ee2e95824cc306aeb1abf4cb`.
-GitHub's release-creation endpoint repeatedly returned HTTP 500; the release
-workflow therefore failed only at publication. No beta release/assets are
-currently available in HACS. Taylor can test with the supplied verified manual
-ZIP while publication remains unavailable. Stable v0.1.0 remains unchanged.
+GitHub's release-creation endpoint initially returned HTTP 500; the release
+workflow therefore failed only at publication. On 7 October, the unchanged
+publication request succeeded. The [beta release](https://github.com/gregtaylor1993/taylors-3d/releases/tag/v0.4.0-beta.1)
+is public, not a draft, and marked as a prerelease. Both expected assets are
+uploaded; the independently downloaded published ZIP has the exact SHA above.
+HACS is configured for that `taylors3d.zip` asset. Update repository information
+and select v0.4.0-beta.1 explicitly to test it. Stable v0.1.0 remains unchanged.
+The successful unchanged retry and matching digests identify a temporary GitHub
+write failure, rather than a version, permission or packaging defect. The earlier
+failed workflow is retained as historical evidence; no app behaviour changed
+to resolve publication. Broader browser CI/household acceptance remain open.
 
 ## 7 October 2026: approved room overview, House menu and search
 
